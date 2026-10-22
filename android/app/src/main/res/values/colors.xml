@@ -1,0 +1,8 @@
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="hud_bg">#B00A0A0A</color>
+    <color name="accent_green">#00E676</color>
+    <color name="warning_orange">#FF9100</color>
+    <color name="critical_red">#FF1744</color>
+</resources>

@@ -1,0 +1,37 @@
+# Python Virtual Environments & Bytecode
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large Datasets & Archives (>100MB)
+*.zip
+*.tar.gz
+*.tar
+data/
+
+# Android & iOS Build Binaries
+*.apk
+*.aab
+*.ipa
+.gradle/
+android/.gradle/
+android/app/build/
+android/local.properties
+ios/build/
+ios/DerivedData/
+ios/Payload/
+ios/*.xcodeproj
+
+# Large ONNX data split files
+*.onnx.data
+
+# IDE & OS Artifacts
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.tmp
+*.log

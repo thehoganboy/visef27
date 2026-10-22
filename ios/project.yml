@@ -1,0 +1,44 @@
+name: HorusEyes
+options:
+  bundleIdPrefix: com.visef.horuseyes
+  deploymentTarget:
+    iOS: "16.0"
+  xcodeVersion: "15.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "5.9"
+    IPHONEOS_DEPLOYMENT_TARGET: "16.0"
+    TARGETED_DEVICE_FAMILY: "1"   # iPhone only
+    ENABLE_BITCODE: "NO"
+    SWIFT_OPTIMIZATION_LEVEL: "-O"
+  configs:
+    Release:
+      CODE_SIGNING_ALLOWED: "NO"
+      CODE_SIGNING_REQUIRED: "NO"
+      CODE_SIGN_IDENTITY: ""
+      AD_HOC_CODE_SIGNING_ALLOWED: "YES"
+      SWIFT_COMPILATION_MODE: wholemodule
+
+targets:
+  HorusEyes:
+    type: application
+    platform: iOS
+    sources:
+      - path: HorusEyes
+        excludes:
+          - "*.md"
+    info:
+      path: HorusEyes/Info.plist
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.visef.horuseyes
+        INFOPLIST_FILE: HorusEyes/Info.plist
+        PRODUCT_NAME: HorusEyes
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        Release:
+          CODE_SIGNING_ALLOWED: "NO"
+          CODE_SIGNING_REQUIRED: "NO"
+          CODE_SIGN_IDENTITY: ""

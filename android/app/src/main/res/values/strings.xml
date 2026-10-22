@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">HorusEyes 2.0</string>
+    <string name="camera_permission_required">Ứng dụng cần quyền Camera để điều hướng tránh va chạm theo thời gian thực.</string>
+    <string name="grant_permission">Cấp quyền</string>
+</resources>
