@@ -115,4 +115,14 @@ final class PchipInterpolator {
     func evaluate(_ rawArray: [Float]) -> [Float] {
         return rawArray.map { evaluate($0) }
     }
+
+    /// Evaluates raw disparity to distance in cm (alias for evaluate)
+    func interpolate(_ rawVal: Float) -> Float {
+        return evaluate(rawVal)
+    }
+
+    /// Vectorized evaluation alias
+    func interpolate(_ rawArray: [Float]) -> [Float] {
+        return evaluate(rawArray)
+    }
 }

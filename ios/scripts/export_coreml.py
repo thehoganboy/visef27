@@ -26,7 +26,7 @@ def main():
     print(f"[*] Target destination: {target_package}")
 
     try:
-        import coremltools as ct
+        import coremltools as ct  # type: ignore
         import torch
     except ImportError as e:
         print(f"[!] Warning: coremltools or torch not installed in current environment: {e}")

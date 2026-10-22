@@ -65,7 +65,7 @@ final class AuditoryBudgetManager {
         let ttc = kinematicsResult.primaryTTC
         let threatLevel = kinematicsResult.threatLevel
         let safeDir = kinematicsResult.safeDirection
-        let uncert = obstacleResult.uncertaintyScore
+        _ = obstacleResult.uncertaintyScore
         let isEvading = kinematicsResult.isEvading
 
         // ── 0. Sensor Fault / 0-Lux Blind Override ────────────────────────────

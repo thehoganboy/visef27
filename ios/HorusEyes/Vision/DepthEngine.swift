@@ -8,6 +8,7 @@ import CoreML
 import Vision
 import Accelerate
 import CoreVideo
+import QuartzCore
 
 // ── Data Structures ────────────────────────────────────────────────────────────
 struct SingleObstacle {
