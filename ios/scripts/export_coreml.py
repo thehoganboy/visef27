@@ -97,9 +97,9 @@ def main():
 
     model.eval()
 
-    print("[*] Tracing PyTorch model with sample input [1, 3, 256, 256]...")
+    print("[*] Tracing PyTorch model with check_trace=False, strict=False...")
     example_input = torch.rand(1, 3, in_h, in_w)
-    traced_model = torch.jit.trace(model, example_input)
+    traced_model = torch.jit.trace(model, example_input, check_trace=False, strict=False)
 
     # CoreML ImageType input with standard MiDaS ImageNet normalization
     # scale = 1.0 / (255.0 * 0.226) approx 0.01735207
