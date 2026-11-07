@@ -67,12 +67,12 @@ jobs:
           cp HorusEyes/Info.plist Payload/HorusEyes.app/Info.plist
           echo "=== Verified Final App Info.plist ==="
           plutil -p Payload/HorusEyes.app/Info.plist
-          zip -qq -r HorusEyes_iOS.ipa Payload
-          ls -la HorusEyes_iOS.ipa
+          zip -qq -r HorusEyes_iPhone14Pro.ipa Payload
+          ls -la HorusEyes_iPhone14Pro.ipa
 
       - name: Upload HorusEyes IPA Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: HorusEyes-iPhone14-IPA
-          path: ios/HorusEyes_iOS.ipa
+          name: HorusEyes-iPhone14Pro-Clean
+          path: ios/HorusEyes_iPhone14Pro.ipa
           if-no-files-found: error
