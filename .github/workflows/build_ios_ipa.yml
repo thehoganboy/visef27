@@ -63,6 +63,10 @@ jobs:
           cd ios
           mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/HorusEyes.app Payload/
+          # Guarantee all camera, audio and sensor privacy permissions are in Info.plist
+          cp HorusEyes/Info.plist Payload/HorusEyes.app/Info.plist
+          echo "=== Verified Final App Info.plist ==="
+          plutil -p Payload/HorusEyes.app/Info.plist
           zip -qq -r HorusEyes_iOS.ipa Payload
           ls -la HorusEyes_iOS.ipa
 

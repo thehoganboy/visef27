@@ -3,19 +3,18 @@
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!-- Bundle metadata -->
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
     <string>HorusEyes</string>
     <key>CFBundleExecutable</key>
-    <string>$(EXECUTABLE_NAME)</string>
+    <string>HorusEyes</string>
     <key>CFBundleIdentifier</key>
-    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+    <string>com.visef.horuseyes</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>$(PRODUCT_NAME)</string>
+    <string>HorusEyes</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -24,39 +23,30 @@
     <string>1</string>
     <key>LSRequiresIPhoneOS</key>
     <true/>
-
-    <!-- iOS 16+ Scene lifecycle -->
-    <key>UIApplicationSceneManifest</key>
-    <dict>
-        <key>UIApplicationSupportsMultipleScenes</key>
-        <false/>
-    </dict>
-
-    <!-- Portrait only -->
+    <key>MinimumOSVersion</key>
+    <string>16.0</string>
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+    </array>
     <key>UISupportedInterfaceOrientations</key>
     <array>
         <string>UIInterfaceOrientationPortrait</string>
     </array>
 
-    <!-- Camera permission -->
+    <!-- Essential Hardware & Privacy Permissions -->
     <key>NSCameraUsageDescription</key>
     <string>HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time.</string>
-
-    <!-- Microphone (required by AVAudioSession) -->
     <key>NSMicrophoneUsageDescription</key>
     <string>HorusEyes requires audio session access for spatial sound feedback.</string>
-
-    <!-- Motion sensors -->
     <key>NSMotionUsageDescription</key>
     <string>HorusEyes uses motion sensors to distinguish head turns from obstacle approach.</string>
 
-    <!-- Status bar -->
+    <!-- Status Bar & Launch Screen -->
     <key>UIStatusBarStyle</key>
     <string>UIStatusBarStyleLightContent</string>
     <key>UIViewControllerBasedStatusBarAppearance</key>
     <false/>
-
-    <!-- Launch screen -->
     <key>UILaunchScreen</key>
     <dict/>
 </dict>
