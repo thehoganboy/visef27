@@ -32,7 +32,7 @@ jobs:
       - name: Install CoreML Exporter Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools>=7.0" numpy
+          pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools>=7.0" "numpy<2.0.0"
 
       - name: Pre-cache MiDaS PyTorch Weights
         run: |
@@ -42,14 +42,24 @@ jobs:
           ls -la ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt
 
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)
+        env:
+          PYTHONUNBUFFERED: "1"
         run: |
           python ios/scripts/export_coreml.py > export.log 2>&1 || {
             echo "=== COREML EXPORTER FAILED! LOG DUMP: ==="
             cat export.log
             echo "::error file=ios/scripts/export_coreml.py::$(tail -n 20 export.log | tr '\n' ' ')"
+            echo "### CoreML Exporter Log" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat export.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
             exit 1
           }
           cat export.log
+          echo "### CoreML Exporter Log" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat export.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           test -d ios/HorusEyes/DepthModel.mlpackage || (echo "FATAL: DepthModel.mlpackage was not created by export_coreml.py!" && exit 1)
           echo "=== Verified Core ML DepthModel.mlpackage ==="
           ls -ld ios/HorusEyes/DepthModel.mlpackage

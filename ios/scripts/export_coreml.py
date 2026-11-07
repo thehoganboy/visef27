@@ -4,7 +4,7 @@
 HorusEyes 2.0 — MiDaS to Core ML (DepthModel.mlpackage) Exporter
 Target: iPhone 14 / iPhone 14 Pro (Apple A15/A16 Bionic — 16-core Apple Neural Engine)
 Precision: Float16 / Float32 ML Program
-Input:  'image' (Color Image 256x256 RGB, ImageNet normalized)
+Input:  'x' (Color Image 256x256 RGB, ImageNet normalized)
 Output: 'depth' / 'var_...' (MultiArray Float32 [1, 256, 256])
 """
 
@@ -15,7 +15,9 @@ import traceback
 import urllib.request
 
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(line_buffering=True, encoding="utf-8")
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,15 +25,16 @@ def main():
     target_package = os.path.join(ios_dir, "HorusEyes", "DepthModel.mlpackage")
     os.makedirs(os.path.dirname(target_package), exist_ok=True)
 
-    print("[*] HorusEyes CoreML Exporter initializing...")
-    print(f"[*] Target destination: {target_package}")
+    print("[*] HorusEyes CoreML Exporter initializing...", flush=True)
+    print(f"[*] Target destination: {target_package}", flush=True)
 
     try:
         import coremltools as ct
         import torch
         import torch.hub
+        print(f"[+] Loaded coremltools {ct.__version__}, PyTorch {torch.__version__}", flush=True)
     except ImportError as e:
-        print(f"[!] FATAL: coremltools or torch not installed: {e}")
+        print(f"[!] FATAL: coremltools or torch not installed: {e}", flush=True)
         sys.exit(1)
 
     # Force PyTorch torch.hub to always trust repos in non-interactive CI environments
@@ -43,26 +46,26 @@ def main():
 
     in_h, in_w = 256, 256
 
-    print("[*] Loading PyTorch MiDaS_small model...")
+    print("[*] Loading PyTorch MiDaS_small model...", flush=True)
     model = None
 
     # Source 1: intel-isl/MiDaS
     try:
-        print("[*] Trying torch.hub.load('intel-isl/MiDaS', 'MiDaS_small')...")
+        print("[*] Trying torch.hub.load('intel-isl/MiDaS', 'MiDaS_small')...", flush=True)
         model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-        print("[+] Loaded MiDaS_small from intel-isl/MiDaS successfully.")
+        print("[+] Loaded MiDaS_small from intel-isl/MiDaS successfully.", flush=True)
     except Exception as ex1:
-        print(f"[!] intel-isl attempt failed: {ex1}")
+        print(f"[!] intel-isl attempt failed: {ex1}", flush=True)
         traceback.print_exc()
 
     # Source 2: isl-org/MiDaS
     if model is None:
         try:
-            print("[*] Trying torch.hub.load('isl-org/MiDaS', 'MiDaS_small')...")
+            print("[*] Trying torch.hub.load('isl-org/MiDaS', 'MiDaS_small')...", flush=True)
             model = torch.hub.load("isl-org/MiDaS", "MiDaS_small", trust_repo=True)
-            print("[+] Loaded MiDaS_small from isl-org/MiDaS successfully.")
+            print("[+] Loaded MiDaS_small from isl-org/MiDaS successfully.", flush=True)
         except Exception as ex2:
-            print(f"[!] isl-org attempt failed: {ex2}")
+            print(f"[!] isl-org attempt failed: {ex2}", flush=True)
             traceback.print_exc()
 
     # Source 3: Direct Download checkpoint & manual instantiate
@@ -71,9 +74,9 @@ def main():
             weights_url = "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
             weights_path = os.path.join(script_dir, "midas_v21_small_256.pt")
             if not os.path.exists(weights_path):
-                print(f"[*] Downloading weights directly from {weights_url}...")
+                print(f"[*] Downloading weights directly from {weights_url}...", flush=True)
                 urllib.request.urlretrieve(weights_url, weights_path)
-                print(f"[+] Downloaded {os.path.getsize(weights_path)} bytes to {weights_path}")
+                print(f"[+] Downloaded {os.path.getsize(weights_path)} bytes to {weights_path}", flush=True)
 
             hub_dir = torch.hub.get_dir()
             for root, dirs, files in os.walk(hub_dir):
@@ -85,36 +88,29 @@ def main():
                     model = MidasNet_small(None, features=64, backbone="efficientnet_lite3", exportable=True, non_negative=True, blocks={'expand': True})
                     state_dict = torch.load(weights_path, map_location="cpu")
                     model.load_state_dict(state_dict)
-                    print("[+] Loaded MidasNet_small from local files + downloaded weights.")
+                    print("[+] Loaded MidasNet_small from local files + downloaded weights.", flush=True)
                     break
         except Exception as ex3:
-            print(f"[!] Fallback attempt failed: {ex3}")
+            print(f"[!] Fallback attempt failed: {ex3}", flush=True)
             traceback.print_exc()
 
     if model is None:
-        print("[!] FATAL: All methods to load MiDaS_small model failed!")
+        print("[!] FATAL: All methods to load MiDaS_small model failed!", flush=True)
         sys.exit(1)
 
     model.eval()
 
-    print("[*] Tracing PyTorch model with check_trace=False, strict=False...")
+    print("[*] Tracing PyTorch model with check_trace=False, strict=False...", flush=True)
     example_input = torch.rand(1, 3, in_h, in_w)
     traced_model = torch.jit.trace(model, example_input, check_trace=False, strict=False)
+    print("[+] Tracing succeeded.", flush=True)
 
-    # CoreML ImageType input with standard MiDaS ImageNet normalization
-    # scale = 1.0 / (255.0 * 0.226) approx 0.01735207
-    # bias = [-0.485 / 0.229, -0.456 / 0.224, -0.406 / 0.225] = [-2.1179, -2.0357, -1.8044]
-    image_input = ct.ImageType(
-        name="image",
-        shape=(1, 3, in_h, in_w),
-        color_layout=ct.colorlayout.RGB,
-        scale=0.01735207,
-        bias=[-2.1179, -2.0357, -1.8044]
-    )
-
-    print("[*] Converting PyTorch traced model to Core ML MLProgram...")
+    print("[*] Converting PyTorch traced model to Core ML MLProgram...", flush=True)
     mlmodel = None
+
+    # Method 1: ct.ImageType with ImageNet normalization
     try:
+        print("[*] Attempting conversion with ct.ImageType (RGB, normalized)...", flush=True)
         image_input = ct.ImageType(
             name="x",
             shape=(1, 3, in_h, in_w),
@@ -129,42 +125,49 @@ def main():
             minimum_deployment_target=ct.target.iOS16,
             convert_to="mlprogram"
         )
-        print("[+] Converted successfully with input name='x'.")
-    except Exception as conv_err:
-        print(f"[!] Conversion with name='x' failed: {conv_err}. Retrying without explicit input name...")
+        print("[+] Converted successfully with ct.ImageType.", flush=True)
+    except Exception as conv_err1:
+        print(f"[!] ImageType conversion failed: {conv_err1}", flush=True)
         traceback.print_exc()
+
+    # Method 2: ct.TensorType fallback
+    if mlmodel is None:
         try:
-            image_input2 = ct.ImageType(
-                shape=(1, 3, in_h, in_w),
-                color_layout=ct.colorlayout.RGB,
-                scale=0.01735207,
-                bias=[-2.1179, -2.0357, -1.8044]
-            )
+            print("[*] Attempting conversion with ct.TensorType fallback...", flush=True)
+            tensor_input = ct.TensorType(name="x", shape=(1, 3, in_h, in_w))
             mlmodel = ct.convert(
                 traced_model,
-                inputs=[image_input2],
+                inputs=[tensor_input],
                 compute_units=ct.ComputeUnit.ALL,
                 minimum_deployment_target=ct.target.iOS16,
                 convert_to="mlprogram"
             )
-            print("[+] Converted successfully with positional image input.")
+            print("[+] Converted successfully with ct.TensorType.", flush=True)
         except Exception as conv_err2:
-            print(f"[!] Positional conversion also failed: {conv_err2}. Retrying with convert_to='neuralnetwork'...")
+            print(f"[!] TensorType conversion failed: {conv_err2}", flush=True)
             traceback.print_exc()
+
+    # Method 3: NeuralNetwork format fallback
+    if mlmodel is None:
+        try:
+            print("[*] Attempting conversion with convert_to='neuralnetwork' fallback...", flush=True)
             mlmodel = ct.convert(
                 traced_model,
-                inputs=[ct.ImageType(shape=(1, 3, in_h, in_w), color_layout=ct.colorlayout.RGB, scale=0.01735207, bias=[-2.1179, -2.0357, -1.8044])],
+                inputs=[ct.TensorType(name="x", shape=(1, 3, in_h, in_w))],
                 compute_units=ct.ComputeUnit.ALL,
                 minimum_deployment_target=ct.target.iOS16
             )
-            print("[+] Converted successfully with neuralnetwork format.")
+            print("[+] Converted successfully with neuralnetwork format.", flush=True)
+        except Exception as conv_err3:
+            print(f"[!] NeuralNetwork conversion failed: {conv_err3}", flush=True)
+            traceback.print_exc()
 
     if mlmodel is None:
-        raise RuntimeError("Failed to convert traced model to Core ML!")
+        print("[!] FATAL: All Core ML conversion attempts failed!", flush=True)
+        sys.exit(1)
 
     mlmodel.author = "HorusEyes Safety-Critical CV Team"
     mlmodel.short_description = "MiDaS Small Monocular Depth Estimation for Vision Impaired Navigation"
-    mlmodel.input_description["image"] = "Color camera frame 256x256 RGB"
 
     if os.path.exists(target_package):
         if os.path.isdir(target_package):
@@ -173,14 +176,19 @@ def main():
             os.remove(target_package)
 
     mlmodel.save(target_package)
-    print(f"[+] Saved DepthModel.mlpackage successfully to {target_package}")
+    print(f"[+] Saved DepthModel.mlpackage successfully to {target_package}", flush=True)
 
     # Double check package presence
     if not os.path.exists(target_package):
-        print(f"[!] FATAL: Target package {target_package} does not exist after save!")
+        print(f"[!] FATAL: Target package {target_package} does not exist after save!", flush=True)
         sys.exit(1)
 
-    print("[+] Core ML export completed successfully and verified.")
+    print("[+] Core ML export completed successfully and verified.", flush=True)
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as fatal_e:
+        print(f"[!] Top-level Unhandled Exception: {fatal_e}", flush=True)
+        traceback.print_exc()
+        sys.exit(1)
