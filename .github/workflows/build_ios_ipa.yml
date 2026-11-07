@@ -63,8 +63,26 @@ jobs:
           cd ios
           mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/HorusEyes.app Payload/
-          # Guarantee all camera, audio and sensor privacy permissions are in Info.plist
-          cp HorusEyes/Info.plist Payload/HorusEyes.app/Info.plist
+          # Ensure Info.plist has strictly resolved values for Sideloadly / AltStore
+          python3 -c "
+          import plistlib
+          p = 'Payload/HorusEyes.app/Info.plist'
+          with open(p, 'rb') as f:
+              pl = plistlib.load(f)
+          pl['CFBundleExecutable'] = 'HorusEyes'
+          pl['CFBundleIdentifier'] = 'com.visef.horuseyes'
+          pl['CFBundleName'] = 'HorusEyes'
+          pl['CFBundleDisplayName'] = 'HorusEyes'
+          pl['CFBundleDevelopmentRegion'] = 'en'
+          pl['CFBundleShortVersionString'] = '2.0'
+          pl['CFBundleVersion'] = '1'
+          pl['NSCameraUsageDescription'] = 'HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time.'
+          pl['NSMicrophoneUsageDescription'] = 'HorusEyes requires audio session access for spatial sound feedback.'
+          pl['NSMotionUsageDescription'] = 'HorusEyes uses motion sensors to distinguish head turns from obstacle approach.'
+          with open(p, 'wb') as f:
+              plistlib.dump(pl, f)
+          "
+          chmod +x Payload/HorusEyes.app/HorusEyes
           echo "=== Verified Final App Info.plist ==="
           plutil -p Payload/HorusEyes.app/Info.plist
           zip -qq -r HorusEyes_iPhone14Pro.ipa Payload

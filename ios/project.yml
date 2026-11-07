@@ -34,12 +34,16 @@ targets:
     info:
       path: HorusEyes/Info.plist
       properties:
+        CFBundleExecutable: "HorusEyes"
+        CFBundleIdentifier: "com.visef.horuseyes"
+        CFBundleName: "HorusEyes"
+        CFBundleDisplayName: "HorusEyes"
+        CFBundleDevelopmentRegion: "en"
+        CFBundleShortVersionString: "2.0"
+        CFBundleVersion: "1"
         NSCameraUsageDescription: "HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time."
         NSMicrophoneUsageDescription: "HorusEyes requires audio session access for spatial sound feedback."
         NSMotionUsageDescription: "HorusEyes uses motion sensors to distinguish head turns from obstacle approach."
-        CFBundleDisplayName: "HorusEyes"
-        CFBundleShortVersionString: "2.0"
-        CFBundleVersion: "1"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.visef.horuseyes
