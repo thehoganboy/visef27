@@ -11,6 +11,7 @@ Output: 'depth' / 'var_...' (MultiArray Float32 [1, 256, 256])
 import os
 import sys
 import shutil
+import traceback
 import urllib.request
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -28,9 +29,17 @@ def main():
     try:
         import coremltools as ct
         import torch
+        import torch.hub
     except ImportError as e:
         print(f"[!] FATAL: coremltools or torch not installed: {e}")
         sys.exit(1)
+
+    # Force PyTorch torch.hub to always trust repos in non-interactive CI environments
+    _orig_hub_load = torch.hub.load
+    def _always_trusted_hub_load(*args, **kwargs):
+        kwargs["trust_repo"] = True
+        return _orig_hub_load(*args, **kwargs)
+    torch.hub.load = _always_trusted_hub_load
 
     in_h, in_w = 256, 256
 
@@ -41,47 +50,46 @@ def main():
     try:
         print("[*] Trying torch.hub.load('intel-isl/MiDaS', 'MiDaS_small')...")
         model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-        print("[+] Loaded MiDaS_small from intel-isl/MiDaS.")
+        print("[+] Loaded MiDaS_small from intel-isl/MiDaS successfully.")
     except Exception as ex1:
         print(f"[!] intel-isl attempt failed: {ex1}")
+        traceback.print_exc()
 
     # Source 2: isl-org/MiDaS
     if model is None:
         try:
             print("[*] Trying torch.hub.load('isl-org/MiDaS', 'MiDaS_small')...")
             model = torch.hub.load("isl-org/MiDaS", "MiDaS_small", trust_repo=True)
-            print("[+] Loaded MiDaS_small from isl-org/MiDaS.")
+            print("[+] Loaded MiDaS_small from isl-org/MiDaS successfully.")
         except Exception as ex2:
             print(f"[!] isl-org attempt failed: {ex2}")
+            traceback.print_exc()
 
     # Source 3: Direct Download checkpoint & manual instantiate
     if model is None:
-        weights_url = "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
-        weights_path = os.path.join(script_dir, "midas_v21_small_256.pt")
-        if not os.path.exists(weights_path):
-            print(f"[*] Downloading weights directly from {weights_url}...")
-            urllib.request.urlretrieve(weights_url, weights_path)
-            print(f"[+] Downloaded {os.path.getsize(weights_path)} bytes to {weights_path}")
+        try:
+            weights_url = "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
+            weights_path = os.path.join(script_dir, "midas_v21_small_256.pt")
+            if not os.path.exists(weights_path):
+                print(f"[*] Downloading weights directly from {weights_url}...")
+                urllib.request.urlretrieve(weights_url, weights_path)
+                print(f"[+] Downloaded {os.path.getsize(weights_path)} bytes to {weights_path}")
 
-        hub_dir = torch.hub.get_dir()
-        found = False
-        for root, dirs, files in os.walk(hub_dir):
-            if "midas_net_custom.py" in files:
-                parent_dir = os.path.dirname(root)
-                if parent_dir not in sys.path:
-                    sys.path.insert(0, parent_dir)
-                try:
+            hub_dir = torch.hub.get_dir()
+            for root, dirs, files in os.walk(hub_dir):
+                if "midas_net_custom.py" in files:
+                    parent_dir = os.path.dirname(root)
+                    if parent_dir not in sys.path:
+                        sys.path.insert(0, parent_dir)
                     from midas.midas_net_custom import MidasNet_small
                     model = MidasNet_small(None, features=64, backbone="efficientnet_lite3", exportable=True, non_negative=True, blocks={'expand': True})
                     state_dict = torch.load(weights_path, map_location="cpu")
                     model.load_state_dict(state_dict)
                     print("[+] Loaded MidasNet_small from local files + downloaded weights.")
-                    found = True
                     break
-                except Exception as ex3:
-                    print(f"[!] Local MidasNet_small import error: {ex3}")
-        if not found:
-            print("[!] Could not construct model from fallback.")
+        except Exception as ex3:
+            print(f"[!] Fallback attempt failed: {ex3}")
+            traceback.print_exc()
 
     if model is None:
         print("[!] FATAL: All methods to load MiDaS_small model failed!")
