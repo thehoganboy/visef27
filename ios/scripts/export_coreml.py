@@ -113,13 +113,54 @@ def main():
     )
 
     print("[*] Converting PyTorch traced model to Core ML MLProgram...")
-    mlmodel = ct.convert(
-        traced_model,
-        inputs=[image_input],
-        compute_units=ct.ComputeUnit.ALL,
-        minimum_deployment_target=ct.target.iOS16,
-        convert_to="mlprogram"
-    )
+    mlmodel = None
+    try:
+        image_input = ct.ImageType(
+            name="x",
+            shape=(1, 3, in_h, in_w),
+            color_layout=ct.colorlayout.RGB,
+            scale=0.01735207,
+            bias=[-2.1179, -2.0357, -1.8044]
+        )
+        mlmodel = ct.convert(
+            traced_model,
+            inputs=[image_input],
+            compute_units=ct.ComputeUnit.ALL,
+            minimum_deployment_target=ct.target.iOS16,
+            convert_to="mlprogram"
+        )
+        print("[+] Converted successfully with input name='x'.")
+    except Exception as conv_err:
+        print(f"[!] Conversion with name='x' failed: {conv_err}. Retrying without explicit input name...")
+        traceback.print_exc()
+        try:
+            image_input2 = ct.ImageType(
+                shape=(1, 3, in_h, in_w),
+                color_layout=ct.colorlayout.RGB,
+                scale=0.01735207,
+                bias=[-2.1179, -2.0357, -1.8044]
+            )
+            mlmodel = ct.convert(
+                traced_model,
+                inputs=[image_input2],
+                compute_units=ct.ComputeUnit.ALL,
+                minimum_deployment_target=ct.target.iOS16,
+                convert_to="mlprogram"
+            )
+            print("[+] Converted successfully with positional image input.")
+        except Exception as conv_err2:
+            print(f"[!] Positional conversion also failed: {conv_err2}. Retrying with convert_to='neuralnetwork'...")
+            traceback.print_exc()
+            mlmodel = ct.convert(
+                traced_model,
+                inputs=[ct.ImageType(shape=(1, 3, in_h, in_w), color_layout=ct.colorlayout.RGB, scale=0.01735207, bias=[-2.1179, -2.0357, -1.8044])],
+                compute_units=ct.ComputeUnit.ALL,
+                minimum_deployment_target=ct.target.iOS16
+            )
+            print("[+] Converted successfully with neuralnetwork format.")
+
+    if mlmodel is None:
+        raise RuntimeError("Failed to convert traced model to Core ML!")
 
     mlmodel.author = "HorusEyes Safety-Critical CV Team"
     mlmodel.short_description = "MiDaS Small Monocular Depth Estimation for Vision Impaired Navigation"

@@ -36,8 +36,12 @@ jobs:
 
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)
         run: |
-          python ios/scripts/export_coreml.py 2>&1 | tee export.log
-          test -d ios/HorusEyes/DepthModel.mlpackage || (echo "FATAL: DepthModel.mlpackage was not created by export_coreml.py!" && exit 1)
+          python ios/scripts/export_coreml.py 2>&1 | tee export.log || {
+            echo "=== COREML EXPORTER FAILED! LOG DUMP: ==="
+            cat export.log
+            exit 1
+          }
+          test -d ios/HorusEyes/DepthModel.mlpackage || (echo "FATAL: DepthModel.mlpackage was not created by export_coreml.py!" && cat export.log && exit 1)
           echo "=== Verified Core ML DepthModel.mlpackage ==="
           ls -ld ios/HorusEyes/DepthModel.mlpackage
 
