@@ -29,7 +29,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func applicationDidEnterBackground(_ application: UIApplication) {
-        // Continue spatial audio in background if active
+        // Maintain background safety state if necessary
     }
 
     func applicationWillEnterForeground(_ application: UIApplication) {
@@ -39,17 +39,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
     private func configureLowLatencyAudioSession() {
         let session = AVAudioSession.sharedInstance()
         do {
+            // Use .default mode for maximum hardware compatibility across iPhone 14 Pro speakers/AirPods
             try session.setCategory(
                 .playback,
-                mode: .measurement,
+                mode: .default,
                 options: [.mixWithOthers, .allowBluetoothA2DP]
             )
-            // 5ms buffer duration = 220 samples @ 44.1kHz for sub-perception reaction time
+            // iPhone 14 Pro hardware native sample rate is 48kHz
+            try session.setPreferredSampleRate(48000.0)
             try session.setPreferredIOBufferDuration(0.005)
-            try session.setPreferredSampleRate(Double(Config.audioSampleRate))
-            try session.setActive(true)
+            try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
-            print("[HorusEyes] Warning: Low latency audio session setup failed: \(error.localizedDescription)")
+            print("[HorusEyes] Warning: Low latency audio session setup fallback: \(error.localizedDescription)")
         }
     }
 }

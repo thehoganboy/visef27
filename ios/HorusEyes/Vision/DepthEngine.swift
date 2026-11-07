@@ -69,11 +69,13 @@ final class DepthEngine: ObservableObject {
         if let modelUrl = Bundle.main.url(forResource: "DepthModel", withExtension: "mlmodelc") {
             loadModel(at: modelUrl, configuration: configuration)
         } else if let pkgUrl = Bundle.main.url(forResource: "DepthModel", withExtension: "mlpackage") {
-            do {
-                let compiledUrl = try MLModel.compileModel(at: pkgUrl)
-                loadModel(at: compiledUrl, configuration: configuration)
-            } catch {
-                print("[HorusEyes] Error compiling DepthModel.mlpackage: \(error)")
+            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+                do {
+                    let compiledUrl = try MLModel.compileModel(at: pkgUrl)
+                    self?.loadModel(at: compiledUrl, configuration: configuration)
+                } catch {
+                    print("[HorusEyes] Error compiling DepthModel.mlpackage: \(error)")
+                }
             }
         } else {
             print("[HorusEyes] Notice: DepthModel not bundled yet; using native disparity fallback estimator.")

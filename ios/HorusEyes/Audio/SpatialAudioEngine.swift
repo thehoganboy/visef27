@@ -1,6 +1,7 @@
 // HorusEyes 2.0 — SpatialAudioEngine.swift
 // ════════════════════════════════════════════════════════════════════════════════
-// Non-Blocking 44.1kHz Stereo AVAudioSourceNode C-Callback DSP Spatial Synthesizer
+// Hardware-Adaptive Stereo AVAudioSourceNode C-Callback DSP Spatial Synthesizer
+// Zero-Crash Architecture for iPhone 14 Pro (48kHz & 44.1kHz Dual-Compatibility)
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
@@ -25,7 +26,7 @@ final class SpatialAudioEngine: ObservableObject {
     private var sourceNode: AVAudioSourceNode?
 
     // Audio format
-    private let sampleRate: Double = Double(Config.audioSampleRate)
+    private var sampleRate: Double = 48000.0 // Default to iPhone 14 Pro hardware sample rate
     private let channelCount: AVAudioChannelCount = 2
 
     // State Pointer for zero-allocation C render block access
@@ -48,8 +49,13 @@ final class SpatialAudioEngine: ObservableObject {
 
     // ── Setup Audio Graph ─────────────────────────────────────────────────────
     private func setupAudioGraph() {
-        guard let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: channelCount) else {
-            print("[HorusEyes] Error creating AVAudioFormat.")
+        // Detect native hardware output sample rate safely (48000Hz on iPhone 14 Pro)
+        let hwFormat = audioEngine.outputNode.outputFormat(forBus: 0)
+        let effectiveRate = hwFormat.sampleRate > 8000 ? hwFormat.sampleRate : 48000.0
+        self.sampleRate = effectiveRate
+
+        guard let format = AVAudioFormat(standardFormatWithSampleRate: effectiveRate, channels: channelCount) else {
+            print("[HorusEyes] Error creating AVAudioFormat for rate: \(effectiveRate)")
             return
         }
 
@@ -77,15 +83,17 @@ final class SpatialAudioEngine: ObservableObject {
 
         let node = AVAudioSourceNode { _, _, frameCount, audioBufferList -> OSStatus in
             let abl = UnsafeMutableAudioBufferListPointer(audioBufferList)
-            guard abl.count >= 2,
-                  let leftPtr = abl[0].mData?.assumingMemoryBound(to: Float.self),
-                  let rightPtr = abl[1].mData?.assumingMemoryBound(to: Float.self) else {
-                return noErr
-            }
+            guard !abl.isEmpty else { return noErr }
 
-            let currentState = state.pointee
             let frames = Int(frameCount)
-            let dt = 1.0 / Float(Config.audioSampleRate)
+            let dt = 1.0 / Float(effectiveRate)
+            let currentState = state.pointee
+
+            // Determine if non-interleaved (standard) or interleaved
+            let isDualBuffer = abl.count >= 2
+            guard let buf0 = abl[0].mData?.assumingMemoryBound(to: Float.self) else { return noErr }
+            let leftPtr = buf0
+            let rightPtr = isDualBuffer ? (abl[1].mData?.assumingMemoryBound(to: Float.self) ?? buf0) : buf0
 
             // 1. Earcon Check
             if currentState.earconType != 0 && activeEarconFreq == 0.0 {
@@ -118,8 +126,13 @@ final class SpatialAudioEngine: ObservableObject {
 
                     // Soft-knee limiter: tanh(x * 0.891)
                     let lim = tanh(sig * 0.891)
-                    leftPtr[i] = lim
-                    rightPtr[i] = lim
+                    if isDualBuffer {
+                        leftPtr[i] = lim
+                        rightPtr[i] = lim
+                    } else {
+                        leftPtr[2 * i] = lim
+                        leftPtr[2 * i + 1] = lim
+                    }
                 }
                 return noErr
             }
@@ -127,9 +140,15 @@ final class SpatialAudioEngine: ObservableObject {
             // 3. Silence / Muted Check
             if !currentState.isActive || currentState.cueMode == 3 {
                 if activeEarconFreq == 0.0 {
-                    for i in 0..<frames {
-                        leftPtr[i] = 0.0
-                        rightPtr[i] = 0.0
+                    if isDualBuffer {
+                        for i in 0..<frames {
+                            leftPtr[i] = 0.0
+                            rightPtr[i] = 0.0
+                        }
+                    } else {
+                        for i in 0..<(frames * 2) {
+                            leftPtr[i] = 0.0
+                        }
                     }
                     return noErr
                 }
@@ -268,8 +287,16 @@ final class SpatialAudioEngine: ObservableObject {
                 }
 
                 // Soft-Knee Peak Limiter at -1.0 dBFS (tanh)
-                leftPtr[i] = tanh(outL * 0.891)
-                rightPtr[i] = tanh(outR * 0.891)
+                let sampleL = tanh(outL * 0.891)
+                let sampleR = tanh(outR * 0.891)
+
+                if isDualBuffer {
+                    leftPtr[i] = sampleL
+                    rightPtr[i] = sampleR
+                } else {
+                    leftPtr[2 * i] = sampleL
+                    leftPtr[2 * i + 1] = sampleR
+                }
             }
 
             return noErr
@@ -281,13 +308,12 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     func start() {
+        guard !audioEngine.isRunning else { return }
         do {
-            if !audioEngine.isRunning {
-                try audioEngine.start()
-                print("[HorusEyes] 3D Binaural Spatial Audio Engine started successfully.")
-            }
+            try audioEngine.start()
+            print("[HorusEyes] 3D Binaural Spatial Audio Engine started successfully at \(sampleRate) Hz.")
         } catch {
-            print("[HorusEyes] Error starting AVAudioEngine: \(error)")
+            print("[HorusEyes] Error starting AVAudioEngine: \(error.localizedDescription)")
         }
     }
 
@@ -326,20 +352,15 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     func playEarcon(type: String) {
-        let typeCode: Int
+        let earconId: Int
         switch type {
-        case "PAUSE": typeCode = 1
-        case "MUTE": typeCode = 2
-        case "FLASH_ON": typeCode = 3
-        case "FLASH_OFF": typeCode = 4
-        default: typeCode = 1
+        case "PAUSE": earconId = 1
+        case "MUTE": earconId = 2
+        case "FLASH_ON": earconId = 3
+        case "FLASH_OFF": earconId = 4
+        default: earconId = 0
         }
-        statePtr.pointee.earconType = typeCode
+        statePtr.pointee.earconType = earconId
         hapticFeedback.impactOccurred()
-    }
-
-    func setSystemFaultMode(enabled: Bool) {
-        statePtr.pointee.cueMode = enabled ? 2 : 0
-        statePtr.pointee.isActive = enabled
     }
 }

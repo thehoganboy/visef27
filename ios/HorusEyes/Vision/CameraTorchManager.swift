@@ -1,6 +1,7 @@
 // HorusEyes 2.0 — CameraTorchManager.swift
 // ════════════════════════════════════════════════════════════════════════════════
 // AVFoundation High-Speed Camera Pipeline + 0-Lux Auto-Torch + Hardware Watchdog
+// Graceful Permission Verification & Hardware-Safe Startup for iPhone 14 Pro
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
@@ -80,14 +81,21 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
                     self.captureSession.addInput(input)
                 }
 
-                // Lock to 30 FPS
-                try device.lockForConfiguration()
-                device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: Int32(Config.defaultFPS))
-                device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: Int32(Config.defaultFPS))
-                if device.isLowLightBoostSupported {
-                    device.automaticallyEnablesLowLightBoostWhenAvailable = true
+                // Lock to 30 FPS safely
+                do {
+                    try device.lockForConfiguration()
+                    let targetFps = Int32(Config.defaultFPS)
+                    if device.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= Double(targetFps) }) {
+                        device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: targetFps)
+                        device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: targetFps)
+                    }
+                    if device.isLowLightBoostSupported {
+                        device.automaticallyEnablesLowLightBoostWhenAvailable = true
+                    }
+                    device.unlockForConfiguration()
+                } catch {
+                    print("[HorusEyes] Notice: Device frame rate lock skipped: \(error)")
                 }
-                device.unlockForConfiguration()
             } catch {
                 print("[HorusEyes] Error configuring camera input: \(error)")
             }
@@ -117,7 +125,27 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         }
     }
 
+    // ── Graceful Camera Permission & Session Start ────────────────────────────
     func start() {
+        switch AVCaptureDevice.authorizationStatus(for: .video) {
+        case .authorized:
+            startRunningSession()
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                if granted {
+                    self?.startRunningSession()
+                } else {
+                    print("[HorusEyes] Camera permission denied by user.")
+                }
+            }
+        case .denied, .restricted:
+            print("[HorusEyes] Camera permission currently denied or restricted.")
+        @unknown default:
+            startRunningSession()
+        }
+    }
+
+    private func startRunningSession() {
         sessionQueue.async { [weak self] in
             guard let self = self, !self.captureSession.isRunning else { return }
             self.captureSession.startRunning()
@@ -227,44 +255,36 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             }
         }
 
-        // If user manually forced torch, don't auto-switch
-        if isTorchForcedManual { return }
+        guard !isTorchForcedManual else { return }
 
-        // Condition 1: Automatic turn ON in darkness
+        // Darkness Detection (meanY < 28 Lux)
         if meanY < Config.luxDarkOnThreshold {
             darkFrameCount += 1
             if darkFrameCount >= Config.luxDarkConfirmFrames && !isTorchActive {
                 setHardwareTorch(on: true)
                 torchActivationTimestamp = currentTime
                 aeSettleFramesRemaining = Config.flashAeSettleFrames
-                darkFrameCount = 0
-
-                DispatchQueue.main.async { [weak self] in
-                    self?.isTorchActive = true
-                    self?.hapticGenerator.impactOccurred()
-                    self?.onTorchToggled?(true)
-                }
+                onTorchToggled?(true)
             }
         } else {
             darkFrameCount = 0
         }
 
-        // Condition 2: Automatic turn OFF in daylight (anti-strobe with 5.0s minimum hold)
-        if isTorchActive && meanY > Config.luxBrightOffThreshold {
+        // Brightness Clearance (meanY > 75 Lux) with 5.0s Anti-Strobe Hold
+        if meanY > Config.luxBrightOffThreshold && isTorchActive {
             let holdDuration = currentTime - torchActivationTimestamp
             if holdDuration >= Double(Config.flashHoldMinSeconds) {
                 setHardwareTorch(on: false)
-                DispatchQueue.main.async { [weak self] in
-                    self?.isTorchActive = false
-                    self?.onTorchToggled?(false)
-                }
+                aeSettleFramesRemaining = Config.flashAeSettleFrames
+                onTorchToggled?(false)
             }
         }
     }
 
-    // ── Hardware Torch Control ────────────────────────────────────────────────
+    // ── Hardware Torch Actuator ───────────────────────────────────────────────
     private func setHardwareTorch(on: Bool) {
-        guard let device = videoDevice, device.hasTorch, device.isTorchAvailable else { return }
+        guard let device = videoDevice, device.hasTorch else { return }
+
         do {
             try device.lockForConfiguration()
             if on {
@@ -273,30 +293,25 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
                 device.torchMode = .off
             }
             device.unlockForConfiguration()
+
+            DispatchQueue.main.async { [weak self] in
+                self?.isTorchActive = on
+            }
         } catch {
-            print("[HorusEyes] Failed to set hardware torch: \(error)")
+            print("[HorusEyes] Error setting torch: \(error)")
         }
     }
 
-    // ── Manual User Override (UI Button) ──────────────────────────────────────
+    // ── Manual Override Toggle ────────────────────────────────────────────────
     func toggleManualTorch() {
+        hapticGenerator.impactOccurred()
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             let newState = !self.isTorchActive
-            self.isTorchForcedManual = true
+            self.isTorchForcedManual = newState
             self.setHardwareTorch(on: newState)
-
-            DispatchQueue.main.async {
-                self.isTorchActive = newState
-                self.hapticGenerator.impactOccurred()
-                self.onTorchToggled?(newState)
-            }
-        }
-    }
-
-    func resetToAutoTorch() {
-        sessionQueue.async { [weak self] in
-            self?.isTorchForcedManual = false
+            self.aeSettleFramesRemaining = Config.flashAeSettleFrames
+            self.onTorchToggled?(newState)
         }
     }
 }
