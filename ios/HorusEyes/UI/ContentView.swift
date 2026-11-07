@@ -1,6 +1,7 @@
 // HorusEyes 2.0 — ContentView.swift
 // ════════════════════════════════════════════════════════════════════════════════
-// High-Contrast Accessible HUD + Giant Ergonomic Controls + VoiceOver Integration
+// Modern Ultra-Minimalist Accessible iOS HUD (Zero Numbers, Pure Human-Centric UI)
+// Apple Human Interface Guidelines & Blind Ergonomics (Eyes-Free Operation)
 // ════════════════════════════════════════════════════════════════════════════════
 
 import SwiftUI
@@ -16,7 +17,7 @@ struct ContentView: View {
     private let kinematicsEngine = KinematicsEngine()
     private let budgetManager = AuditoryBudgetManager()
 
-    // ── Observable Pipeline Telemetry ─────────────────────────────────────────
+    // ── Observable Pipeline Telemetry (Internal States) ───────────────────────
     @State private var isSystemPaused: Bool = false
     @State private var safeDirection: String = "RIGHT"
     @State private var threatLevel: String = "SAFE"
@@ -28,183 +29,235 @@ struct ContentView: View {
     @State private var currentCueMode: String = "MUTED"
     @State private var sectorDists: [String: Float] = ["LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0]
 
-    // Haptics
-    private let impactFeedback = UIImpactFeedbackGenerator(style: .heavy)
+    // ── Tactile Feedback ──────────────────────────────────────────────────────
+    private let impactFeedbackHeavy = UIImpactFeedbackGenerator(style: .heavy)
+    private let impactFeedbackMedium = UIImpactFeedbackGenerator(style: .medium)
+    private let notificationFeedback = UINotificationFeedbackGenerator()
 
     var body: some View {
         GeometryReader { geo in
-            VStack(spacing: 0) {
-                // ════════════════════════════════════════════════════════════════
-                // UPPER HALF: Safety Navigation HUD & Telemetry
-                // ════════════════════════════════════════════════════════════════
-                ZStack {
-                    Color.black.ignoresSafeArea()
+            ZStack {
+                // Pure OLED Deep Black Background
+                Color.black.ignoresSafeArea()
 
-                    VStack(spacing: 12) {
-                        // Top Header: App Branding + Torch & Sensor Status
-                        HStack {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text("HORUSEYES 2.0")
-                                    .font(.system(size: 16, weight: .black, design: .monospaced))
-                                    .foregroundColor(.cyan)
-                                Text("A15 Bionic Safety Edition")
-                                    .font(.system(size: 10, weight: .semibold))
-                                    .foregroundColor(.gray)
-                            }
-
-                            Spacer()
-
-                            // Torch Status Badge
-                            HStack(spacing: 4) {
-                                Image(systemName: cameraManager.isTorchActive ? "bolt.fill" : "bolt.slash")
-                                    .foregroundColor(cameraManager.isTorchActive ? .yellow : .gray)
-                                Text(cameraManager.isTorchActive ? "TORCH ON" : "TORCH OFF")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundColor(cameraManager.isTorchActive ? .yellow : .gray)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Color(white: 0.15))
-                            .cornerRadius(6)
-
-                            // Sensor Health Indicator
-                            Circle()
-                                .fill(cameraManager.isZeroLuxBlind ? Color.red : (cameraManager.isCameraHealthy ? Color.green : Color.orange))
-                                .frame(width: 10, height: 10)
-                        }
-                        .padding(.horizontal, 16)
-                        .padding(.top, 8)
-
-                        // 3-Sector Visual Clearance Bars (LEFT | CENTER | RIGHT)
+                VStack(spacing: 0) {
+                    // ════════════════════════════════════════════════════════════
+                    // TOP BAR: Brand Identity + Simple Status Capsule
+                    // ════════════════════════════════════════════════════════════
+                    HStack(alignment: .center) {
+                        // Brand Logo
                         HStack(spacing: 8) {
-                            SectorCard(name: "LEFT", distCM: sectorDists["LEFT"] ?? 250.0)
-                            SectorCard(name: "CENTER", distCM: sectorDists["CENTER"] ?? 250.0)
-                            SectorCard(name: "RIGHT", distCM: sectorDists["RIGHT"] ?? 250.0)
-                        }
-                        .padding(.horizontal, 16)
+                            ZStack {
+                                Circle()
+                                    .fill(
+                                        LinearGradient(
+                                            colors: [Color.cyan.opacity(0.8), Color.blue],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .frame(width: 30, height: 30)
+                                    .shadow(color: .cyan.opacity(0.4), radius: 6)
 
-                        // Giant Escape Direction Guidance Banner
-                        HStack {
-                            Spacer()
-                            if safeDirection == "STOP" {
-                                Label("STOP — HAZARD BLOCKED", systemImage: "hand.raised.fill")
-                                    .font(.system(size: 18, weight: .black))
-                                    .foregroundColor(.white)
-                            } else if safeDirection == "LEFT" {
-                                Label("ESCAPE: ◀ TURN LEFT", systemImage: "arrow.left.circle.fill")
-                                    .font(.system(size: 18, weight: .black))
-                                    .foregroundColor(.white)
-                            } else {
-                                Label("ESCAPE: TURN RIGHT ▶", systemImage: "arrow.right.circle.fill")
-                                    .font(.system(size: 18, weight: .black))
-                                    .foregroundColor(.white)
+                                Image(systemName: "eye.fill")
+                                    .font(.system(size: 15, weight: .bold))
+                                    .foregroundColor(.black)
                             }
-                            Spacer()
-                        }
-                        .padding(.vertical, 10)
-                        .background(escapeBannerColor)
-                        .cornerRadius(10)
-                        .padding(.horizontal, 16)
-                        .accessibilityElement()
-                        .accessibilityLabel("Hướng thoát hiểm: \(safeDirection == "STOP" ? "Dừng lại" : (safeDirection == "LEFT" ? "Rẽ trái" : "Rẽ phải"))")
 
-                        // Telemetry Metrics Grid
-                        VStack(spacing: 4) {
-                            HStack {
-                                MetricCell(title: "FPS", value: String(format: "%.1f", cameraManager.fps))
-                                MetricCell(title: "LATENCY", value: String(format: "%.0f ms", depthEngine.inferenceLatencyMs))
-                                MetricCell(title: "DIST Z", value: String(format: "%.0f cm", currentDistCM))
-                                MetricCell(title: "V_Z", value: String(format: "%.0f cm/s", currentVz))
-                            }
-                            HStack {
-                                MetricCell(title: "TTC", value: currentTTC.isFinite ? String(format: "%.1f s", currentTTC) : "SAFE")
-                                MetricCell(title: "UNCERT (u)", value: String(format: "%.2f", currentUncertainty))
-                                MetricCell(title: "CUE MODE", value: currentCueMode)
-                                MetricCell(title: "LUMA (Y)", value: String(format: "%.0f", cameraManager.meanLuma))
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("HORUSEYES")
+                                    .font(.system(size: 16, weight: .black, design: .rounded))
+                                    .tracking(1.4)
+                                    .foregroundColor(.white)
+                                Text("TRỢ THỊ THÔNG MINH")
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    .foregroundColor(.cyan.opacity(0.85))
                             }
                         }
-                        .padding(10)
-                        .background(Color(white: 0.12))
-                        .cornerRadius(8)
-                        .padding(.horizontal, 16)
 
                         Spacer()
-                    }
-                }
-                .frame(height: geo.size.height * 0.52)
 
-                // ════════════════════════════════════════════════════════════════
-                // LOWER HALF: Giant Ergonomic Tactile Control Pads
-                // ════════════════════════════════════════════════════════════════
-                VStack(spacing: 12) {
-                    // Button 1: Pause / Resume Giant Button
-                    Button(action: togglePauseState) {
-                        HStack(spacing: 16) {
-                            Image(systemName: isSystemPaused ? "play.circle.fill" : "pause.circle.fill")
-                                .font(.system(size: 40))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(isSystemPaused ? "TIẾP TỤC DẪN ĐƯỜNG" : "TẠM DỪNG HỆ THỐNG")
-                                    .font(.system(size: 20, weight: .black))
-                                Text(isSystemPaused ? "Chạm để bật lại âm thanh và camera" : "Chạm để tắt âm thanh và dừng quét")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .opacity(0.85)
-                            }
-                            Spacer()
-                        }
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(isSystemPaused ? Color.green : Color(red: 0.85, green: 0.25, blue: 0.20))
-                        .foregroundColor(.white)
-                        .cornerRadius(16)
-                    }
-                    .accessibilityLabel(isSystemPaused ? "Nút Tiếp tục dẫn đường" : "Nút Tạm dừng hệ thống")
-                    .accessibilityHint("Nhấn hai lần để chuyển đổi trạng thái tạm dừng hoặc tiếp tục")
+                        // Simple Human-Friendly Status Capsule
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(isSystemPaused ? Color.orange : (cameraManager.isZeroLuxBlind ? Color.red : Color.green))
+                                .frame(width: 8, height: 8)
+                                .shadow(color: isSystemPaused ? Color.orange : Color.green, radius: 4)
 
-                    // Button 2: Auto / Manual Torch Giant Button
-                    Button(action: toggleTorchState) {
-                        HStack(spacing: 16) {
-                            Image(systemName: cameraManager.isTorchActive ? "flashlight.on.fill" : "flashlight.off.fill")
-                                .font(.system(size: 40))
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(cameraManager.isTorchActive ? "ĐÈN FLASH: ĐANG BẬT" : "ĐÈN FLASH: TỰ ĐỘNG (0-LUX)")
-                                    .font(.system(size: 20, weight: .black))
-                                Text(cameraManager.isTorchActive ? "Chạm để tắt đèn thủ công" : "Tự bật khi tối < 28 Lux, chạm để bật cưỡng bức")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .opacity(0.85)
-                            }
-                            Spacer()
+                            Text(isSystemPaused ? "TẠM DỪNG" : (cameraManager.isZeroLuxBlind ? "THIẾU SÁNG" : "ĐANG BẢO VỆ"))
+                                .font(.system(size: 11, weight: .bold, design: .rounded))
+                                .foregroundColor(isSystemPaused ? .orange : (cameraManager.isZeroLuxBlind ? .red : .green))
                         }
-                        .padding(.horizontal, 24)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .background(cameraManager.isTorchActive ? Color(red: 0.80, green: 0.60, blue: 0.10) : Color(white: 0.20))
-                        .foregroundColor(.white)
-                        .cornerRadius(16)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 6)
+                        .background(Color.white.opacity(0.08))
+                        .clipShape(Capsule())
                     }
-                    .accessibilityLabel(cameraManager.isTorchActive ? "Đèn flash đang bật, nhấn để tắt" : "Đèn flash tự động, nhấn để bật cưỡng bức")
+                    .padding(.horizontal, 20)
+                    .padding(.top, 10)
+                    .padding(.bottom, 6)
+
+                    // ════════════════════════════════════════════════════════════
+                    // UPPER SECTION: Ultra-Minimalist Spatial Guidance (Zero Numbers)
+                    // ════════════════════════════════════════════════════════════
+                    VStack(spacing: 16) {
+                        // 1. Spatial Clearance & Direction Orb (Pure Visual & Qualitative)
+                        SpatialRadarView(
+                            sectorDists: sectorDists,
+                            nearestDistCM: currentDistCM,
+                            threatLevel: threatLevel,
+                            isPaused: isSystemPaused
+                        )
+
+                        // 2. Dynamic Escape Direction Banner
+                        EscapeGuidanceBanner(
+                            safeDirection: safeDirection,
+                            threatLevel: threatLevel,
+                            isPaused: isSystemPaused
+                        )
+                        .padding(.horizontal, 16)
+
+                        Spacer(minLength: 0)
+                    }
+                    .frame(height: geo.size.height * 0.48)
+
+                    // ════════════════════════════════════════════════════════════
+                    // LOWER SECTION: Giant Ergonomic Tactile Control Pads
+                    // ════════════════════════════════════════════════════════════
+                    VStack(spacing: 14) {
+                        // ── Pad 1: System State (Pause / Resume) ────────────────
+                        Button(action: togglePauseState) {
+                            HStack(spacing: 20) {
+                                ZStack {
+                                    Circle()
+                                        .fill(isSystemPaused ? Color.green.opacity(0.2) : Color.orange.opacity(0.2))
+                                        .frame(width: 60, height: 60)
+
+                                    Image(systemName: isSystemPaused ? "play.fill" : "pause.fill")
+                                        .font(.system(size: 26, weight: .black))
+                                        .foregroundColor(isSystemPaused ? .green : .orange)
+                                }
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(isSystemPaused ? "TIẾP TỤC DẪN ĐƯỜNG" : "TẠM DỪNG HỆ THỐNG")
+                                        .font(.system(size: 20, weight: .heavy, design: .rounded))
+                                        .foregroundColor(.white)
+                                    Text(isSystemPaused ? "Chạm để bật lại quét và âm thanh" : "Chạm để tắt âm thanh và tạm dừng")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundColor(Color.white.opacity(0.65))
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(Color.white.opacity(0.3))
+                            }
+                            .padding(.horizontal, 20)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: isSystemPaused
+                                                ? [Color(white: 0.16), Color(white: 0.10)]
+                                                : [Color(red: 0.18, green: 0.12, blue: 0.08), Color(white: 0.10)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                            .stroke(
+                                                isSystemPaused
+                                                    ? Color.green.opacity(0.4)
+                                                    : Color.orange.opacity(0.3),
+                                                lineWidth: 1.5
+                                            )
+                                    )
+                            )
+                            .shadow(color: isSystemPaused ? Color.green.opacity(0.15) : Color.orange.opacity(0.1), radius: 12, y: 4)
+                        }
+                        .accessibilityLabel(isSystemPaused ? "Tiếp tục dẫn đường" : "Tạm dừng hệ thống")
+                        .accessibilityHint("Nhấn hai lần để chuyển đổi trạng thái")
+
+                        // ── Pad 2: Smart Flashlight & 0-Lux Defense ────────────
+                        Button(action: toggleTorchState) {
+                            HStack(spacing: 20) {
+                                ZStack {
+                                    Circle()
+                                        .fill(cameraManager.isTorchActive ? Color.yellow.opacity(0.2) : Color.cyan.opacity(0.15))
+                                        .frame(width: 60, height: 60)
+
+                                    Image(systemName: cameraManager.isTorchActive ? "flashlight.on.fill" : "flashlight.off.fill")
+                                        .font(.system(size: 26, weight: .black))
+                                        .foregroundColor(cameraManager.isTorchActive ? .yellow : .cyan)
+                                }
+
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(cameraManager.isTorchActive ? "ĐÈN FLASH: ĐANG BẬT" : "ĐÈN THÔNG MINH (0-LUX)")
+                                        .font(.system(size: 20, weight: .heavy, design: .rounded))
+                                        .foregroundColor(.white)
+                                    Text(cameraManager.isTorchActive ? "Chạm để chuyển chế độ tự động" : "Tự động kích hoạt khi trời tối")
+                                        .font(.system(size: 13, weight: .medium, design: .rounded))
+                                        .foregroundColor(Color.white.opacity(0.65))
+                                        .lineLimit(1)
+                                }
+
+                                Spacer()
+
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 16, weight: .bold))
+                                    .foregroundColor(Color.white.opacity(0.3))
+                            }
+                            .padding(.horizontal, 20)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(
+                                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                    .fill(
+                                        LinearGradient(
+                                            colors: cameraManager.isTorchActive
+                                                ? [Color(red: 0.22, green: 0.18, blue: 0.05), Color(white: 0.10)]
+                                                : [Color(white: 0.14), Color(white: 0.08)],
+                                            startPoint: .topLeading,
+                                            endPoint: .bottomTrailing
+                                        )
+                                    )
+                                    .overlay(
+                                        RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                            .stroke(
+                                                cameraManager.isTorchActive
+                                                    ? Color.yellow.opacity(0.5)
+                                                    : Color.cyan.opacity(0.25),
+                                                lineWidth: 1.5
+                                            )
+                                    )
+                            )
+                            .shadow(color: cameraManager.isTorchActive ? Color.yellow.opacity(0.2) : Color.cyan.opacity(0.08), radius: 12, y: 4)
+                        }
+                        .accessibilityLabel(cameraManager.isTorchActive ? "Đèn flash đang bật, nhấn để chuyển sang tự động" : "Đèn flash tự động, nhấn để bật thủ công")
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 10)
+                    .padding(.bottom, 22)
+                    .frame(height: geo.size.height * 0.52)
                 }
-                .padding(16)
-                .frame(height: geo.size.height * 0.48)
-                .background(Color(white: 0.08))
+            }
+            // Double Tap Gesture anywhere on the screen for blind users to easily toggle pause/play
+            .onTapGesture(count: 2) {
+                togglePauseState()
             }
         }
         .onAppear(perform: startPipeline)
         .onDisappear(perform: stopPipeline)
     }
 
-    // ── Escape Guidance Banner Background Color ───────────────────────────────
-    private var escapeBannerColor: Color {
-        if safeDirection == "STOP" {
-            return Color.red
-        } else if threatLevel == "CRITICAL" {
-            return Color.orange
-        } else {
-            return Color(red: 0.10, green: 0.60, blue: 0.35)
-        }
-    }
-
     // ── Pipeline Lifecycle & Real-Time Sync ────────────────────────────────────
     private func startPipeline() {
-        impactFeedback.prepare()
+        impactFeedbackHeavy.prepare()
+        impactFeedbackMedium.prepare()
+        notificationFeedback.prepare()
         audioEngine.start()
         cameraManager.start()
 
@@ -272,74 +325,92 @@ struct ContentView: View {
     // ── UI User Actions ───────────────────────────────────────────────────────
     private func togglePauseState() {
         isSystemPaused.toggle()
-        impactFeedback.impactOccurred()
-        audioEngine.playEarcon(type: isSystemPaused ? "PAUSE" : "MUTE")
         if isSystemPaused {
+            notificationFeedback.notificationOccurred(.warning)
+            audioEngine.playEarcon(type: "PAUSE")
             audioEngine.update(decision: BudgetDecision(
                 isActive: false, pan: 0, proximity: 0, distCM: 250, ttc: .infinity,
                 priorityScore: 0, volumeFactor: 0, safeDirection: "STOP", cueMode: "MUTED",
                 threatLevel: "SAFE", suppressedCount: 0
             ))
+        } else {
+            notificationFeedback.notificationOccurred(.success)
+            audioEngine.playEarcon(type: "MUTE")
         }
     }
 
     private func toggleTorchState() {
-        impactFeedback.impactOccurred()
+        impactFeedbackMedium.impactOccurred()
         cameraManager.toggleManualTorch()
     }
 }
 
-// ── Sub-Components ─────────────────────────────────────────────────────────────
-struct SectorCard: View {
-    let name: String
-    let distCM: Float
+// ── Escape Guidance Hero Banner (Human Centric Navigation) ─────────────────────
+struct EscapeGuidanceBanner: View {
+    let safeDirection: String
+    let threatLevel: String
+    let isPaused: Bool
 
-    var color: Color {
-        if distCM <= Config.distCriticalCM {
-            return .red
-        } else if distCM <= Config.distDangerCM {
-            return .orange
-        } else if distCM <= Config.distWarningCM {
-            return .yellow
+    private var bannerColor: Color {
+        guard !isPaused else { return Color.gray.opacity(0.3) }
+        if safeDirection == "STOP" {
+            return Color(red: 0.90, green: 0.20, blue: 0.20)
+        } else if threatLevel == "CRITICAL" {
+            return Color(red: 0.95, green: 0.50, blue: 0.10)
+        } else if threatLevel == "WARNING" {
+            return Color(red: 0.90, green: 0.70, blue: 0.10)
         } else {
-            return .green
+            return Color(red: 0.12, green: 0.65, blue: 0.40)
         }
     }
 
     var body: some View {
-        VStack(spacing: 2) {
-            Text(name)
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(.white)
-            Text(String(format: "%.0f cm", distCM))
-                .font(.system(size: 15, weight: .heavy))
-                .foregroundColor(color)
-            Rectangle()
-                .fill(color)
-                .frame(height: 4)
-        }
-        .padding(.vertical, 6)
-        .padding(.horizontal, 4)
-        .frame(maxWidth: .infinity)
-        .background(Color(white: 0.16))
-        .cornerRadius(6)
-    }
-}
+        HStack(spacing: 12) {
+            Spacer()
 
-struct MetricCell: View {
-    let title: String
-    let value: String
+            if isPaused {
+                Image(systemName: "pause.circle.fill")
+                    .font(.system(size: 22, weight: .bold))
+                Text("HỆ THỐNG ĐANG TẠM DỪNG")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+            } else if safeDirection == "STOP" {
+                Image(systemName: "hand.raised.fill")
+                    .font(.system(size: 22, weight: .bold))
+                Text("DỪNG LẠI — VẬT CẢN CHẮN PHÍA TRƯỚC")
+                    .font(.system(size: 15, weight: .heavy, design: .rounded))
+            } else if safeDirection == "LEFT" {
+                Image(systemName: "arrow.turn.up.left")
+                    .font(.system(size: 22, weight: .black))
+                Text("HƯỚNG AN TOÀN: RẼ TRÁI")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+            } else if safeDirection == "RIGHT" {
+                Text("HƯỚNG AN TOÀN: RẼ PHẢI")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+                Image(systemName: "arrow.turn.up.right")
+                    .font(.system(size: 22, weight: .black))
+            } else {
+                Image(systemName: "checkmark.shield.fill")
+                    .font(.system(size: 22, weight: .bold))
+                Text("HÀNH LANG AN TOÀN — ĐI THẲNG")
+                    .font(.system(size: 16, weight: .heavy, design: .rounded))
+            }
 
-    var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(title)
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .foregroundColor(.gray)
-            Text(value)
-                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                .foregroundColor(.cyan)
-                .lineLimit(1)
+            Spacer()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .foregroundColor(.white)
+        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(bannerColor.opacity(0.85))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .stroke(bannerColor, lineWidth: 1.5)
+                )
+        )
+        .shadow(color: bannerColor.opacity(0.4), radius: 10, y: 4)
+        .animation(.spring(response: 0.35, dampingFraction: 0.75), value: safeDirection)
+        .accessibilityElement()
+        .accessibilityLabel(safeDirection == "STOP" ? "Dừng lại, phía trước có vật cản" : (safeDirection == "LEFT" ? "Rẽ trái an toàn" : (safeDirection == "RIGHT" ? "Rẽ phải an toàn" : "Phía trước an toàn, tiếp tục đi thẳng")))
     }
 }
