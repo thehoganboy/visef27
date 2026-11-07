@@ -73,7 +73,11 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             }
 
             self.captureSession.beginConfiguration()
-            self.captureSession.sessionPreset = .vga640x480
+            if self.captureSession.canSetSessionPreset(.hd1280x720) {
+                self.captureSession.sessionPreset = .hd1280x720
+            } else {
+                self.captureSession.sessionPreset = .vga640x480
+            }
 
             guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
                 print("[HorusEyes] Notice: Back camera device not found.")
@@ -171,6 +175,26 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             guard let self = self, self.captureSession.isRunning else { return }
             self.setHardwareTorch(on: false)
             self.captureSession.stopRunning()
+        }
+    }
+
+    func updateVideoOrientation(for interfaceOrientation: UIInterfaceOrientation) {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            let videoOrientation: AVCaptureVideoOrientation
+            switch interfaceOrientation {
+            case .landscapeLeft:
+                videoOrientation = .landscapeLeft
+            case .landscapeRight:
+                videoOrientation = .landscapeRight
+            default:
+                videoOrientation = .landscapeRight
+            }
+            if let output = self.captureSession.outputs.first as? AVCaptureVideoDataOutput,
+               let conn = output.connection(with: .video),
+               conn.isVideoOrientationSupported {
+                conn.videoOrientation = videoOrientation
+            }
         }
     }
 

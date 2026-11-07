@@ -1,7 +1,7 @@
 // HorusEyes 2.0 — TrackingOverlayView.swift
 // ════════════════════════════════════════════════════════════════════════════════
-// Real-Time High-Contrast AR Obstacle Bounding Box & HUD Overlay (Landscape)
-// Apple HIG & ViSEF Standards: Corner Brackets, Reticles, Threat Colors, Distance Badges
+// Real-Time High-Contrast AR Obstacle Bounding Box & Reticle Overlay (Landscape)
+// Apple HIG & ViSEF Standards: Pixel-Accurate Aspect-Fill Matrix Projection
 // ════════════════════════════════════════════════════════════════════════════════
 
 import SwiftUI
@@ -11,43 +11,42 @@ struct TrackingOverlayView: View {
     let threatLevel: String
     let safeDirection: String
     let isPaused: Bool
-    let camWidth: CGFloat = 640.0
-    let camHeight: CGFloat = 480.0
 
     var body: some View {
         GeometryReader { geo in
             ZStack {
                 if !isPaused, let res = result {
-                    // 1. Draw all detected obstacles
+                    // 1. Draw all detected obstacles with 1:1 camera-to-screen matrix transform
                     ForEach(res.allObstacles, id: \.id) { obs in
-                        obstacleBox(obs: obs, in: geo.size)
+                        obstacleBox(obs: obs, res: res, in: geo.size)
                     }
 
                     // 2. Center Corridor Guide Lines (3 Sectors)
                     corridorGuideLines(in: geo.size)
-
-                    // 3. Top Floating Escape Guidance Banner
-                    topGuidanceBanner(res: res, in: geo.size)
-
-                    // 4. Bottom 3-Sector Clearance Indicators
-                    bottomSectorClearanceBar(sectorDists: res.sectorDists, in: geo.size)
                 } else if isPaused {
                     pausedBackdrop(in: geo.size)
                 }
             }
         }
-        .allowsHitTesting(false) // Let user taps pass through to controls
+        .allowsHitTesting(false) // Let user touches pass through to controls
     }
 
     // ── Obstacle Bounding Box & Reticle ───────────────────────────────────────
-    private func obstacleBox(obs: SingleObstacle, in size: CGSize) -> some View {
-        let scaleX = size.width / camWidth
-        let scaleY = size.height / camHeight
+    private func obstacleBox(obs: SingleObstacle, res: ObstacleDetectionResult, in size: CGSize) -> some View {
+        let camW = CGFloat(res.camWidth > 0 ? res.camWidth : 1280)
+        let camH = CGFloat(res.camHeight > 0 ? res.camHeight : 720)
 
-        let bx = CGFloat(obs.bbox.x) * scaleX
-        let by = CGFloat(obs.bbox.y) * scaleY
-        let bw = max(CGFloat(60), CGFloat(obs.bbox.w) * scaleX)
-        let bh = max(CGFloat(60), CGFloat(obs.bbox.h) * scaleY)
+        // Exact Uniform Aspect-Fill Transform matching AVCaptureVideoPreviewLayer
+        let scale = max(size.width / camW, size.height / camH)
+        let renderedW = camW * scale
+        let renderedH = camH * scale
+        let offsetX = (size.width - renderedW) / 2.0
+        let offsetY = (size.height - renderedH) / 2.0
+
+        let bx = CGFloat(obs.bbox.x) * scale + offsetX
+        let by = CGFloat(obs.bbox.y) * scale + offsetY
+        let bw = max(CGFloat(56), CGFloat(obs.bbox.w) * scale)
+        let bh = max(CGFloat(56), CGFloat(obs.bbox.h) * scale)
 
         let color = colorForThreat(distCM: obs.distCM)
 
@@ -107,7 +106,7 @@ struct TrackingOverlayView: View {
         Path { path in
             let leftX = size.width * 0.33
             let rightX = size.width * 0.66
-            let topY = size.height * 0.20
+            let topY = size.height * 0.18
             let botY = size.height * 0.82
 
             path.move(to: CGPoint(x: leftX, y: topY))
@@ -116,87 +115,15 @@ struct TrackingOverlayView: View {
             path.move(to: CGPoint(x: rightX, y: topY))
             path.addLine(to: CGPoint(x: rightX, y: botY))
         }
-        .stroke(Color.white.opacity(0.12), style: StrokeStyle(lineWidth: 1.5, dash: [6, 6]))
+        .stroke(Color.white.opacity(0.15), style: StrokeStyle(lineWidth: 1.5, dash: [6, 6]))
     }
 
-    // ── Top Floating Guidance Banner ──────────────────────────────────────────
-    private func topGuidanceBanner(res: ObstacleDetectionResult, in size: CGSize) -> some View {
-        let isSafe = res.distCM >= Config.distSafeCM || res.modeText.hasPrefix("SAFE")
-        let bannerColor = isSafe ? Color.green : colorForThreat(distCM: res.distCM)
-
-        return VStack {
-            HStack(spacing: 10) {
-                Image(systemName: isSafe ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(bannerColor)
-
-                if isSafe {
-                    Text("ĐƯỜNG THOÁNG AN TOÀN (>2.5m)")
-                        .font(.system(size: 13, weight: .black, design: .rounded))
-                        .foregroundColor(.white)
-                } else {
-                    Text("CẢNH BÁO (\(Int(res.distCM))cm) — ")
-                        .font(.system(size: 13, weight: .heavy, design: .rounded))
-                        .foregroundColor(.white)
-                    Text("NÉ SANG \(safeDirection == "LEFT" ? "TRÁI ◄" : "PHẢI ►")")
-                        .font(.system(size: 13, weight: .black, design: .rounded))
-                        .foregroundColor(bannerColor)
-                }
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 8)
-            .background(Color.black.opacity(0.85))
-            .clipShape(Capsule())
-            .overlay(Capsule().stroke(bannerColor.opacity(0.8), lineWidth: 1.5))
-            .shadow(color: bannerColor.opacity(0.35), radius: 8)
-            .padding(.top, 12)
-
-            Spacer()
-        }
-    }
-
-    // ── Bottom 3-Sector Clearance Meter ───────────────────────────────────────
-    private func bottomSectorClearanceBar(sectorDists: [String: Float], in size: CGSize) -> some View {
-        let distL = sectorDists["LEFT"] ?? 250.0
-        let distC = sectorDists["CENTER"] ?? 250.0
-        let distR = sectorDists["RIGHT"] ?? 250.0
-
-        return VStack {
-            Spacer()
-            HStack(spacing: 12) {
-                sectorPill(title: "TRÁI", distCM: distL)
-                sectorPill(title: "GIỮA", distCM: distC)
-                sectorPill(title: "PHẢI", distCM: distR)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 6)
-            .background(Color.black.opacity(0.75))
-            .cornerRadius(14)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(Color.white.opacity(0.15), lineWidth: 1))
-            .padding(.bottom, 14)
-        }
-    }
-
-    private func sectorPill(title: String, distCM: Float) -> some View {
-        let color = colorForThreat(distCM: distCM)
-        return HStack(spacing: 5) {
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .foregroundColor(Color.white.opacity(0.7))
-            Text("\(Int(min(300.0, distCM)))cm")
-                .font(.system(size: 11, weight: .black, design: .rounded))
-                .foregroundColor(color)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(color.opacity(0.15))
-        .cornerRadius(8)
-    }
-
-    // ── Paused Backdrop ───────────────────────────────────────────────────────
+    // ── Paused Screen Backdrop ────────────────────────────────────────────────
     private func pausedBackdrop(in size: CGSize) -> some View {
         ZStack {
-            Color.black.opacity(0.65).ignoresSafeArea()
+            Color.black.opacity(0.60)
+                .edgesIgnoringSafeArea(.all)
+
             VStack(spacing: 8) {
                 Image(systemName: "pause.circle.fill")
                     .font(.system(size: 40, weight: .bold))
@@ -215,7 +142,7 @@ struct TrackingOverlayView: View {
         }
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── Threat Color & Labels ─────────────────────────────────────────────────
     private func colorForThreat(distCM: Float) -> Color {
         if distCM <= Config.distCriticalCM {
             return Color.red
@@ -274,4 +201,3 @@ struct CornerBracketsShape: Shape {
         return path
     }
 }
-

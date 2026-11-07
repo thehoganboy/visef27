@@ -37,6 +37,9 @@ jobs:
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)
         run: |
           python ios/scripts/export_coreml.py
+          test -d ios/HorusEyes/DepthModel.mlpackage || (echo "FATAL: DepthModel.mlpackage was not created by export_coreml.py!" && exit 1)
+          echo "=== Verified Core ML DepthModel.mlpackage ==="
+          ls -ld ios/HorusEyes/DepthModel.mlpackage
 
       - name: Generate Xcode Project via XcodeGen
         run: |
@@ -65,11 +68,10 @@ jobs:
           cp -r build/Build/Products/Release-iphoneos/HorusEyes.app Payload/
 
           # Compile CoreML DepthModel into the app bundle
-          if [ -d "HorusEyes/DepthModel.mlpackage" ]; then
-            echo "=== Compiling CoreML DepthModel with xcrun coremlcompiler ==="
-            xcrun coremlcompiler compile HorusEyes/DepthModel.mlpackage Payload/HorusEyes.app/
-            ls -ld Payload/HorusEyes.app/DepthModel.mlmodelc || true
-          fi
+          echo "=== Compiling CoreML DepthModel with xcrun coremlcompiler ==="
+          xcrun coremlcompiler compile HorusEyes/DepthModel.mlpackage Payload/HorusEyes.app/
+          test -d Payload/HorusEyes.app/DepthModel.mlmodelc || (echo "FATAL: DepthModel.mlmodelc missing from app bundle!" && exit 1)
+          ls -ld Payload/HorusEyes.app/DepthModel.mlmodelc
 
           # Ensure Info.plist has strictly resolved values for Sideloadly / AltStore
           python3 -c "
@@ -96,6 +98,12 @@ jobs:
           plutil -p Payload/HorusEyes.app/Info.plist
           zip -qq -r HorusEyes_iPhone14Pro.ipa Payload
           ls -la HorusEyes_iPhone14Pro.ipa
+          ipa_size=$(wc -c < HorusEyes_iPhone14Pro.ipa | tr -d ' ')
+          echo "=== Final IPA Size: $ipa_size bytes ==="
+          if [ "$ipa_size" -lt 5000000 ]; then
+            echo "FATAL: IPA size is less than 5MB ($ipa_size bytes)! Neural weights are missing!"
+            exit 1
+          fi
 
       - name: Upload HorusEyes IPA Artifact
         uses: actions/upload-artifact@v4

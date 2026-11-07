@@ -44,7 +44,7 @@ struct ContentView: View {
                     .ignoresSafeArea()
 
                 // ════════════════════════════════════════════════════════════
-                // LAYER 1: AR Bounding Boxes & Tracking Telemetry Overlay
+                // LAYER 1: AR Bounding Boxes & Tracking Overlay (Cleaned)
                 // ════════════════════════════════════════════════════════════
                 TrackingOverlayView(
                     result: depthEngine.lastResult,
@@ -54,31 +54,58 @@ struct ContentView: View {
                 )
 
                 // ════════════════════════════════════════════════════════════
-                // LAYER 2: Landscape Peripheral Touch Controls & Status Bar
+                // LAYER 2: Non-Overlapping Landscape Peripheral HUD Bars
                 // ════════════════════════════════════════════════════════════
                 VStack {
-                    // Top Bar: Glassmorphic Brand & Status Capsule
-                    HStack {
+                    // Top Bar: Unified Cockpit Header
+                    HStack(spacing: 12) {
                         // Brand Identifier
-                        HStack(spacing: 8) {
-                            ZStack {
-                                Circle()
-                                    .fill(LinearGradient(colors: [Color.cyan, Color.blue], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                    .frame(width: 28, height: 28)
-                                Image(systemName: "eye.fill")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundColor(.black)
-                            }
-                            Text("HORUSEYES 2.0")
-                                .font(.system(size: 14, weight: .black, design: .rounded))
-                                .tracking(1.2)
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(LinearGradient(colors: [Color.cyan, Color.blue], startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 24, height: 24)
+                                .overlay(
+                                    Image(systemName: "eye.fill")
+                                        .font(.system(size: 11, weight: .bold))
+                                        .foregroundColor(.black)
+                                )
+                            Text("HORUSEYES")
+                                .font(.system(size: 13, weight: .black, design: .rounded))
                                 .foregroundColor(.white)
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.70))
+                        .background(Color.black.opacity(0.75))
                         .clipShape(Capsule())
                         .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
+
+                        Spacer()
+
+                        // Center Escape Guidance Banner
+                        if !isSystemPaused, let res = depthEngine.lastResult {
+                            let isSafe = res.distCM >= Config.distSafeCM || res.modeText.hasPrefix("SAFE")
+                            let bannerColor = isSafe ? Color.green : colorForThreat(distCM: res.distCM)
+                            HStack(spacing: 8) {
+                                Image(systemName: isSafe ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
+                                    .font(.system(size: 12, weight: .bold))
+                                    .foregroundColor(bannerColor)
+                                if isSafe {
+                                    Text("ĐƯỜNG THOÁNG (>2.5m)")
+                                        .font(.system(size: 12, weight: .black, design: .rounded))
+                                        .foregroundColor(.white)
+                                } else {
+                                    Text("\(Int(res.distCM))cm • NÉ \(safeDirection == "LEFT" ? "TRÁI ◄" : "PHẢI ►")")
+                                        .font(.system(size: 12, weight: .black, design: .rounded))
+                                        .foregroundColor(bannerColor)
+                                }
+                            }
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.85))
+                            .clipShape(Capsule())
+                            .overlay(Capsule().stroke(bannerColor.opacity(0.8), lineWidth: 1.5))
+                            .shadow(color: bannerColor.opacity(0.3), radius: 6)
+                        }
 
                         Spacer()
 
@@ -93,61 +120,77 @@ struct ContentView: View {
                                 .font(.system(size: 11, weight: .black, design: .rounded))
                                 .foregroundColor(isSystemPaused ? .orange : (cameraManager.isZeroLuxBlind ? .red : .green))
                         }
-                        .padding(.horizontal, 12)
+                        .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.70))
+                        .background(Color.black.opacity(0.75))
                         .clipShape(Capsule())
                         .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.top, 10)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 8)
 
                     Spacer()
 
-                    // Bottom Thumb Controls (Positioned at Screen Flanks)
-                    HStack(alignment: .bottom) {
-                        // Left Thumb: Smart 0-Lux Flashlight Toggle
+                    // Bottom Bar: Thumb Controls & 3-Sector Clearance Meter
+                    HStack(alignment: .bottom, spacing: 12) {
+                        // Left: Smart Flashlight Button
                         Button(action: toggleTorchState) {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 8) {
                                 Image(systemName: cameraManager.isTorchActive ? "flashlight.on.fill" : "flashlight.off.fill")
-                                    .font(.system(size: 18, weight: .bold))
+                                    .font(.system(size: 16, weight: .bold))
                                     .foregroundColor(cameraManager.isTorchActive ? .yellow : .white)
-                                Text(cameraManager.isTorchActive ? "ĐÈN: BẬT" : "ĐÈN AUTO")
-                                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                                Text(cameraManager.isTorchActive ? "ĐÈN BẬT" : "ĐÈN AUTO")
+                                    .font(.system(size: 11, weight: .heavy, design: .rounded))
                                     .foregroundColor(.white)
                             }
-                            .padding(.horizontal, 16)
-                            .padding(.vertical, 12)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
                             .background(Color.black.opacity(0.80))
-                            .cornerRadius(16)
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(cameraManager.isTorchActive ? Color.yellow : Color.white.opacity(0.25), lineWidth: 1.5))
+                            .cornerRadius(14)
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(cameraManager.isTorchActive ? Color.yellow : Color.white.opacity(0.25), lineWidth: 1.2))
                             .shadow(color: cameraManager.isTorchActive ? Color.yellow.opacity(0.3) : Color.clear, radius: 6)
                         }
                         .accessibilityLabel("Bật tắt đèn pin thông minh")
 
                         Spacer()
 
-                        // Right Thumb: Giant Pause / Resume Toggle
+                        // Center: 3-Sector Clearance Meter
+                        if !isSystemPaused, let res = depthEngine.lastResult {
+                            HStack(spacing: 8) {
+                                sectorPill(title: "TRÁI", distCM: res.sectorDists["LEFT"] ?? 250.0)
+                                sectorPill(title: "GIỮA", distCM: res.sectorDists["CENTER"] ?? 250.0)
+                                sectorPill(title: "PHẢI", distCM: res.sectorDists["RIGHT"] ?? 250.0)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 6)
+                            .background(Color.black.opacity(0.75))
+                            .clipShape(Capsule())
+                            .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
+                        }
+
+                        Spacer()
+
+                        // Right: Pause / Resume Button
                         Button(action: togglePauseState) {
-                            HStack(spacing: 10) {
+                            HStack(spacing: 8) {
                                 Image(systemName: isSystemPaused ? "play.fill" : "pause.fill")
-                                    .font(.system(size: 18, weight: .black))
+                                    .font(.system(size: 16, weight: .black))
                                     .foregroundColor(isSystemPaused ? .green : .orange)
                                 Text(isSystemPaused ? "TIẾP TỤC" : "TẠM DỪNG")
-                                    .font(.system(size: 13, weight: .heavy, design: .rounded))
+                                    .font(.system(size: 11, weight: .heavy, design: .rounded))
                                     .foregroundColor(.white)
                             }
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 10)
                             .background(Color.black.opacity(0.80))
-                            .cornerRadius(16)
-                            .overlay(RoundedRectangle(cornerRadius: 16).stroke(isSystemPaused ? Color.green : Color.orange.opacity(0.8), lineWidth: 1.5))
+                            .cornerRadius(14)
+                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(isSystemPaused ? Color.green : Color.orange.opacity(0.8), lineWidth: 1.2))
                             .shadow(color: isSystemPaused ? Color.green.opacity(0.3) : Color.orange.opacity(0.25), radius: 8)
                         }
                         .accessibilityLabel(isSystemPaused ? "Tiếp tục quét" : "Tạm dừng quét")
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 20)
+                    .padding(.bottom, 10)
                 }
             }
             .contentShape(Rectangle())
@@ -161,6 +204,42 @@ struct ContentView: View {
         }
         .onDisappear {
             stopPipeline()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            let orientation = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first?.interfaceOrientation ?? .landscapeRight
+            cameraManager.updateVideoOrientation(for: orientation)
+        }
+    }
+
+    // ── Sector Pill Subview ───────────────────────────────────────────────────
+    private func sectorPill(title: String, distCM: Float) -> some View {
+        let color = colorForThreat(distCM: distCM)
+        let distText = distCM >= Config.distSafeCM ? ">2.5m" : "\(Int(distCM))cm"
+        return HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 6, height: 6)
+            Text("\(title): \(distText)")
+                .font(.system(size: 10, weight: .black, design: .rounded))
+                .foregroundColor(.white)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.60))
+        .clipShape(Capsule())
+    }
+
+    private func colorForThreat(distCM: Float) -> Color {
+        if distCM <= Config.distCriticalCM {
+            return Color.red
+        } else if distCM <= Config.distDangerCM {
+            return Color.orange
+        } else if distCM <= Config.distWarningCM {
+            return Color.yellow
+        } else if distCM <= Config.distAlertCM {
+            return Color.cyan
+        } else {
+            return Color.green
         }
     }
 

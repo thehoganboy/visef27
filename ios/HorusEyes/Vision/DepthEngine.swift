@@ -40,6 +40,8 @@ struct ObstacleDetectionResult {
     let isZeroLuxBlind: Bool
     let isOverheadHazard: Bool
     let isDropOffHazard: Bool
+    let camWidth: Int
+    let camHeight: Int
 }
 
 // ── Depth Engine ───────────────────────────────────────────────────────────────
@@ -118,7 +120,9 @@ final class DepthEngine: ObservableObject {
                 allObstacles: [],
                 isZeroLuxBlind: true,
                 isOverheadHazard: false,
-                isDropOffHazard: false
+                isDropOffHazard: false,
+                camWidth: width,
+                camHeight: height
             )
             DispatchQueue.main.async { self.lastResult = blindResult }
             return blindResult
@@ -149,9 +153,10 @@ final class DepthEngine: ObservableObject {
         if let vn = self.vnModel {
             var extractedGrid: [Float]?
             let request = VNCoreMLRequest(model: vn) { [weak self] req, err in
-                guard let results = req.results as? [VNCoreMLFeatureValueObservation],
-                      let multiArray = results.first?.featureValue.multiArrayValue else { return }
-                extractedGrid = self?.extractDisparityGrid(from: multiArray)
+                if let results = req.results as? [VNCoreMLFeatureValueObservation],
+                   let multiArray = results.first?.featureValue.multiArrayValue {
+                    extractedGrid = self?.extractDisparityGrid(from: multiArray)
+                }
             }
             request.imageCropAndScaleOption = .scaleFill
             let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
@@ -161,7 +166,7 @@ final class DepthEngine: ObservableObject {
                     return grid
                 }
             } catch {
-                // Fall through to fallback
+                print("[HorusEyes] Vision inference error: \(error)")
             }
         }
 
@@ -181,15 +186,37 @@ final class DepthEngine: ObservableObject {
             mH = 256
         }
 
-        let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: multiArray.count)
         var disparity = [Float](repeating: 200.0, count: gridW * gridH)
 
-        for gy in 0..<gridH {
-            let my = min(mH - 1, max(0, (gy * mH) / gridH))
-            let rowOffset = my * mW
-            for gx in 0..<gridW {
-                let mx = min(mW - 1, max(0, (gx * mW) / gridW))
-                disparity[gy * gridW + gx] = ptr[rowOffset + mx]
+        if multiArray.dataType == .float16 {
+            let ptr = multiArray.dataPointer.bindMemory(to: Float16.self, capacity: multiArray.count)
+            for gy in 0..<gridH {
+                let my = min(mH - 1, max(0, (gy * mH) / gridH))
+                let rowOffset = my * mW
+                for gx in 0..<gridW {
+                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
+                    disparity[gy * gridW + gx] = Float(ptr[rowOffset + mx])
+                }
+            }
+        } else if multiArray.dataType == .double {
+            let ptr = multiArray.dataPointer.bindMemory(to: Double.self, capacity: multiArray.count)
+            for gy in 0..<gridH {
+                let my = min(mH - 1, max(0, (gy * mH) / gridH))
+                let rowOffset = my * mW
+                for gx in 0..<gridW {
+                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
+                    disparity[gy * gridW + gx] = Float(ptr[rowOffset + mx])
+                }
+            }
+        } else {
+            let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: multiArray.count)
+            for gy in 0..<gridH {
+                let my = min(mH - 1, max(0, (gy * mH) / gridH))
+                let rowOffset = my * mW
+                for gx in 0..<gridW {
+                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
+                    disparity[gy * gridW + gx] = ptr[rowOffset + mx]
+                }
             }
         }
         return disparity
@@ -307,7 +334,9 @@ final class DepthEngine: ObservableObject {
                 allObstacles: [satObs],
                 isZeroLuxBlind: false,
                 isOverheadHazard: false,
-                isDropOffHazard: false
+                isDropOffHazard: false,
+                camWidth: w,
+                camHeight: h
             )
         }
 
@@ -519,7 +548,9 @@ final class DepthEngine: ObservableObject {
             allObstacles: detectedObstacles,
             isZeroLuxBlind: false,
             isOverheadHazard: isOverhead,
-            isDropOffHazard: isDropOff
+            isDropOffHazard: isDropOff,
+            camWidth: w,
+            camHeight: h
         )
     }
 

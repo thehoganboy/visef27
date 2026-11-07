@@ -21,6 +21,20 @@ struct CameraPreviewView: UIViewRepresentable {
         override func layoutSubviews() {
             super.layoutSubviews()
             videoPreviewLayer.frame = bounds
+            updateOrientation()
+        }
+
+        func updateOrientation() {
+            guard let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported else { return }
+            let orientation = window?.windowScene?.interfaceOrientation ?? .landscapeRight
+            switch orientation {
+            case .landscapeLeft:
+                conn.videoOrientation = .landscapeLeft
+            case .landscapeRight:
+                conn.videoOrientation = .landscapeRight
+            default:
+                conn.videoOrientation = .landscapeRight
+            }
         }
     }
 
@@ -29,9 +43,7 @@ struct CameraPreviewView: UIViewRepresentable {
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
         view.videoPreviewLayer.videoGravity = .resizeAspectFill
-        if let conn = view.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
-            conn.videoOrientation = .landscapeRight
-        }
+        view.updateOrientation()
         return view
     }
 
@@ -39,9 +51,6 @@ struct CameraPreviewView: UIViewRepresentable {
         if uiView.videoPreviewLayer.session != session {
             uiView.videoPreviewLayer.session = session
         }
-        if let conn = uiView.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
-            conn.videoOrientation = .landscapeRight
-        }
+        uiView.updateOrientation()
     }
 }
-
