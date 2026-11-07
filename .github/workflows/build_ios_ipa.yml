@@ -32,14 +32,22 @@ jobs:
       - name: Install CoreML Exporter Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install torch torchvision timm coremltools onnx numpy
+          pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools>=7.0" numpy
 
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)
         run: |
-          python ios/scripts/export_coreml.py
+          python ios/scripts/export_coreml.py 2>&1 | tee export.log
           test -d ios/HorusEyes/DepthModel.mlpackage || (echo "FATAL: DepthModel.mlpackage was not created by export_coreml.py!" && exit 1)
           echo "=== Verified Core ML DepthModel.mlpackage ==="
           ls -ld ios/HorusEyes/DepthModel.mlpackage
+
+      - name: Upload CoreML Exporter Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coreml-export-log
+          path: export.log
+          if-no-files-found: ignore
 
       - name: Generate Xcode Project via XcodeGen
         run: |
