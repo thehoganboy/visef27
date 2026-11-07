@@ -46,8 +46,8 @@ struct TrackingOverlayView: View {
 
         let bx = CGFloat(obs.bbox.x) * scaleX
         let by = CGFloat(obs.bbox.y) * scaleY
-        let bw = max(60, CGFloat(obs.bbox.w) * scaleX)
-        let bh = max(60, CGFloat(obs.bbox.h) * scaleY)
+        let bw = max(CGFloat(60), CGFloat(obs.bbox.w) * scaleX)
+        let bh = max(CGFloat(60), CGFloat(obs.bbox.h) * scaleY)
 
         let color = colorForThreat(distCM: obs.distCM)
 
@@ -63,7 +63,7 @@ struct TrackingOverlayView: View {
                 .frame(width: bw, height: bh)
 
             // Heavy Corner Brackets (Lock-on target aesthetic)
-            CornerBracketsShape(bracketLength: min(24, bw * 0.25))
+            CornerBracketsShape(bracketLength: min(CGFloat(24), bw * 0.25))
                 .stroke(color, style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
                 .frame(width: bw, height: bh)
 
@@ -183,7 +183,7 @@ struct TrackingOverlayView: View {
             Text(title)
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .foregroundColor(Color.white.opacity(0.7))
-            Text("\(Int(min(300, distCM)))cm")
+            Text("\(Int(min(300.0, distCM)))cm")
                 .font(.system(size: 11, weight: .black, design: .rounded))
                 .foregroundColor(color)
         }

@@ -185,12 +185,14 @@ struct ContentView: View {
             )
 
             // Step 2: Kinematics Centroid Tracking & TTC Computation
+            let now = CACurrentMediaTime()
             let kinResult = self.kinematicsEngine.compute(
-                currentObstacle: obsResult,
-                timestamp: CACurrentMediaTime(),
-                gyroYawRate: self.imuManager.yawRate,
-                linearAccelZ: self.imuManager.accelZ,
-                isStationary: self.imuManager.isDeviceStationary
+                obstacleResult: obsResult,
+                frameId: frameId,
+                timestamp: now,
+                aeSettleRemaining: aeSettle,
+                userWalkSpeedCmS: self.imuManager.estimatedWalkSpeedCmS,
+                imuYawRateRadS: self.imuManager.yawRateRadS
             )
 
             // Step 3: Auditory Budget Coordination & Priority Arbitration

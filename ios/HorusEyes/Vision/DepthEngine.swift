@@ -332,9 +332,9 @@ final class DepthEngine: ObservableObject {
             }
         }
 
-        let rawL = percentile(leftRaws, 0.80)
-        let rawC = percentile(centerRaws, 0.80)
-        let rawR = percentile(rightRaws, 0.80)
+        let rawL = Self.percentile(leftRaws, 0.80)
+        let rawC = Self.percentile(centerRaws, 0.80)
+        let rawR = Self.percentile(rightRaws, 0.80)
 
         let distL = pchip.interpolate(rawL)
         let distC = pchip.interpolate(rawC)
@@ -351,9 +351,9 @@ final class DepthEngine: ObservableObject {
             }
         }
         if !topRaws.isEmpty {
-            let topFgRaw = percentile(topRaws, 0.85)
+            let topFgRaw = Self.percentile(topRaws, 0.85)
             let topFgDist = pchip.interpolate(topFgRaw)
-            let topBgRaw = percentile(topRaws, 0.30)
+            let topBgRaw = Self.percentile(topRaws, 0.30)
             let topBgDist = pchip.interpolate(topBgRaw)
             if topFgDist < (topBgDist - Config.overheadDepthDeltaCM) && topFgDist < Config.distWarningCM {
                 isOverhead = true
@@ -377,8 +377,8 @@ final class DepthEngine: ObservableObject {
             }
         }
         if !groundRaws.isEmpty && !aboveGroundRaws.isEmpty {
-            let groundMed = median(groundRaws)
-            let aboveMed = median(aboveGroundRaws)
+            let groundMed = Self.median(groundRaws)
+            let aboveMed = Self.median(aboveGroundRaws)
             let gradRatio = abs(aboveMed - groundMed) / max(aboveMed, 1.0)
             if gradRatio > Config.dropOffGradientThresh && groundMed < aboveMed * 0.6 {
                 isDropOff = true
@@ -436,14 +436,14 @@ final class DepthEngine: ObservableObject {
 
         // Sort clusters by peak proximity (highest disparity first)
         clusters.sort { c1, c2 in
-            let p1 = percentile(c1.rawVals, 0.90)
-            let p2 = percentile(c2.rawVals, 0.90)
+            let p1 = Self.percentile(c1.rawVals, 0.90)
+            let p2 = Self.percentile(c2.rawVals, 0.90)
             return p1 > p2
         }
 
         var detectedObstacles = [SingleObstacle]()
         for (idx, cl) in clusters.prefix(3).enumerated() {
-            let clRaw = percentile(cl.rawVals, 0.90)
+            let clRaw = Self.percentile(cl.rawVals, 0.90)
             let clDist = pchip.interpolate(clRaw)
             let clProx = distToProximity(distCM: clDist)
 
@@ -524,14 +524,14 @@ final class DepthEngine: ObservableObject {
     }
 
     // ── Numerical Utilities ───────────────────────────────────────────────────
-    private func percentile(_ array: [Float], _ p: Float) -> Float {
+    private static func percentile(_ array: [Float], _ p: Float) -> Float {
         guard !array.isEmpty else { return 0.0 }
         let sorted = array.sorted()
         let idx = min(sorted.count - 1, max(0, Int(Float(sorted.count - 1) * p)))
         return sorted[idx]
     }
 
-    private func median(_ array: [Float]) -> Float {
-        percentile(array, 0.50)
+    private static func median(_ array: [Float]) -> Float {
+        Self.percentile(array, 0.50)
     }
 }
