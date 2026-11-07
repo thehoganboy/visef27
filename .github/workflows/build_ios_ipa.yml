@@ -34,14 +34,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools>=7.0" numpy
 
+      - name: Pre-cache MiDaS PyTorch Weights
+        run: |
+          mkdir -p ~/.cache/torch/hub/checkpoints
+          echo "=== Pre-downloading MiDaS small weights via curl ==="
+          curl -L -s -o ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
+          ls -la ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt
+
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)
         run: |
-          python ios/scripts/export_coreml.py 2>&1 | tee export.log || {
+          python ios/scripts/export_coreml.py > export.log 2>&1 || {
             echo "=== COREML EXPORTER FAILED! LOG DUMP: ==="
             cat export.log
+            echo "::error file=ios/scripts/export_coreml.py::$(tail -n 20 export.log | tr '\n' ' ')"
             exit 1
           }
-          test -d ios/HorusEyes/DepthModel.mlpackage || (echo "FATAL: DepthModel.mlpackage was not created by export_coreml.py!" && cat export.log && exit 1)
+          cat export.log
+          test -d ios/HorusEyes/DepthModel.mlpackage || (echo "FATAL: DepthModel.mlpackage was not created by export_coreml.py!" && exit 1)
           echo "=== Verified Core ML DepthModel.mlpackage ==="
           ls -ld ios/HorusEyes/DepthModel.mlpackage
 
