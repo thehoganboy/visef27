@@ -138,7 +138,7 @@ struct TrackingOverlayView: View {
                     Text("CẢNH BÁO (\(Int(res.distCM))cm) — ")
                         .font(.system(size: 13, weight: .heavy, design: .rounded))
                         .foregroundColor(.white)
-                    + Text("NÉ SANG \(safeDirection == "LEFT" ? "TRÁI ◄" : "PHẢI ►")")
+                    Text("NÉ SANG \(safeDirection == "LEFT" ? "TRÁI ◄" : "PHẢI ►")")
                         .font(.system(size: 13, weight: .black, design: .rounded))
                         .foregroundColor(bannerColor)
                 }
@@ -274,3 +274,4 @@ struct CornerBracketsShape: Shape {
         return path
     }
 }
+

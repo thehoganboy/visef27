@@ -36,7 +36,7 @@ struct CameraPreviewView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PreviewUIView, context: Context) {
-        if uiView.videoPreviewLayer.session !== session {
+        if uiView.videoPreviewLayer.session != session {
             uiView.videoPreviewLayer.session = session
         }
         if let conn = uiView.videoPreviewLayer.connection, conn.isVideoOrientationSupported {
@@ -44,3 +44,4 @@ struct CameraPreviewView: UIViewRepresentable {
         }
     }
 }
+
