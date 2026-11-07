@@ -63,6 +63,14 @@ jobs:
           cd ios
           mkdir -p Payload
           cp -r build/Build/Products/Release-iphoneos/HorusEyes.app Payload/
+
+          # Compile CoreML DepthModel into the app bundle
+          if [ -d "HorusEyes/DepthModel.mlpackage" ]; then
+            echo "=== Compiling CoreML DepthModel with xcrun coremlcompiler ==="
+            xcrun coremlcompiler compile HorusEyes/DepthModel.mlpackage Payload/HorusEyes.app/
+            ls -ld Payload/HorusEyes.app/DepthModel.mlmodelc || true
+          fi
+
           # Ensure Info.plist has strictly resolved values for Sideloadly / AltStore
           python3 -c "
           import plistlib
@@ -76,6 +84,7 @@ jobs:
           pl['CFBundleDevelopmentRegion'] = 'en'
           pl['CFBundleShortVersionString'] = '2.0'
           pl['CFBundleVersion'] = '1'
+          pl['UISupportedInterfaceOrientations'] = ['UIInterfaceOrientationLandscapeRight', 'UIInterfaceOrientationLandscapeLeft']
           pl['NSCameraUsageDescription'] = 'HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time.'
           pl['NSMicrophoneUsageDescription'] = 'HorusEyes requires audio session access for spatial sound feedback.'
           pl['NSMotionUsageDescription'] = 'HorusEyes uses motion sensors to distinguish head turns from obstacle approach.'

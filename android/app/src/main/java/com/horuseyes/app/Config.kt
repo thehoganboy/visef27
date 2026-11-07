@@ -5,11 +5,11 @@ package com.horuseyes.app
  * Ported with 100% mathematical parity from Python config.py for Android Native Edge execution.
  */
 object Config {
-    // ── Perception & AI Inference Dimensions ──
-    const val INPUT_WIDTH: Int = 192             // Chiều rộng input portrait (192)
-    const val INPUT_HEIGHT: Int = 256            // Chiều cao input portrait (256, tỷ lệ 3:4 chuẩn Camera)
-    const val CAM_WIDTH: Int = 480               // Độ phân giải CameraX portrait width
-    const val CAM_HEIGHT: Int = 640              // Độ phân giải CameraX portrait height
+    // ── Perception & AI Inference Dimensions (Landscape 4:3) ──
+    const val INPUT_WIDTH: Int = 256             // Chiều rộng input landscape (256)
+    const val INPUT_HEIGHT: Int = 192            // Chiều cao input landscape (192, tỷ lệ 4:3 chuẩn Camera)
+    const val CAM_WIDTH: Int = 640               // Độ phân giải CameraX landscape width
+    const val CAM_HEIGHT: Int = 480              // Độ phân giải CameraX landscape height
 
     // ── Low-Light / Auto-Torch & 0-Lux Defense ──
     const val LUX_DARK_ON_THRESHOLD: Float = 28.0f       // Độ sáng luma Y (0-255) kích hoạt 0-Lux / Bật Flash

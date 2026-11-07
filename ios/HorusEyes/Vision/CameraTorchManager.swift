@@ -16,6 +16,9 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     @Published var meanLuma: Float = 128.0
     @Published var fps: Float = 0.0
 
+    // Public access to capture session for SwiftUI preview layer
+    var session: AVCaptureSession { captureSession }
+
     // ── Internal Hardware State ────────────────────────────────────────────────
     private let captureSession = AVCaptureSession()
     private var videoDevice: AVCaptureDevice?
@@ -118,7 +121,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
             if let connection = videoOutput.connection(with: .video) {
                 if connection.isVideoOrientationSupported {
-                    connection.videoOrientation = .portrait
+                    connection.videoOrientation = .landscapeRight
                 }
                 if connection.isVideoMirroringSupported {
                     connection.isVideoMirrored = false
