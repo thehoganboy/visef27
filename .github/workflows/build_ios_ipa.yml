@@ -11,8 +11,8 @@ concurrency:
 
 jobs:
   build-ios:
-    name: Build Native iOS IPA (macOS 14)
-    runs-on: macos-14
+    name: Build Native iOS IPA (macOS Latest)
+    runs-on: macos-latest
 
     steps:
       - name: Checkout Codebase
