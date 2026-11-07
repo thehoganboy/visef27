@@ -1,7 +1,6 @@
 // HorusEyes 2.0 — CameraTorchManager.swift
 // ════════════════════════════════════════════════════════════════════════════════
-// AVFoundation High-Speed Camera Pipeline + 0-Lux Auto-Torch + Hardware Watchdog
-// Graceful Permission Verification & Hardware-Safe Startup for iPhone 14 Pro
+// Crash-Proof AVFoundation Camera Pipeline (Zero Hardware Access in init)
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
@@ -21,6 +20,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private let captureSession = AVCaptureSession()
     private var videoDevice: AVCaptureDevice?
     private let sessionQueue = DispatchQueue(label: "com.visef.horuseyes.cameraQueue", qos: .userInitiated)
+    private var isSessionConfigured: Bool = false
 
     // Watchdog & Timing
     private var lastFrameTimestamp: CFTimeInterval = 0.0
@@ -53,24 +53,29 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     override init() {
         super.init()
         hapticGenerator.prepare()
-        setupCaptureSession()
+        // DO NOT call setupCaptureSession() here. Hardware is configured safely after permission is verified.
     }
 
     deinit {
         stop()
     }
 
-    // ── Setup AVFoundation ────────────────────────────────────────────────────
-    private func setupCaptureSession() {
+    // ── Safe Lazy Session Setup ───────────────────────────────────────────────
+    private func setupCaptureSessionIfNeeded(completion: @escaping () -> Void) {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+            guard !self.isSessionConfigured else {
+                completion()
+                return
+            }
 
             self.captureSession.beginConfiguration()
             self.captureSession.sessionPreset = .vga640x480
 
             guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: .back) else {
-                print("[HorusEyes] Error: Back camera device not found.")
+                print("[HorusEyes] Notice: Back camera device not found.")
                 self.captureSession.commitConfiguration()
+                completion()
                 return
             }
             self.videoDevice = device
@@ -81,7 +86,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
                     self.captureSession.addInput(input)
                 }
 
-                // Lock to 30 FPS safely
+                // Lock to 30 FPS safely if supported
                 do {
                     try device.lockForConfiguration()
                     let targetFps = Int32(Config.defaultFPS)
@@ -111,7 +116,6 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
                 self.captureSession.addOutput(videoOutput)
             }
 
-            // CRITICAL: Safety orientation — Portrait upright, NO horizontal flip
             if let connection = videoOutput.connection(with: .video) {
                 if connection.isVideoOrientationSupported {
                     connection.videoOrientation = .portrait
@@ -122,18 +126,24 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             }
 
             self.captureSession.commitConfiguration()
+            self.isSessionConfigured = true
+            completion()
         }
     }
 
-    // ── Graceful Camera Permission & Session Start ────────────────────────────
+    // ── Safe Permission & Startup ─────────────────────────────────────────────
     func start() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
-            startRunningSession()
+            setupCaptureSessionIfNeeded { [weak self] in
+                self?.startRunningSession()
+            }
         case .notDetermined:
             AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
                 if granted {
-                    self?.startRunningSession()
+                    self?.setupCaptureSessionIfNeeded {
+                        self?.startRunningSession()
+                    }
                 } else {
                     print("[HorusEyes] Camera permission denied by user.")
                 }
@@ -141,7 +151,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         case .denied, .restricted:
             print("[HorusEyes] Camera permission currently denied or restricted.")
         @unknown default:
-            startRunningSession()
+            break
         }
     }
 
@@ -182,12 +192,10 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         // 0-Lux Automatic Flash Safety State Machine
         processTorchLogic(meanY: luma, currentTime: now)
 
-        // AE settling countdown
         if aeSettleFramesRemaining > 0 {
             aeSettleFramesRemaining -= 1
         }
 
-        // Update FPS
         fpsCounter += 1
         let elapsed = now - lastFpsTimestamp
         if elapsed >= 1.0 {
@@ -199,7 +207,6 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             lastFpsTimestamp = now
         }
 
-        // Notify Vision Pipeline
         onFrameProcessed?(pixelBuffer, frameId, aeSettleFramesRemaining, luma)
     }
 
@@ -220,7 +227,6 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         var sum: UInt64 = 0
         var samplesCount: UInt64 = 0
 
-        // Subsampled stride for sub-millisecond calculation (every 8th pixel)
         let stepX = 8
         let stepY = 8
 
@@ -238,7 +244,6 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
     // ── 0-Lux Auto-Torch Logic & Anti-Strobe Hysteresis ────────────────────────
     private func processTorchLogic(meanY: Float, currentTime: CFTimeInterval) {
-        // Blind lens check (complete occlusion or absolute 0-lux without flash)
         if meanY < Config.luxZeroBlindThreshold {
             blindFrameCount += 1
             if blindFrameCount >= 10 {
@@ -257,7 +262,6 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
         guard !isTorchForcedManual else { return }
 
-        // Darkness Detection (meanY < 28 Lux)
         if meanY < Config.luxDarkOnThreshold {
             darkFrameCount += 1
             if darkFrameCount >= Config.luxDarkConfirmFrames && !isTorchActive {
@@ -270,7 +274,6 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             darkFrameCount = 0
         }
 
-        // Brightness Clearance (meanY > 75 Lux) with 5.0s Anti-Strobe Hold
         if meanY > Config.luxBrightOffThreshold && isTorchActive {
             let holdDuration = currentTime - torchActivationTimestamp
             if holdDuration >= Double(Config.flashHoldMinSeconds) {

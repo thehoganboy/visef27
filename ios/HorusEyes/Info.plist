@@ -50,12 +50,6 @@
     <key>NSMotionUsageDescription</key>
     <string>HorusEyes uses motion sensors to distinguish head turns from obstacle approach.</string>
 
-    <!-- Background audio playback -->
-    <key>UIBackgroundModes</key>
-    <array>
-        <string>audio</string>
-    </array>
-
     <!-- Status bar -->
     <key>UIStatusBarStyle</key>
     <string>UIStatusBarStyleLightContent</string>

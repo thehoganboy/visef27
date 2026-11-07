@@ -1,7 +1,6 @@
 // HorusEyes 2.0 — SpatialAudioEngine.swift
 // ════════════════════════════════════════════════════════════════════════════════
-// Hardware-Adaptive Stereo AVAudioSourceNode C-Callback DSP Spatial Synthesizer
-// Zero-Crash Architecture for iPhone 14 Pro (48kHz & 44.1kHz Dual-Compatibility)
+// Crash-Proof Hardware-Adaptive Spatial Audio Synthesizer (Lazy Setup)
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
@@ -9,7 +8,6 @@ import AVFoundation
 import Accelerate
 import UIKit
 
-// Thread-safe immutable audio parameters for realtime render thread
 struct AudioRenderState {
     var pan: Float = 0.0
     var proximity: Float = 0.0
@@ -24,9 +22,10 @@ struct AudioRenderState {
 final class SpatialAudioEngine: ObservableObject {
     private let audioEngine = AVAudioEngine()
     private var sourceNode: AVAudioSourceNode?
+    private var isGraphConfigured: Bool = false
 
-    // Audio format
-    private var sampleRate: Double = 48000.0 // Default to iPhone 14 Pro hardware sample rate
+    // Hardware adaptive rate
+    private var sampleRate: Double = 48000.0
     private let channelCount: AVAudioChannelCount = 2
 
     // State Pointer for zero-allocation C render block access
@@ -39,7 +38,7 @@ final class SpatialAudioEngine: ObservableObject {
         self.statePtr = UnsafeMutablePointer<AudioRenderState>.allocate(capacity: 1)
         self.statePtr.initialize(to: AudioRenderState())
         hapticFeedback.prepare()
-        setupAudioGraph()
+        // DO NOT call setupAudioGraph() here. It will be initialized safely in start().
     }
 
     deinit {
@@ -47,15 +46,17 @@ final class SpatialAudioEngine: ObservableObject {
         statePtr.deallocate()
     }
 
-    // ── Setup Audio Graph ─────────────────────────────────────────────────────
-    private func setupAudioGraph() {
-        // Detect native hardware output sample rate safely (48000Hz on iPhone 14 Pro)
+    // ── Safe Lazy Audio Graph Setup ───────────────────────────────────────────
+    private func setupAudioGraphIfNeeded() {
+        guard !isGraphConfigured else { return }
+
+        // Determine effective hardware sample rate safely
         let hwFormat = audioEngine.outputNode.outputFormat(forBus: 0)
         let effectiveRate = hwFormat.sampleRate > 8000 ? hwFormat.sampleRate : 48000.0
         self.sampleRate = effectiveRate
 
         guard let format = AVAudioFormat(standardFormatWithSampleRate: effectiveRate, channels: channelCount) else {
-            print("[HorusEyes] Error creating AVAudioFormat for rate: \(effectiveRate)")
+            print("[HorusEyes] Error: Cannot create AVAudioFormat for rate \(effectiveRate)")
             return
         }
 
@@ -89,7 +90,6 @@ final class SpatialAudioEngine: ObservableObject {
             let dt = 1.0 / Float(effectiveRate)
             let currentState = state.pointee
 
-            // Determine if non-interleaved (standard) or interleaved
             let isDualBuffer = abl.count >= 2
             guard let buf0 = abl[0].mData?.assumingMemoryBound(to: Float.self) else { return noErr }
             let leftPtr = buf0
@@ -107,7 +107,7 @@ final class SpatialAudioEngine: ObservableObject {
                 earconTimer = 0.0
             }
 
-            // 2. System Fault Tone (Dual Pulse 440Hz -> 330Hz)
+            // 2. System Fault Tone
             if currentState.cueMode == 2 {
                 for i in 0..<frames {
                     faultTimer += dt
@@ -124,7 +124,6 @@ final class SpatialAudioEngine: ObservableObject {
                         sig = 0.35 * env * sin(2.0 * .pi * Config.faultToneFreqLo * pos2)
                     }
 
-                    // Soft-knee limiter: tanh(x * 0.891)
                     let lim = tanh(sig * 0.891)
                     if isDualBuffer {
                         leftPtr[i] = lim
@@ -160,7 +159,6 @@ final class SpatialAudioEngine: ObservableObject {
             let targetFreq = max(100.0, min(2000.0, currentState.freq))
             let vol = max(0.0, min(1.0, currentState.volumeFactor))
 
-            // Beep interval calculation
             let beepInterval: Float
             if prox >= 0.70 || currentState.ttc <= Config.ttcCritical {
                 let t = max(0.0, min(1.0, (prox - 0.70) / 0.30))
@@ -170,8 +168,7 @@ final class SpatialAudioEngine: ObservableObject {
                 beepInterval = max(Config.beepIntervalMin, Config.beepIntervalMax - (Config.beepIntervalMax - 0.35) * t)
             }
 
-            // Constant-Power Panning & 18dB ILD Head-Shadow
-            let maxAttenLinear = pow(10.0, -Config.ildMaxAttenuationDB / 20.0) // ~0.126
+            let maxAttenLinear = pow(10.0, -Config.ildMaxAttenuationDB / 20.0)
             let targetGainL: Float
             let targetGainR: Float
             let delayL: Int
@@ -196,7 +193,6 @@ final class SpatialAudioEngine: ObservableObject {
                 delayR = 0
             }
 
-            // 5. Per-Sample DSP Loop
             let freqDelta = (targetFreq - currFreq) / Float(frames)
             let gainLDelta = (targetGainL - currGainL) / Float(frames)
             let gainRDelta = (targetGainR - currGainR) / Float(frames)
@@ -206,18 +202,14 @@ final class SpatialAudioEngine: ObservableObject {
                 currGainL += gainLDelta
                 currGainR += gainRDelta
 
-                // Phase accumulators
                 let dPhase = 2.0 * .pi * currFreq * dt
                 phase += dPhase
                 if phase > (2.0 * .pi) { phase -= (2.0 * .pi) }
 
-                // Mode-specific timbre
                 var rawTone: Float = 0.0
                 if currentState.cueMode == 0 {
-                    // SHARP_PING: Fundamental + 2nd harmonic
                     rawTone = 0.38 * sin(phase) + 0.12 * sin(2.0 * phase)
                 } else {
-                    // ACOUSTIC_BLUR: Dual-Tone FM Warble + Subharmonic
                     let dFmPhase = 2.0 * .pi * Config.blurFmRateHz * dt
                     fmPhase += dFmPhase
                     if fmPhase > (2.0 * .pi) { fmPhase -= (2.0 * .pi) }
@@ -226,7 +218,6 @@ final class SpatialAudioEngine: ObservableObject {
                     rawTone = 0.30 * sin(instPhase) + Config.blurSubharmonicGain * sin(0.5 * instPhase)
                 }
 
-                // Envelope Attack 3ms / Release 10ms
                 beepTimer += dt
                 var envelope: Float = 0.0
                 if beepOn {
@@ -250,7 +241,6 @@ final class SpatialAudioEngine: ObservableObject {
 
                 let shaped = rawTone * envelope
 
-                // Woodworth Fractional Delay (ITD)
                 historyBuf.removeFirst()
                 historyBuf.append(shaped)
 
@@ -260,7 +250,6 @@ final class SpatialAudioEngine: ObservableObject {
                 var outL = historyBuf[idxL] * currGainL
                 var outR = historyBuf[idxR] * currGainR
 
-                // Head shadow single-pole low pass on far ear
                 if pan < -0.15 {
                     let alpha = 0.50 * abs(pan)
                     lpStateR = (1.0 - alpha) * outR + alpha * lpStateR
@@ -271,7 +260,6 @@ final class SpatialAudioEngine: ObservableObject {
                     outL = lpStateL
                 }
 
-                // Earcon overlay
                 if activeEarconFreq > 0.0 {
                     earconTimer += dt
                     if earconTimer < Config.earconDuration {
@@ -286,7 +274,6 @@ final class SpatialAudioEngine: ObservableObject {
                     }
                 }
 
-                // Soft-Knee Peak Limiter at -1.0 dBFS (tanh)
                 let sampleL = tanh(outL * 0.891)
                 let sampleR = tanh(outR * 0.891)
 
@@ -305,15 +292,17 @@ final class SpatialAudioEngine: ObservableObject {
         self.sourceNode = node
         audioEngine.attach(node)
         audioEngine.connect(node, to: audioEngine.mainMixerNode, format: format)
+        isGraphConfigured = true
     }
 
     func start() {
         guard !audioEngine.isRunning else { return }
+        setupAudioGraphIfNeeded()
         do {
             try audioEngine.start()
-            print("[HorusEyes] 3D Binaural Spatial Audio Engine started successfully at \(sampleRate) Hz.")
+            print("[HorusEyes] Spatial Audio Engine started successfully at \(sampleRate) Hz.")
         } catch {
-            print("[HorusEyes] Error starting AVAudioEngine: \(error.localizedDescription)")
+            print("[HorusEyes] Audio Engine startup notice: \(error.localizedDescription)")
         }
     }
 
@@ -323,11 +312,10 @@ final class SpatialAudioEngine: ObservableObject {
         }
     }
 
-    // ── Atomic State Updates from Main Thread ────────────────────────────────
     func update(decision: BudgetDecision) {
         if !decision.isActive {
             statePtr.pointee.isActive = false
-            statePtr.pointee.cueMode = 3 // MUTED
+            statePtr.pointee.cueMode = 3
             return
         }
 
@@ -339,7 +327,7 @@ final class SpatialAudioEngine: ObservableObject {
         case "ACOUSTIC_BLUR": cueModeInt = 1
         case "SYSTEM_FAULT_TONE": cueModeInt = 2
         case "MUTED": cueModeInt = 3
-        default: cueModeInt = 0 // SHARP_PING
+        default: cueModeInt = 0
         }
 
         statePtr.pointee.pan = decision.pan

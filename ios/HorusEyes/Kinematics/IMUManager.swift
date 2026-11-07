@@ -23,7 +23,7 @@ final class IMUManager: ObservableObject {
     private var stepCountInWindow: Int = 0
 
     init() {
-        startMotionTracking()
+        // DO NOT call startMotionTracking() here. It will be started in ContentView.onAppear.
     }
 
     deinit {

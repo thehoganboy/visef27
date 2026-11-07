@@ -260,6 +260,7 @@ struct ContentView: View {
         notificationFeedback.prepare()
         audioEngine.start()
         cameraManager.start()
+        imuManager.startMotionTracking()
 
         // Link Camera to Vision & Audio DSP
         cameraManager.onFrameProcessed = { pixelBuffer, frameId, aeSettle, luma in
