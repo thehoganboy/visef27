@@ -164,10 +164,6 @@ final class KinematicsEngine {
             "RIGHT": threatR
         ]
 
-        // Sector Safety Scores (w1=0.50, w2=0.35, w3=0.15)
-        let scoreL = computeSectorSafetyScore(medianDist: distL, ttc: ttcL, maxVz: vzL)
-        let scoreR = computeSectorSafetyScore(medianDist: distR, ttc: ttcR, maxVz: vzR)
-
         // Safe Direction Selection with Hysteresis
         let safeDir: String
         let guidanceState: String

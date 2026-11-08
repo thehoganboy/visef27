@@ -94,8 +94,7 @@ struct ContentView: View {
                                         .font(.system(size: 12, weight: .black, design: .rounded))
                                         .foregroundColor(.white)
                                 } else {
-                                    let dirLabel = res.pan < -0.33 ? "BÊN TRÁI ◄" : (res.pan > 0.33 ? "BÊN PHẢI ►" : "TRỰC DIỆN ▲")
-                                    Text("\(Int(res.distCM))cm • CẢNH BÁO \(dirLabel)")
+                                    Text("\(Int(res.distCM))cm • CẢNH BÁO \(hazardDirectionLabel(pan: res.pan))")
                                         .font(.system(size: 12, weight: .black, design: .rounded))
                                         .foregroundColor(bannerColor)
                                 }
@@ -324,6 +323,16 @@ struct ContentView: View {
         } else {
             notificationFeedback.notificationOccurred(.success)
             audioEngine.playEarcon(type: "MUTE")
+        }
+    }
+
+    private func hazardDirectionLabel(pan: Float) -> String {
+        if pan < -0.33 {
+            return "BÊN TRÁI ◄"
+        } else if pan > 0.33 {
+            return "BÊN PHẢI ►"
+        } else {
+            return "TRỰC DIỆN ▲"
         }
     }
 

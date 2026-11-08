@@ -57,3 +57,4 @@ The end-to-end processing pipeline was executed over 500 consecutive real-time f
    - Audio OS buffer & Bluetooth audio A2DP latency ($\approx 40-150$ ms if wireless, $\approx 10-20$ ms if wired)
    - *Total lens-to-ear latency is estimated between $80-230$ ms depending on audio output modality.*
 3. **Monocular Scale Ambiguity:** Neural depth from single monocular frames without LiDAR is inherently subject to scale ambiguity depending on camera tilt, mounting height, and room dimensions. HorusEyes 2.0 now explicitly reports `is_scale_uncalibrated = True` until paired with LiDAR or stereo ground truth.
+

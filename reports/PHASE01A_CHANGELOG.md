@@ -127,3 +127,4 @@ Phase 01A establishes an auditable, scientifically sound, and safe foundation ac
   - Synchronized direct hazard audio panning (`winnerObs.pan`).
   - Aligned Android depth sector percentiles to 0.80 across Left, Center, and Right.
   - Replaced mobile HUD banners with objective hazard localization alerts.
+

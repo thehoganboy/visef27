@@ -171,3 +171,4 @@ FINAL SCORE: 16/16 PASSED — ZERO FAILURES
 | **NaN / Inf Poisoning** | Silent corrupt propagation or crash | Strict isolation; immediate safe sensor fault state | **VERIFIED** |
 | **Latency Benchmark** | Formulaic Gaussian noise (`np.random.normal`) | Real wall-clock timing (`time.perf_counter_ns()`) | **VERIFIED** |
 | **NYU Dataset Noise** | Synthetically augmented ($n=30$, noise jitter) | Raw, un-augmented ground truth verification | **VERIFIED** |
+

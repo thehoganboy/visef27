@@ -192,7 +192,7 @@ final class AuditoryBudgetManager {
         if safeDir == "STOP" {
             outputPan = 0.0
         } else {
-            outputPan = max(-1.0, min(1.0, winnerObs.pan))
+            outputPan = max(Float(-1.0), min(Float(1.0), winnerObs.pan))
         }
 
         // ── 4. Closed-Loop Evasion Volume Hysteresis ──────────────────────────

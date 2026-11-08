@@ -61,3 +61,4 @@ With the foundational pipeline validated, **Phase 01B** proposes to address the 
 - **Estimated Duration:** 3 sprints (approx. 2 weeks per sprint).
 - **Hardware Prerequisites:** iPhone 14 Pro test unit running iOS 17+, Android ARCore-supported test unit, calibrated optical test rig with ground-truth laser measure.
 - **Gate Requirement:** Authorization from Technical PM before merging any WP into production branches.
+
