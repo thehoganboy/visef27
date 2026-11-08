@@ -60,6 +60,8 @@ class KinematicsResult:
     measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # Chuẩn đo lường monocular (Directive 01B Principle B)
     evasion_state: str = "COLLISION_RISK_UNRESOLVED" # Directive 01B-A+ Task A+1: CAMERA_ROTATION, POSSIBLE_RISK_REDUCTION, OBSERVED_RELATIVE_RECESSION, COLLISION_RISK_UNRESOLVED, EVASION_CONFIRMED
     coasting_time_remaining: float = 0.0 # Directive 01B-A+ Task A+2: Thời gian lưu vết còn lại (giây)
+    hazard_state: str = "CONFIRMED_LOW_RISK" # Directive 01B-A++ Task P0-01: OBSERVED_HAZARD, COASTING_HAZARD, LOST_UNRESOLVED, OBSERVATION_RECOVERED, CONFIRMED_LOW_RISK, SENSOR_FAULT
+    lost_unresolved_timestamp: float = 0.0 # Directive 01B-A++ Task P0-01: Thời điểm chuyển sang LOST_UNRESOLVED (s)
 
 
 def compute_sector_safety_score(
@@ -383,12 +385,15 @@ class KinematicsEngine:
         self.consecutive_evasion_frames = 0
         self.last_evasion_dir = "NONE"
 
-        # Trạng thái Hazard Persistence / Coasting theo thời gian thực (Directive 01B-A+ Task A+2)
+        # Trạng thái Hazard Persistence / Coasting theo thời gian thực (Directive 01B-A+ Task A+2 & 01B-A++ Task P0-01)
         self.last_seen_timestamp = 0.0
         self.last_hazard_dist = 250.0
         self.last_hazard_dir = "NONE"
         self.last_threat_level = "SAFE"
         self.COASTING_DURATION_SEC = 0.60
+        self.hazard_state = "CONFIRMED_LOW_RISK"
+        self.clear_corridor_frames = 0
+        self.lost_unresolved_timestamp = 0.0
 
     def compute(
         self,
@@ -507,12 +512,17 @@ class KinematicsEngine:
             self.last_hazard_dist = curr_dist
             self.last_hazard_dir = init_hazard_dir
             self.last_seen_timestamp = now
+            if all_obs and init_threat != "SAFE":
+                self.hazard_state = "OBSERVED_HAZARD"
+            else:
+                self.hazard_state = "CONFIRMED_LOW_RISK"
 
             res = self._create_result(
                 curr_dist, 0.0, init_ttc, sec_dists, init_threat, init_safe_dir, False,
                 obs_ttcs=obs_ttcs, obs_vzs=obs_vzs, track_details=track_details,
                 sector_scores=init_sec_scores, guidance_state=init_guidance,
-                hazard_direction=init_hazard_dir, motion_state="UNKNOWN"
+                hazard_direction=init_hazard_dir, motion_state="UNKNOWN",
+                hazard_state=self.hazard_state
             )
             self.last_result = res
             return res
@@ -857,17 +867,36 @@ class KinematicsEngine:
         else:
             threat_level = "SAFE"
 
-        # ── TASK A+2: Thay thế Coasting đếm frame bằng Coasting theo thời gian thực (Monotonic Timestamp) ──
-        # Đảm bảo độc lập với FPS (30 FPS hay 10 FPS đều giữ đúng 0.60 giây)
-        # và TUYỆT ĐỐI KHÔNG tự động hạ cấp CRITICAL xuống WARNING khi mất dấu!
+        # ── Directive 01B-A++ Task P0-01: 6-State Hazard Tracking & Coasting Expiration State Machine ──
+        # Đảm bảo độc lập với FPS (30 FPS hay 10 FPS đều giữ đúng 0.60 giây coasting)
+        # và TUYỆT ĐỐI KHÔNG tự động chuyển sang SAFE chỉ vì hết hạn bộ đếm!
         COASTING_DURATION_SEC = self.COASTING_DURATION_SEC
         hazard_persistence_active = False
         coasting_time_remaining = 0.0
+        hazard_state = "CONFIRMED_LOW_RISK"
 
-        if threat_level == "SAFE" or len(all_obs) == 0:
+        is_currently_observed = (len(all_obs) > 0 and threat_level != "SAFE")
+
+        if is_currently_observed:
+            self.clear_corridor_frames = 0
+            if self.hazard_state in ["COASTING_HAZARD", "LOST_UNRESOLVED"]:
+                hazard_state = "OBSERVATION_RECOVERED"
+            else:
+                hazard_state = "OBSERVED_HAZARD"
+
+            self.last_threat_level = threat_level
+            self.last_hazard_dist = curr_dist
+            self.last_hazard_dir = hazard_dir
+            self.last_seen_timestamp = now
+            self.lost_unresolved_timestamp = 0.0
+        else:
+            # Không phát hiện vật cản trong frame hiện tại
+            elapsed_since_loss = now - self.last_seen_timestamp if self.last_seen_timestamp > 0.0 else 999.0
+
             if self.last_threat_level in ["CRITICAL", "WARNING"] and self.last_hazard_dist <= 80.0:
-                elapsed_since_loss = now - self.last_seen_timestamp if self.last_seen_timestamp > 0.0 else 999.0
                 if 0.0 <= elapsed_since_loss <= COASTING_DURATION_SEC:
+                    # Giai đoạn 1: Finite Coasting Interval (giữ nguyên threat level đã xác nhận)
+                    hazard_state = "COASTING_HAZARD"
                     hazard_persistence_active = True
                     coasting_time_remaining = max(0.0, COASTING_DURATION_SEC - elapsed_since_loss)
                     # Giữ nguyên mức đe dọa đã xác nhận: CRITICAL giữ nguyên CRITICAL!
@@ -875,17 +904,61 @@ class KinematicsEngine:
                     hazard_dir = self.last_hazard_dir
                     guidance_state = "HAZARD_DETECTED"
                 else:
-                    self.last_threat_level = "SAFE"
-                    self.last_seen_timestamp = 0.0
+                    # Giai đoạn 2: Coasting Expiration (Task P0-01 Correction)
+                    # TUYỆT ĐỐI KHÔNG tự động chuyển sang SAFE chỉ vì hết hạn bộ đếm!
+                    # Bắt buộc phải có đủ bằng chứng xác nhận hành lang thông thoáng:
+                    sec_center_clear = sec_dists.get("CENTER", 0.0) >= 200.0
+                    sec_left_clear = sec_dists.get("LEFT", 0.0) >= 150.0
+                    sec_right_clear = sec_dists.get("RIGHT", 0.0) >= 150.0
+                    is_observable = getattr(obs_res, "quality_state", "OBSERVABLE") == "OBSERVABLE"
+                    is_valid_depth = getattr(obs_res, "is_valid", True)
+
+                    if sec_center_clear and sec_left_clear and sec_right_clear and is_observable and is_valid_depth:
+                        self.clear_corridor_frames += 1
+                    else:
+                        self.clear_corridor_frames = 0
+
+                    if self.clear_corridor_frames >= 3:
+                        # Đã có đủ ít nhất 3 frame quan sát liên tiếp xác nhận hành lang thông thoáng
+                        hazard_state = "CONFIRMED_LOW_RISK"
+                        threat_level = "SAFE"
+                        guidance_state = "PATH_CLEAR_CONFIRMED"
+                        hazard_dir = "NONE"
+                        self.last_threat_level = "SAFE"
+                        self.last_seen_timestamp = 0.0
+                        self.lost_unresolved_timestamp = 0.0
+                    else:
+                        # Mất dấu nhưng chưa kiểm chứng an toàn -> LOST_UNRESOLVED
+                        hazard_state = "LOST_UNRESOLVED"
+                        hazard_persistence_active = False
+                        coasting_time_remaining = 0.0
+                        threat_level = "UNRESOLVED_HAZARD"
+                        guidance_state = "PATH_UNRESOLVED"
+                        hazard_dir = self.last_hazard_dir # Ghi nhớ hướng mối nguy trước đó
+                        safe_dir = "NONE"
+                        if self.lost_unresolved_timestamp == 0.0:
+                            self.lost_unresolved_timestamp = now
             else:
+                sec_center_clear = sec_dists.get("CENTER", 0.0) >= 200.0
+                sec_left_clear = sec_dists.get("LEFT", 0.0) >= 150.0
+                sec_right_clear = sec_dists.get("RIGHT", 0.0) >= 150.0
+                is_observable = getattr(obs_res, "quality_state", "OBSERVABLE") == "OBSERVABLE"
+                is_valid_depth = getattr(obs_res, "is_valid", True)
+
+                if sec_center_clear and sec_left_clear and sec_right_clear and is_observable and is_valid_depth:
+                    self.clear_corridor_frames = min(100, self.clear_corridor_frames + 1)
+                else:
+                    self.clear_corridor_frames = 0
+
+                hazard_state = "CONFIRMED_LOW_RISK"
+                threat_level = "SAFE"
+                guidance_state = "PATH_CLEAR_CONFIRMED" if self.clear_corridor_frames >= 3 else "PATH_UNVERIFIED"
+                hazard_dir = "NONE"
                 self.last_threat_level = "SAFE"
                 self.last_seen_timestamp = 0.0
-        else:
-            # Hazard is currently observed
-            self.last_threat_level = threat_level
-            self.last_hazard_dist = curr_dist
-            self.last_hazard_dir = hazard_dir
-            self.last_seen_timestamp = now
+                self.lost_unresolved_timestamp = 0.0
+
+        self.hazard_state = hazard_state
 
         # ── TASK A+1: Tách bạch rõ ràng các trạng thái né tránh (Directive 01B-A+) ──
         # Concepts to separate:
@@ -999,7 +1072,8 @@ class KinematicsEngine:
             effective_ego_vz=0.0, hazard_direction=hazard_dir, motion_state=primary_motion_state,
             primary_static_risk=p_static_risk, primary_dynamic_risk=p_dynamic_risk,
             primary_path_risk=p_path_risk, hazard_persistence_active=hazard_persistence_active,
-            evasion_state=evasion_state, coasting_time_remaining=coasting_time_remaining
+            evasion_state=evasion_state, coasting_time_remaining=coasting_time_remaining,
+            hazard_state=self.hazard_state, lost_unresolved_timestamp=self.lost_unresolved_timestamp
         )
         self.last_result = res
         return res
@@ -1011,7 +1085,8 @@ class KinematicsEngine:
         effective_ego_vz=0.0, hazard_direction="NONE", motion_state="UNKNOWN",
         primary_static_risk="SAFE", primary_dynamic_risk="NONE",
         primary_path_risk="CORRIDOR_CANDIDATE", hazard_persistence_active=False,
-        evasion_state="COLLISION_RISK_UNRESOLVED", coasting_time_remaining=0.0
+        evasion_state="COLLISION_RISK_UNRESOLVED", coasting_time_remaining=0.0,
+        hazard_state="CONFIRMED_LOW_RISK", lost_unresolved_timestamp=0.0
     ) -> KinematicsResult:
         if not isinstance(threats, dict):
             threats_dict = {
@@ -1043,5 +1118,7 @@ class KinematicsEngine:
             hazard_persistence_active=hazard_persistence_active,
             measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
             evasion_state=evasion_state,
-            coasting_time_remaining=coasting_time_remaining
+            coasting_time_remaining=coasting_time_remaining,
+            hazard_state=hazard_state,
+            lost_unresolved_timestamp=lost_unresolved_timestamp
         )

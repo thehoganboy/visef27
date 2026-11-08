@@ -28,6 +28,7 @@ final class AuditoryBudgetManager {
 
     // Uncertainty Hysteresis Memory
     private var currentCueMode: String = "SHARP_PING"
+    private var unresolvedReminderCount: Int = 0
 
     // Configuration Constants
     private let hysteresisBoost: Float = 1.15
@@ -83,6 +84,42 @@ final class AuditoryBudgetManager {
                 threatLevel: "CRITICAL",
                 suppressedCount: 0
             )
+        }
+
+        // ── 0B. Directive 01B-A++ Task P0-01: Bounded Reminder Policy for LOST_UNRESOLVED ──
+        if kinematicsResult.hazardState == "LOST_UNRESOLVED" || threatLevel == "UNRESOLVED_HAZARD" {
+            unresolvedReminderCount += 1
+            if unresolvedReminderCount <= 20 {
+                return BudgetDecision(
+                    isActive: true,
+                    pan: 0.0,
+                    proximity: 0.40,
+                    distCM: distCM,
+                    ttc: Float.infinity,
+                    priorityScore: 15.0,
+                    volumeFactor: 0.35,
+                    safeDirection: "NONE",
+                    cueMode: "CAUTION_REMINDER",
+                    threatLevel: "UNRESOLVED_HAZARD",
+                    suppressedCount: 0
+                )
+            } else {
+                return BudgetDecision(
+                    isActive: false,
+                    pan: 0.0,
+                    proximity: 0.0,
+                    distCM: distCM,
+                    ttc: Float.infinity,
+                    priorityScore: 0.0,
+                    volumeFactor: 0.0,
+                    safeDirection: "NONE",
+                    cueMode: "STANDBY_UNRESOLVED",
+                    threatLevel: "UNRESOLVED_HAZARD",
+                    suppressedCount: 0
+                )
+            }
+        } else {
+            unresolvedReminderCount = 0
         }
 
         // ── 1. Total Auditory Suppression Rule ────────────────────────────────

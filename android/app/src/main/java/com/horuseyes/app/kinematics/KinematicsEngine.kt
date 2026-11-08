@@ -33,14 +33,16 @@ data class KinematicsResult(
     val primaryTtc: Float,
     val primaryVelocityZ: Float,
     val threats: Map<String, SectorThreat>,
-    val safeDirection: String, // "LEFT", "RIGHT", "STOP"
+    val safeDirection: String, // "LEFT", "RIGHT", "STOP", "NONE"
     val isEvading: Boolean,
     val threatLevel: String,
     val obstacleTtcs: Map<Int, Float>,
     val obstacleVzs: Map<Int, Float>,
     val trackDetails: Map<Int, TrackDetail>,
     val sectorScores: Map<String, Float> = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
-    val guidanceState: String = "ESCAPE_RIGHT"
+    val guidanceState: String = "ESCAPE_RIGHT",
+    val hazardState: String = "CONFIRMED_LOW_RISK",
+    val lostUnresolvedTimestamp: Double = 0.0
 )
 
 /**
@@ -346,6 +348,15 @@ class KinematicsEngine {
     private var lastEvasionDir = "NONE"
     private var dirHysteresisFrames = 0
 
+    // Directive 01B-A++ Task P0-01: Cross-platform Hazard Coasting & Expiration State Machine
+    private var lastSeenTimestamp: Float = 0f
+    private var lastHazardDist: Float = 250f
+    private var lastThreatLevel: String = "SAFE"
+    private var clearCorridorFrames: Int = 0
+    private var lostUnresolvedTimestamp: Double = 0.0
+    private val COASTING_DURATION_SEC: Float = 0.60f
+    private var hazardState: String = "CONFIRMED_LOW_RISK"
+
     fun compute(depthRes: DepthResult, timestamp: Float): KinematicsResult {
         val now = timestamp
         val dt = if (prevTimestamp > 0.0f && now > prevTimestamp) {
@@ -363,12 +374,89 @@ class KinematicsEngine {
         val currDist = depthRes.distCm
         val currPan = depthRes.pan
 
-        // Nếu không có vật cản nào (Phòng trống hoặc an toàn > 1.5m)
+        // Directive 01B-A++ Task P0-01: State taxonomy when allObs is empty
         if (allObs.isEmpty()) {
             prevDistCm = currDist
             prevPan = currPan
             prevSectorDists = secDists.toMap()
             prevTimestamp = now
+
+            val elapsedSinceLoss = if (lastSeenTimestamp > 0f) now - lastSeenTimestamp else 999f
+
+            if ((lastThreatLevel == "CRITICAL" || lastThreatLevel == "WARNING") && lastHazardDist <= 80f) {
+                if (elapsedSinceLoss in 0f..COASTING_DURATION_SEC) {
+                    // COASTING_HAZARD: retain confirmed threat level
+                    hazardState = "COASTING_HAZARD"
+                    val threats = mapOf(
+                        "LEFT" to SectorThreat("LEFT", secDists["LEFT"] ?: 250f, 0f, Float.POSITIVE_INFINITY, lastThreatLevel),
+                        "CENTER" to SectorThreat("CENTER", secDists["CENTER"] ?: 250f, 0f, Float.POSITIVE_INFINITY, lastThreatLevel),
+                        "RIGHT" to SectorThreat("RIGHT", secDists["RIGHT"] ?: 250f, 0f, Float.POSITIVE_INFINITY, lastThreatLevel)
+                    )
+                    return KinematicsResult(
+                        primaryTtc = if (lastThreatLevel == "CRITICAL") 0.5f else 1.5f,
+                        primaryVelocityZ = 0f,
+                        threats = threats,
+                        safeDirection = "NONE",
+                        isEvading = false,
+                        threatLevel = lastThreatLevel,
+                        obstacleTtcs = emptyMap(),
+                        obstacleVzs = emptyMap(),
+                        trackDetails = emptyMap(),
+                        sectorScores = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
+                        guidanceState = "HAZARD_DETECTED",
+                        hazardState = "COASTING_HAZARD",
+                        lostUnresolvedTimestamp = 0.0
+                    )
+                } else {
+                    // Coasting expired: do NOT automatically report SAFE!
+                    val secCenterClear = (secDists["CENTER"] ?: 0f) >= 200f
+                    val secLeftClear = (secDists["LEFT"] ?: 0f) >= 150f
+                    val secRightClear = (secDists["RIGHT"] ?: 0f) >= 150f
+
+                    if (secCenterClear && secLeftClear && secRightClear) {
+                        clearCorridorFrames++
+                    } else {
+                        clearCorridorFrames = 0
+                    }
+
+                    if (clearCorridorFrames >= 3) {
+                        hazardState = "CONFIRMED_LOW_RISK"
+                        lastThreatLevel = "SAFE"
+                        lastSeenTimestamp = 0f
+                        lostUnresolvedTimestamp = 0.0
+                    } else {
+                        hazardState = "LOST_UNRESOLVED"
+                        if (lostUnresolvedTimestamp == 0.0) {
+                            lostUnresolvedTimestamp = now.toDouble()
+                        }
+                        val threats = mapOf(
+                            "LEFT" to SectorThreat("LEFT", secDists["LEFT"] ?: 250f, 0f, Float.POSITIVE_INFINITY, "WARNING"),
+                            "CENTER" to SectorThreat("CENTER", secDists["CENTER"] ?: 250f, 0f, Float.POSITIVE_INFINITY, "WARNING"),
+                            "RIGHT" to SectorThreat("RIGHT", secDists["RIGHT"] ?: 250f, 0f, Float.POSITIVE_INFINITY, "WARNING")
+                        )
+                        return KinematicsResult(
+                            primaryTtc = Float.POSITIVE_INFINITY,
+                            primaryVelocityZ = 0f,
+                            threats = threats,
+                            safeDirection = "NONE",
+                            isEvading = false,
+                            threatLevel = "UNRESOLVED_HAZARD",
+                            obstacleTtcs = emptyMap(),
+                            obstacleVzs = emptyMap(),
+                            trackDetails = emptyMap(),
+                            sectorScores = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
+                            guidanceState = "PATH_UNRESOLVED",
+                            hazardState = "LOST_UNRESOLVED",
+                            lostUnresolvedTimestamp = lostUnresolvedTimestamp
+                        )
+                    }
+                }
+            } else {
+                hazardState = "CONFIRMED_LOW_RISK"
+                lastThreatLevel = "SAFE"
+                lastSeenTimestamp = 0f
+                lostUnresolvedTimestamp = 0.0
+            }
 
             val threats = mapOf(
                 "LEFT" to SectorThreat("LEFT", secDists["LEFT"] ?: 250f, 0f, Float.POSITIVE_INFINITY, "SAFE"),
@@ -379,14 +467,16 @@ class KinematicsEngine {
                 primaryTtc = Float.POSITIVE_INFINITY,
                 primaryVelocityZ = 0f,
                 threats = threats,
-                safeDirection = "CLEAR",
+                safeDirection = "NONE",
                 isEvading = false,
                 threatLevel = "SAFE",
                 obstacleTtcs = emptyMap(),
                 obstacleVzs = emptyMap(),
                 trackDetails = emptyMap(),
                 sectorScores = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
-                guidanceState = "CLEAR_FORWARD"
+                guidanceState = if (clearCorridorFrames >= 3) "PATH_CLEAR_CONFIRMED" else "PATH_UNVERIFIED",
+                hazardState = "CONFIRMED_LOW_RISK",
+                lostUnresolvedTimestamp = 0.0
             )
         }
 
@@ -551,6 +641,13 @@ class KinematicsEngine {
         // isEvading giữ nguyên false trong camera-only để bảo toàn 100% cảnh báo.
         val isEvading = false
 
+        lastSeenTimestamp = now
+        lastHazardDist = currDist
+        lastThreatLevel = threatLevel
+        clearCorridorFrames = 0
+        lostUnresolvedTimestamp = 0.0
+        hazardState = "OBSERVED_HAZARD"
+
         prevDistCm = currDist
         prevPan = currPan
         prevSectorDists = secDists.toMap()
@@ -589,7 +686,9 @@ class KinematicsEngine {
             obstacleVzs = obsVzs,
             trackDetails = trackDetails,
             sectorScores = sectorScores,
-            guidanceState = guidanceState
+            guidanceState = guidanceState,
+            hazardState = hazardState,
+            lostUnresolvedTimestamp = lostUnresolvedTimestamp
         )
     }
 }

@@ -18,6 +18,7 @@ HorusEyes 2.0 - Auditory Budget Coordinator Module (Hardened)
 
 from dataclasses import dataclass
 from typing import Optional, List
+import time
 import numpy as np
 
 import config
@@ -61,6 +62,7 @@ class AuditoryBudgetManager:
 
         # Trạng thái Uncertainty Hysteresis
         self.current_cue_mode: str = "MUTED"
+        self.unresolved_reminder_count: int = 0  # Bounded reminder counter cho LOST_UNRESOLVED
 
         self.HYSTERESIS_BOOST = 1.15       # +15% ưu tiên giữ vật thể đang active
         self.MIN_HOLD_FRAMES = 5           # Giữ tối thiểu 5 frame trước khi nhường quyền
@@ -133,6 +135,51 @@ class AuditoryBudgetManager:
             or getattr(obs_res, "quality_state", "") in ["DEGRADED", "UNOBSERVABLE"]
         )
         is_coasting = getattr(kinematics_res, "hazard_persistence_active", False)
+        hazard_state = getattr(kinematics_res, "hazard_state", "CONFIRMED_LOW_RISK")
+
+        # ── Directive 01B-A++ Task P0-01: Bounded Non-Continuous Reminder Policy for LOST_UNRESOLVED ──
+        if hazard_state == "LOST_UNRESOLVED" or threat_level == "UNRESOLVED_HAZARD":
+            self.unresolved_reminder_count += 1
+
+            # Bounded reminder window: phát âm nhắc nhở ngắt quãng trong tối đa 20 frames (~1.0 - 2.0s tùy FPS)
+            # Tránh âm CRITICAL kéo dài vô tận, nhưng TUYỆT ĐỐI KHÔNG chuyển thành MUTED / SAFE!
+            if self.unresolved_reminder_count <= 20:
+                self.current_cue_mode = "CAUTION_REMINDER"
+                return BudgetDecision(
+                    is_active=True,
+                    pan=0.0,
+                    proximity=0.40,
+                    dist_cm=dist_cm,
+                    ttc=float("inf"),
+                    priority_score=15.0,
+                    volume_factor=0.35, # Âm lượng nhắc nhở dịu nhẹ, không chói tai
+                    safe_direction="NONE",
+                    guidance_state="PATH_UNRESOLVED",
+                    cue_mode="CAUTION_REMINDER",
+                    suppressed_count=0,
+                    active_obstacle_id=0,
+                    suppressed_obstacles=[]
+                )
+            else:
+                # Sau giới hạn reminder, chuyển sang standby im lặng, nhưng GIỮ NGUYÊN guidance_state là PATH_UNRESOLVED
+                self.current_cue_mode = "STANDBY_UNRESOLVED"
+                return BudgetDecision(
+                    is_active=False,
+                    pan=0.0,
+                    proximity=0.0,
+                    dist_cm=dist_cm,
+                    ttc=float("inf"),
+                    priority_score=0.0,
+                    volume_factor=0.0,
+                    safe_direction="NONE",
+                    guidance_state="PATH_UNRESOLVED",
+                    cue_mode="STANDBY_UNRESOLVED",
+                    suppressed_count=0,
+                    active_obstacle_id=0,
+                    suppressed_obstacles=[]
+                )
+        else:
+            self.unresolved_reminder_count = 0
 
         if not is_sensor_fault and not is_coasting and (
             threat_level == "SAFE"

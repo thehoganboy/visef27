@@ -380,6 +380,9 @@ class SpatialAudioEngine:
         if cue_mode == "SHARP_PING":
             # Sóng sin cơ bản + hài bậc 2
             tone = (0.38 * np.sin(phase_accum) + 0.12 * np.sin(2.0 * phase_accum)).astype(np.float32)
+        elif cue_mode == "CAUTION_REMINDER":
+            # Directive 01B-A++ Task P0-01: Âm nhắc nhở dịu nhẹ (soft chime / gentle reminder)
+            tone = (0.20 * np.sin(phase_accum) + 0.08 * np.sin(1.5 * phase_accum)).astype(np.float32)
         else:
             # ── ACOUSTIC_BLUR: Dual-Tone FM Warble + Sub-harmonic Shimmer ──
             # FM modulation: freq ± 35Hz at 18Hz rate

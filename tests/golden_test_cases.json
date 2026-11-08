@@ -133,6 +133,38 @@
         "quality_state": "OBSERVABLE",
         "is_valid": true
       }
+    },
+    {
+      "id": "GOLDEN-09-COASTING-EXPIRATION-LOST-UNRESOLVED",
+      "description": "Critical obstacle at 35cm loses tracking; after 0.60s coasting expires. Must NOT transition to SAFE. Transitions to LOST_UNRESOLVED.",
+      "inputs": {
+        "prior_dist_cm": 35.0,
+        "prior_threat_level": "CRITICAL",
+        "current_all_obs_empty": true,
+        "elapsed_seconds": 0.75
+      },
+      "expected_outputs": {
+        "hazard_state": "LOST_UNRESOLVED",
+        "threat_level": "UNRESOLVED_HAZARD",
+        "guidance_state": "PATH_UNRESOLVED",
+        "cue_mode": "CAUTION_REMINDER",
+        "volume_factor": 0.35,
+        "audio_active": true
+      }
+    },
+    {
+      "id": "GOLDEN-10-OBSERVATION-RECOVERY",
+      "description": "Hazard recovers visual observation after coasting or lost state. Must transition to OBSERVATION_RECOVERED.",
+      "inputs": {
+        "prior_hazard_state": "COASTING_HAZARD",
+        "current_dist_cm": 35.0,
+        "current_all_obs_empty": false
+      },
+      "expected_outputs": {
+        "hazard_state": "OBSERVATION_RECOVERED",
+        "threat_level": "CRITICAL",
+        "audio_active": true
+      }
     }
   ]
 }

@@ -290,20 +290,28 @@ def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, L
         return "UNKNOWN", ["INVALID_FRAME_NDIM"], {}
 
     h, w = gray.shape[:2]
-    total_pixels = float(h * w)
+    # Tối ưu hóa hiệu năng (Directive 01B-A++ Task P1-01):
+    # Tính toán thống kê trên thumbnail 160x120 để giảm thời gian xử lý từ ~28ms xuống ~1.5ms
+    if h > 120 or w > 160:
+        thumb = cv2.resize(gray, (160, 120), interpolation=cv2.INTER_AREA)
+    else:
+        thumb = gray
+
+    th_h, th_w = thumb.shape[:2]
+    total_pixels = float(th_h * th_w)
 
     # 1. Thống kê độ sáng & phơi sáng (Luminance & Exposure statistics)
-    lum_mean = float(np.mean(gray))
-    lum_std  = float(np.std(gray))
-    under_ratio = float(np.sum(gray < 10)) / total_pixels
-    over_ratio  = float(np.sum(gray > 248)) / total_pixels
+    lum_mean = float(np.mean(thumb))
+    lum_std  = float(np.std(thumb))
+    under_ratio = float(np.count_nonzero(thumb < 10)) / total_pixels
+    over_ratio  = float(np.count_nonzero(thumb > 248)) / total_pixels
 
-    # 2. Độ sắc nét & vi sai Laplacian (Laplacian variance)
-    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    # 2. Độ sắc nét & vi sai Laplacian (CV_16S thay vì CV_64F để tránh phân bổ bộ nhớ nặng)
+    lap = cv2.Laplacian(thumb, cv2.CV_16S)
     lap_var = float(np.var(lap))
 
     # 3. Mật độ thông tin hình ảnh (Shannon Entropy)
-    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+    hist = cv2.calcHist([thumb], [0], None, [256], [0, 256])
     hist = hist / (total_pixels + 1e-7)
     non_zero = hist[hist > 0]
     entropy = float(-np.sum(non_zero * np.log2(non_zero)))

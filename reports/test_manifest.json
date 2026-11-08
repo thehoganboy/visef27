@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "HorusEyes 2.0 Test Manifest (Phase 01B-A+ & 01B-B0 Revision)",
-  "version": "2.2.0",
+  "title": "HorusEyes 2.0 Test Manifest (Phase 01B-A++ Revision)",
+  "version": "2.3.0",
   "generated_date": "2026-11-08",
   "description": "Scientific, reproducible test specifications with explicit test classifications (UNIT, INTEGRATION, REPLAY, HARDWARE, FIELD) adhering to Engineering Directive 01A.",
   "suites": [
@@ -466,6 +466,64 @@
           "id": "GOLDEN-08",
           "name": "Peripheral Hazard in Shoulder Envelope (Z=50cm, Pan=0.70)",
           "assertion": "path_risk == CORRIDOR_CANDIDATE, threat_level == WARNING, evasion == COLLISION_RISK_UNRESOLVED",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-09-PHASE01B-A-PLUS-PLUS-ADVERSARIAL",
+      "name": "Phase 01B-A++ Adversarial Safety & Failure Boundary Suite",
+      "classification": "UNIT",
+      "command": "python tests/test_phase01b_a_plus_plus_adversarial.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "TEST-9.1",
+          "name": "Phone Rotation Hazard Loss and Observation Recovery",
+          "assertion": "OBSERVED_HAZARD -> COASTING_HAZARD -> OBSERVATION_RECOVERED, CRITICAL preserved",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.2",
+          "name": "Preemption by New Critical Hazard During Coasting",
+          "assertion": "Stale coasting hazard immediately preempted by incoming critical hazard",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.3",
+          "name": "Coasting Expiration Never Falsely Transitions to SAFE",
+          "assertion": "Coasting expiration transitions to LOST_UNRESOLVED (UNRESOLVED_HAZARD), never SAFE",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.4",
+          "name": "Coasting Real-Time Duration Invariance Across 5-30 FPS",
+          "assertion": "Coasting lasts exactly 0.60 seconds elapsed real time across all framerates",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "TEST-9.5",
+          "name": "Bounded Audio Reminder Policy in LOST_UNRESOLVED",
+          "assertion": "Emits bounded CAUTION_REMINDER (vol 0.35) for <= 20 frames, then silences to STANDBY_UNRESOLVED",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.6",
+          "name": "Monotonic Timestamp Anomaly & Duplicate Protection",
+          "assertion": "Zero/negative dt handled gracefully via state caching, zero div-by-zero",
           "expected": "PASS",
           "actual": "PASS",
           "severity": "P0"

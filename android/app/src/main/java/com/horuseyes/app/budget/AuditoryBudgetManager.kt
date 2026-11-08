@@ -38,6 +38,7 @@ class AuditoryBudgetManager {
     private var activeHoldCounter: Int = 0
     private var pendingSwitchId: Int? = null
     private var pendingSwitchCounter: Int = 0
+    private var unresolvedReminderCount: Int = 0
 
     companion object {
         fun computeThreatScore(ttc: Float, proximity: Float, uncertainty: Float): Float {
@@ -58,6 +59,50 @@ class AuditoryBudgetManager {
         val safeDir = kinRes.safeDirection
         val allObs = depthRes.allObstacles
         val isEvading = kinRes.isEvading
+
+        // ── Directive 01B-A++ Task P0-01: Bounded Reminder Policy for LOST_UNRESOLVED ──
+        if (kinRes.hazardState == "LOST_UNRESOLVED" || threatLevel == "UNRESOLVED_HAZARD") {
+            unresolvedReminderCount++
+            if (unresolvedReminderCount <= 20) {
+                return BudgetDecision(
+                    isActive = true,
+                    pan = 0f,
+                    proximity = 0.40f,
+                    distCm = distCm,
+                    ttc = Float.POSITIVE_INFINITY,
+                    velocityZ = 0f,
+                    priorityScore = 15f,
+                    volumeFactor = 0.35f,
+                    safeDirection = "NONE",
+                    guidanceState = "PATH_UNRESOLVED",
+                    cueMode = "CAUTION_REMINDER",
+                    suppressedCount = 0,
+                    activeObstacleId = 0,
+                    threatLevel = "UNRESOLVED_HAZARD",
+                    suppressedObstacles = emptyList()
+                )
+            } else {
+                return BudgetDecision(
+                    isActive = false,
+                    pan = 0f,
+                    proximity = 0f,
+                    distCm = distCm,
+                    ttc = Float.POSITIVE_INFINITY,
+                    velocityZ = 0f,
+                    priorityScore = 0f,
+                    volumeFactor = 0f,
+                    safeDirection = "NONE",
+                    guidanceState = "PATH_UNRESOLVED",
+                    cueMode = "STANDBY_UNRESOLVED",
+                    suppressedCount = 0,
+                    activeObstacleId = 0,
+                    threatLevel = "UNRESOLVED_HAZARD",
+                    suppressedObstacles = emptyList()
+                )
+            }
+        } else {
+            unresolvedReminderCount = 0
+        }
 
         // ── 1. Quy tắc Triệt tiêu thính giác (Suppression Filter - Im lặng tuyệt đối) ──
         if (threatLevel == "SAFE" ||

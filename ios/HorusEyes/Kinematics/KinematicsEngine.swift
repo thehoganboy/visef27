@@ -19,8 +19,10 @@ struct KinematicsResult {
     let threats: [String: SectorThreat]
     let safeDirection: String   // "STOP", "NONE"
     let isEvading: Bool
-    let threatLevel: String     // "CRITICAL", "WARNING", "SAFE"
+    let threatLevel: String     // "CRITICAL", "WARNING", "SAFE", "UNRESOLVED_HAZARD"
     let guidanceState: String
+    let hazardState: String     // "OBSERVED_HAZARD", "COASTING_HAZARD", "LOST_UNRESOLVED", "CONFIRMED_LOW_RISK"
+    let lostUnresolvedTimestamp: Double
 }
 
 final class KinematicsEngine {
@@ -35,6 +37,15 @@ final class KinematicsEngine {
     private var smoothedVz: Float = 0.0
     private var lastSafeDirection: String = "RIGHT"
     private var cachedResult: KinematicsResult?
+
+    // Directive 01B-A++ Task P0-01: Cross-platform Hazard Coasting & Expiration State Machine
+    private var lastSeenTimestamp: Double = 0.0
+    private var lastHazardDist: Float = 250.0
+    private var lastThreatLevel: String = "SAFE"
+    private var clearCorridorFrames: Int = 0
+    private var lostUnresolvedTimestamp: Double = 0.0
+    private let coastingDurationSec: Double = 0.60
+    private var hazardState: String = "CONFIRMED_LOW_RISK"
 
     init() {}
 
@@ -181,8 +192,64 @@ final class KinematicsEngine {
         lastSafeDirection = safeDir
 
         // Directive 01B-A+ Task A+1: Không triệt tiêu cảnh báo chỉ vì quay camera/IMU pan.
-        // isEvading giữ nguyên false trong camera-only để bảo toàn 100% cảnh báo an toàn.
         let isEvading = false
+
+        // Directive 01B-A++ Task P0-01: Cross-Platform Hazard Coasting & Expiration State Machine
+        var activeThreatLevel = threatLevel
+        var activeGuidanceState = guidanceState
+
+        if obstacleResult.allObstacles.count > 0 && activeThreatLevel != "SAFE" {
+            hazardState = "OBSERVED_HAZARD"
+            clearCorridorFrames = 0
+            lostUnresolvedTimestamp = 0.0
+            lastThreatLevel = activeThreatLevel
+            lastHazardDist = distZ
+            lastSeenTimestamp = timestamp
+        } else {
+            let elapsedSinceLoss = (lastSeenTimestamp > 0.0) ? (timestamp - lastSeenTimestamp) : 999.0
+            if (lastThreatLevel == "CRITICAL" || lastThreatLevel == "WARNING") && lastHazardDist <= 80.0 {
+                if elapsedSinceLoss <= coastingDurationSec {
+                    // COASTING_HAZARD: retain confirmed threat level (CRITICAL stays CRITICAL!)
+                    hazardState = "COASTING_HAZARD"
+                    activeThreatLevel = lastThreatLevel
+                    activeGuidanceState = "HAZARD_DETECTED"
+                } else {
+                    // Coasting expired: do NOT automatically report SAFE!
+                    let secCenterClear = distC >= 200.0
+                    let secLeftClear = distL >= 150.0
+                    let secRightClear = distR >= 150.0
+
+                    if secCenterClear && secLeftClear && secRightClear {
+                        clearCorridorFrames += 1
+                    } else {
+                        clearCorridorFrames = 0
+                    }
+
+                    if clearCorridorFrames >= 3 {
+                        hazardState = "CONFIRMED_LOW_RISK"
+                        activeThreatLevel = "SAFE"
+                        activeGuidanceState = "PATH_CLEAR_CONFIRMED"
+                        lastThreatLevel = "SAFE"
+                        lastSeenTimestamp = 0.0
+                        lostUnresolvedTimestamp = 0.0
+                    } else {
+                        hazardState = "LOST_UNRESOLVED"
+                        activeThreatLevel = "UNRESOLVED_HAZARD"
+                        activeGuidanceState = "PATH_UNRESOLVED"
+                        if lostUnresolvedTimestamp == 0.0 {
+                            lostUnresolvedTimestamp = timestamp
+                        }
+                    }
+                }
+            } else {
+                hazardState = "CONFIRMED_LOW_RISK"
+                activeThreatLevel = "SAFE"
+                activeGuidanceState = "PATH_UNVERIFIED"
+                lastThreatLevel = "SAFE"
+                lastSeenTimestamp = 0.0
+                lostUnresolvedTimestamp = 0.0
+            }
+        }
 
         let result = KinematicsResult(
             primaryTTC: primaryTTC,
@@ -190,8 +257,10 @@ final class KinematicsEngine {
             threats: threats,
             safeDirection: safeDir,
             isEvading: isEvading,
-            threatLevel: threatLevel,
-            guidanceState: guidanceState
+            threatLevel: activeThreatLevel,
+            guidanceState: activeGuidanceState,
+            hazardState: hazardState,
+            lostUnresolvedTimestamp: lostUnresolvedTimestamp
         )
 
         cachedResult = result
