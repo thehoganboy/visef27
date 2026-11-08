@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HorusEyes 2.0 Evaluation Dataset Manifest (WP-01B-B0)",
+  "version": "1.0.0",
+  "directive": "ENGINEERING DIRECTIVE 01B-B0",
+  "description": "Structured specification of held-out benchmark datasets covering 14 obstacle categories for monocular RGB assistive mobility.",
+  "data_provenance_policy": "Zero data leakage between calibration (PCHIP knots derived from TUM freiburg1/NYU train) and held-out evaluation splits. No fictional observations permitted.",
+  "categories": [
+    {
+      "id": "CAT-01-POLE",
+      "name": "Thin Vertical Poles",
+      "geometry": "Width < 5cm, height > 150cm, aspect ratio > 30:1, area < 2.0% frame",
+      "failure_risk": "Suppressed during low-resolution downsampling (160x160)",
+      "ground_truth_method": "Laser distance meter (Leica DISTO D2, ±1.5mm) + manual bounding polygon",
+      "source_dataset": "HorusEyes-Controlled-Fixtures / TUM-RGBD (freiburg3_long_office)",
+      "target_samples": 40
+    },
+    {
+      "id": "CAT-02-CABLE",
+      "name": "Hanging Cables & Wires",
+      "geometry": "Thickness 4-12mm, hanging catenary curve in upper frame",
+      "failure_risk": "Complete depth map erasure; boundary dilation failure",
+      "ground_truth_method": "Physical caliper measurement + stereo verification",
+      "source_dataset": "HorusEyes-Controlled-Fixtures",
+      "target_samples": 25
+    },
+    {
+      "id": "CAT-03-BRANCH",
+      "name": "Horizontal Branches & Overhangs",
+      "geometry": "Protruding cantilever structure at elevation 120-190cm",
+      "failure_risk": "Conflated with distant ground or background vegetation",
+      "ground_truth_method": "Measured plumb-line height + calibrated metric depth",
+      "source_dataset": "Outdoor-Assist-Holdout",
+      "target_samples": 30
+    },
+    {
+      "id": "CAT-04-HEAD-HEIGHT",
+      "name": "Head-Height Obstacles (Signboards, Open Cabinet Doors)",
+      "geometry": "Elevation 150-185cm, projecting into traversal corridor",
+      "failure_risk": "Ignored by conventional floor-plane ground obstacle detectors",
+      "ground_truth_method": "Laser rangefinder + calibrated camera mounting height",
+      "source_dataset": "HorusEyes-Indoor-Eval",
+      "target_samples": 35
+    },
+    {
+      "id": "CAT-05-UPPER-BODY",
+      "name": "Upper-Body Obstacles (Table Corners, Railings)",
+      "geometry": "Elevation 80-120cm, width 10-50cm",
+      "failure_risk": "Clipped by narrow FOV or misclassified as peripheral",
+      "ground_truth_method": "3D bounding box from calibrated checkerboard rig",
+      "source_dataset": "NYU-Depth-v2 (official test split, 654 images)",
+      "target_samples": 60
+    },
+    {
+      "id": "CAT-06-GROUND-LEVEL",
+      "name": "Ground-Level Low Obstacles (Curbs, Toys, Boxes)",
+      "geometry": "Height 5-30cm on walking surface",
+      "failure_risk": "Blended into floor gradient",
+      "ground_truth_method": "Kinect v1 structured light ground truth (NYUv2)",
+      "source_dataset": "NYU-Depth-v2 test split",
+      "target_samples": 50
+    },
+    {
+      "id": "CAT-07-GLASS",
+      "name": "Reflective Glass Doors & Partitions",
+      "geometry": "Transparent or semi-reflective flat planar surface",
+      "failure_risk": "Deep scene see-through causing false clear-path declaration",
+      "ground_truth_method": "Acoustic / ToF verification tag + surface edge tape",
+      "source_dataset": "Trans10K-Holdout / HorusEyes-Glass",
+      "target_samples": 30
+    },
+    {
+      "id": "CAT-08-TEXTURELESS-WALL",
+      "name": "Textureless White Walls & Specular Surfaces",
+      "geometry": "Featureless uniform planar surfaces (luminance std < 10)",
+      "failure_risk": "Gradient collapse or false unobservable declaration",
+      "ground_truth_method": "Known room survey dimensions ±1cm",
+      "source_dataset": "HorusEyes-Lab-Enclosure",
+      "target_samples": 25
+    },
+    {
+      "id": "CAT-09-DROP-OFF",
+      "name": "Descending Steps, Curbs & Drop-Offs",
+      "geometry": "Downward vertical step discontinuity > 10cm",
+      "failure_risk": "Fatal fall risk; monocular models often smooth drops into ramps",
+      "ground_truth_method": "Physical step riser gauge (15cm standard)",
+      "source_dataset": "HorusEyes-Outdoor-Steps",
+      "target_samples": 30
+    },
+    {
+      "id": "CAT-10-STATIONARY",
+      "name": "Stationary Obstacles (Furniture, Columns)",
+      "geometry": "Zero ground truth velocity relative to world",
+      "failure_risk": "TTC = infinity causing incorrect safety de-escalation",
+      "ground_truth_method": "Fixed pedestal laser reference",
+      "source_dataset": "TUM-RGBD (freiburg1_desk, freiburg2_desk)",
+      "target_samples": 50
+    },
+    {
+      "id": "CAT-11-APPROACHING",
+      "name": "Approaching Objects (Pedestrians, Carts)",
+      "geometry": "Closing speed 80-180 cm/s directly along optical axis",
+      "failure_risk": "Kinematic lag or late alert (< 1.0s lead time)",
+      "ground_truth_method": "Vicon optical motion capture (TUM SLAM) / calibrated treadmill",
+      "source_dataset": "TUM-RGBD (freiburg3_walking_xyz)",
+      "target_samples": 45
+    },
+    {
+      "id": "CAT-12-CROSSING",
+      "name": "Lateral Crossing Objects (Perpendicular Trajectory)",
+      "geometry": "Lateral speed 100 cm/s traversing FOV outside corridor",
+      "failure_risk": "False critical alarm causing acoustic budget exhaustion",
+      "ground_truth_method": "Optical tracking trajectory",
+      "source_dataset": "HorusEyes-Corridor-Crossing",
+      "target_samples": 30
+    },
+    {
+      "id": "CAT-13-ROTATION-MOTION",
+      "name": "Camera Rotation & User Walking Oscillation",
+      "geometry": "Yaw angular velocity 15-45 deg/s, lateral gait sway 10-15cm",
+      "failure_risk": "False evasion triggering or coasting alert loss",
+      "ground_truth_method": "High-rate calibrated IMU (Xsens MTi / iPhone CoreMotion 100Hz)",
+      "source_dataset": "TUM-RGBD (freiburg1_rpy)",
+      "target_samples": 40
+    },
+    {
+      "id": "CAT-14-EXTREME-LIGHTING",
+      "name": "Low-Light (< 5 lux) & Extreme Backlighting (> 2000 lux)",
+      "geometry": "Dynamic range > 100 dB, extreme shadow / specular flare",
+      "failure_risk": "AE transient velocity spikes or sensor blindness",
+      "ground_truth_method": "Digital lux meter (Extech LT300) + reference depth",
+      "source_dataset": "HorusEyes-Lighting-Adversarial",
+      "target_samples": 35
+    }
+  ]
+}
