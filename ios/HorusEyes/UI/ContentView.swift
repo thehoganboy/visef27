@@ -327,9 +327,9 @@ struct ContentView: View {
     }
 
     private func hazardDirectionLabel(pan: Float) -> String {
-        if pan < -0.33 {
+        if pan < Float(-0.33) {
             return "BÊN TRÁI ◄"
-        } else if pan > 0.33 {
+        } else if pan > Float(0.33) {
             return "BÊN PHẢI ►"
         } else {
             return "TRỰC DIỆN ▲"

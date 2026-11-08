@@ -81,6 +81,7 @@ jobs:
       - name: Compile iOS Application (Unsigned Release)
         run: |
           cd ios
+          set -o pipefail
           xcodebuild -project HorusEyes.xcodeproj \
             -scheme HorusEyes \
             -configuration Release \
@@ -90,7 +91,19 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             AD_HOC_CODE_SIGNING_ALLOWED=YES \
-            clean build
+            clean build 2>&1 | tee xcodebuild.log || {
+              echo "=== XCODEBUILD FAILED! COMPILATION LOG DUMP: ==="
+              grep -E "error:" xcodebuild.log || tail -n 100 xcodebuild.log
+              exit 1
+            }
+
+      - name: Upload Xcodebuild Log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: ios/xcodebuild.log
+          if-no-files-found: ignore
 
       - name: Package App into Sideloadly-Ready IPA
         run: |

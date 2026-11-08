@@ -171,7 +171,7 @@ final class KinematicsEngine {
         if distC <= Config.distCriticalCM && distL <= Config.distCriticalCM && distR <= Config.distCriticalCM {
             safeDir = "STOP"
             guidanceState = "HAZARD_BLOCKED (STOP)"
-        } else if obstacles.count > 0 || distC < Config.distWarningCM {
+        } else if obstacleResult.allObstacles.count > 0 || distC < Config.distWarningCM {
             safeDir = "NONE"
             guidanceState = "HAZARD_DETECTED"
         } else {
