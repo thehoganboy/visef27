@@ -240,9 +240,9 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
         }
 
         val scale = scaleFactor
-        val rawL = if (secLSamples.isNotEmpty()) percentile(secLSamples, 0.50f) else 135f
-        val rawC = if (secCSamples.isNotEmpty()) percentile(secCSamples, 0.65f) else 135f
-        val rawR = if (secRSamples.isNotEmpty()) percentile(secRSamples, 0.50f) else 135f
+        val rawL = if (secLSamples.isNotEmpty()) percentile(secLSamples, 0.80f) else 135f
+        val rawC = if (secCSamples.isNotEmpty()) percentile(secCSamples, 0.80f) else 135f
+        val rawR = if (secRSamples.isNotEmpty()) percentile(secRSamples, 0.80f) else 135f
 
         val distL = interpolator.interpolate(rawL, scale)
         val distC = interpolator.interpolate(rawC, scale)

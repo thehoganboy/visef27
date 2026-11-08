@@ -528,33 +528,13 @@ class KinematicsEngine {
             // CHỈ kích hoạt STOP khi cả 3 hướng (Giữa, Trái, Phải) đều bị chặn hoàn toàn!
             centerBlocked && leftBlocked && rightBlocked -> {
                 dirHysteresisFrames = 0
-                "STOP" to "HAZARD_BLOCKED"
+                "STOP" to "HAZARD_BLOCKED (STOP)"
             }
-            !leftBlocked && rightBlocked -> {
-                smoothedSafeDir = "LEFT"
-                dirHysteresisFrames = 0
-                "LEFT" to "ESCAPE_LEFT"
-            }
-            !rightBlocked && leftBlocked -> {
-                smoothedSafeDir = "RIGHT"
-                dirHysteresisFrames = 0
-                "RIGHT" to "ESCAPE_RIGHT"
-            }
-            scoreLeft > scoreRight + margin -> {
-                smoothedSafeDir = "LEFT"
-                dirHysteresisFrames = 0
-                "LEFT" to "ESCAPE_LEFT"
-            }
-            scoreRight > scoreLeft + margin -> {
-                smoothedSafeDir = "RIGHT"
-                dirHysteresisFrames = 0
-                "RIGHT" to "ESCAPE_RIGHT"
+            allObs.isNotEmpty() || centerBlocked || threats["LEFT"]?.threatLevel != "SAFE" || threats["RIGHT"]?.threatLevel != "SAFE" -> {
+                "NONE" to "HAZARD_DETECTED"
             }
             else -> {
-                dirHysteresisFrames++
-                val sDir = if (smoothedSafeDir in listOf("LEFT", "RIGHT")) smoothedSafeDir else (if (scoreLeft >= scoreRight) "LEFT" else "RIGHT")
-                smoothedSafeDir = sDir
-                sDir to (if (sDir == "LEFT") "ESCAPE_LEFT" else "ESCAPE_RIGHT")
+                "NONE" to "PATH_UNVERIFIED"
             }
         }
 

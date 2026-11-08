@@ -17,7 +17,7 @@ struct KinematicsResult {
     let primaryTTC: Float
     let primaryVelocityZ: Float
     let threats: [String: SectorThreat]
-    let safeDirection: String   // "LEFT", "RIGHT", "STOP"
+    let safeDirection: String   // "STOP", "NONE"
     let isEvading: Bool
     let threatLevel: String     // "CRITICAL", "WARNING", "SAFE"
     let guidanceState: String
@@ -174,16 +174,13 @@ final class KinematicsEngine {
 
         if distC <= Config.distCriticalCM && distL <= Config.distCriticalCM && distR <= Config.distCriticalCM {
             safeDir = "STOP"
-            guidanceState = "HAZARD_BLOCKED"
-        } else if scoreL > (scoreR + Config.sectorHysteresisMargin) {
-            safeDir = "LEFT"
-            guidanceState = "ESCAPE_LEFT"
-        } else if scoreR > (scoreL + Config.sectorHysteresisMargin) {
-            safeDir = "RIGHT"
-            guidanceState = "ESCAPE_RIGHT"
+            guidanceState = "HAZARD_BLOCKED (STOP)"
+        } else if obstacles.count > 0 || distC < Config.distWarningCM {
+            safeDir = "NONE"
+            guidanceState = "HAZARD_DETECTED"
         } else {
-            safeDir = lastSafeDirection
-            guidanceState = (safeDir == "LEFT") ? "ESCAPE_LEFT" : "ESCAPE_RIGHT"
+            safeDir = "NONE"
+            guidanceState = "PATH_UNVERIFIED"
         }
         lastSafeDirection = safeDir
 

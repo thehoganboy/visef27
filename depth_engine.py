@@ -51,9 +51,12 @@ try:
             scalar = x_arr.ndim == 0
             x_flat = np.atleast_1d(x_arr)
             # Khử NaN, +Inf, -Inf an toàn trước khi kẹp biên
+            is_nan = np.isnan(x_flat)
             x_clean = np.nan_to_num(x_flat, nan=self.x[0], posinf=self.x[-1], neginf=self.x[0])
             x_clamped = np.clip(x_clean, self.x[0], self.x[-1])
             res = self._interp(x_clamped)
+            if np.any(is_nan):
+                res = np.where(is_nan, np.nan, res)
             return float(res.item()) if scalar else res
 
 except ImportError:
@@ -103,6 +106,7 @@ except ImportError:
             x_flat = np.atleast_1d(x_arr)
 
             # BẮT BUỘC: Khử NaN, +Inf, -Inf an toàn trước khi kẹp biên và tìm đoạn
+            is_nan = np.isnan(x_flat)
             x_clean = np.nan_to_num(x_flat, nan=self.x[0], posinf=self.x[-1], neginf=self.x[0])
             x_clamped = np.clip(x_clean, self.x[0], self.x[-1])
 
@@ -124,7 +128,10 @@ except ImportError:
                       h01 * self.y[i + 1] +
                       h11 * h_i * self.d[i + 1])
 
-            return y_pred.item() if scalar else y_pred
+            if np.any(is_nan):
+                y_pred = np.where(is_nan, np.nan, y_pred)
+
+            return float(y_pred.item()) if scalar else y_pred
 
 
 def _verify_onnx_sha256(filepath: str) -> bool:
@@ -164,22 +171,29 @@ _KERNEL_ERODE  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
 
 def compute_metric_distance_cm(raw_val: float, scale_factor: float = 1.0) -> float:
     """
-    Chuyển đổi giá trị disparity raw từ MiDaS sang khoảng cách vật lý thực tế (cm)
-    bảo đảm tính đơn điệu nghiêm ngặt (Monotonicity) và kẹp biên chặt chẽ,
-    miễn nhiễm hoàn toàn với NaN, Inf hoặc khoảng cách âm.
+    Chuyển đổi giá trị disparity raw từ MiDaS sang khoảng cách vật lý thực tế (cm).
+    LƯU Ý: Đây là ước lượng metric không định chuẩn tuyệt đối (unverified metric estimate)
+    đối với mô hình monocular depth trừ khi có cảm biến độ sâu thực tế (LiDAR/Time-of-Flight).
+    Miễn nhiễm với out-of-bounds, nhưng BẢO TOÀN NaN/Inf (trả về NaN) để không
+    âm thầm biến lỗi cảm biến thành hành lang an toàn 350cm (tuân thủ FIX-M05 & Directive 01A).
     """
     try:
         r = float(raw_val)
-        if math.isnan(r):
-            return round(float(_KNOT_DISTS[0] * scale_factor), 1)
-        if math.isinf(r):
-            return round(float((_KNOT_DISTS[-1] if r > 0 else _KNOT_DISTS[0]) * scale_factor), 1)
+        if math.isnan(r) or math.isinf(r):
+            return float("nan")
     except Exception:
-        return round(float(_KNOT_DISTS[0] * scale_factor), 1)
+        return float("nan")
 
     # PCHIP __call__ đã tự kẹp biên nội bộ, nhưng ta vẫn kẹp thêm lần nữa
     r_clipped = float(np.clip(r, _KNOT_RAWS[0], _KNOT_RAWS[-1]))
-    d_cm = float(_PCHIP_MODEL(r_clipped)) * scale_factor
+    interp_res = _PCHIP_MODEL(r_clipped)
+    if isinstance(interp_res, np.ndarray):
+        interp_res = float(interp_res.item()) if interp_res.size == 1 else float(interp_res[0])
+    else:
+        interp_res = float(interp_res)
+    if math.isnan(interp_res):
+        return float("nan")
+    d_cm = interp_res * scale_factor
     d_cm_clipped = float(np.clip(d_cm, _KNOT_DISTS[-1] * scale_factor, _KNOT_DISTS[0] * scale_factor))
     return round(d_cm_clipped, 1)
 
@@ -235,6 +249,8 @@ class ObstacleDetectionResult:
     is_zero_lux_blind: bool = False # Cờ cảm biến mù 0-Lux
     overhead_hazard: bool = False   # Cờ vật nhô qua đầu
     drop_off_hazard: bool = False   # Cờ bậc thềm / hố sâu
+    is_valid: bool = True           # Cờ dữ liệu hợp lệ (False nếu lỗi cảm biến/NaN)
+    is_scale_uncalibrated: bool = True # Cờ cảnh báo tỷ lệ metric chưa qua cảm biến cứng (LiDAR)
 
 
 class DepthEstimator:
@@ -361,6 +377,25 @@ class DepthEstimator:
         self._last_frame = frame_bgr
         return depth_norm.astype(np.uint8), depth_raw
 
+    def _create_sensor_fault_result(self, h: int, w: int, reason: str = "SENSOR_FAULT") -> ObstacleDetectionResult:
+        fault_obs = SingleObstacle(
+            id=1, x=w // 2, y=h // 2,
+            bbox=(0, 0, w, h),
+            pan=0.0, proximity=1.0, dist_cm=float("nan"),
+            mode_text=reason,
+            uncertainty_score=1.0, is_wall=False
+        )
+        return ObstacleDetectionResult(
+            x=w // 2, y=h // 2, bbox=fault_obs.bbox, pan=0.0,
+            proximity=1.0, dist_cm=float("nan"),
+            mode_text=reason, uncertainty_score=1.0,
+            is_wall=False,
+            sector_dists={"LEFT": float("nan"), "CENTER": float("nan"), "RIGHT": float("nan")},
+            all_obstacles=[fault_obs],
+            is_valid=False,
+            is_scale_uncalibrated=True
+        )
+
     def detect_obstacle(
         self,
         depth_norm: np.ndarray,
@@ -372,17 +407,42 @@ class DepthEstimator:
     ) -> ObstacleDetectionResult:
         """
         Phát hiện vật cản không gian 3D — Thứ tự ưu tiên cứng hóa:
+        Bước 0: Kiểm tra tính hợp lệ dữ liệu (NaN, Inf, Dimension, Empty) -> SENSOR_FAULT
         Bước 1: Kiểm tra Bão hòa thấu kính (A) + 0-Lux Blind
         Bước 2: Phân đoạn Sobel/Discontinuity (C) + Vách tường (D) + Overhead/DropOff
-        Bước 3: Chỉ kết luận SAFE (B) khi Bước 1+2 không phát hiện gì VÀ P95 < 375
+        Bước 3: Chỉ kết luận Clear Path (B) khi Bước 1+2 không phát hiện gì VÀ P95 < 375
         """
+        # ── Bước 0: Input Validation & Sensor Fault Guard ──
+        if depth_raw is None or depth_norm is None:
+            return self._create_sensor_fault_result(480, 640, "SENSOR_FAULT (Null Input)")
+
+        if not isinstance(depth_raw, np.ndarray) or not isinstance(depth_norm, np.ndarray):
+            return self._create_sensor_fault_result(480, 640, "SENSOR_FAULT (Type Error)")
+
+        if depth_raw.size == 0 or depth_norm.size == 0 or depth_raw.ndim != 2 or depth_norm.ndim != 2:
+            return self._create_sensor_fault_result(480, 640, "SENSOR_FAULT (Invalid Dimensions)")
+
+        h, w = depth_norm.shape[:2]
+        if h < 10 or w < 10:
+            return self._create_sensor_fault_result(h, w, "SENSOR_FAULT (Empty/Tiny Frame)")
+
+        # Kiểm tra tỷ lệ NaN / Inf
+        nan_inf_count = int(np.sum(np.isnan(depth_raw) | np.isinf(depth_raw)))
+        if nan_inf_count > 0:
+            invalid_ratio = nan_inf_count / float(depth_raw.size)
+            if invalid_ratio > 0.15:
+                return self._create_sensor_fault_result(
+                    h, w, f"SENSOR_FAULT ({int(invalid_ratio * 100)}% NaN/Inf Values)"
+                )
+            # Khử cục bộ cho các pixel lỗi nhẹ (<15%) để không làm sập pipeline
+            depth_raw = np.nan_to_num(depth_raw, nan=175.0, posinf=1200.0, neginf=135.0)
+
         if frame_bgr is None and hasattr(self, "_last_frame"):
             frame_bgr = self._last_frame
 
         if not is_zero_lux and lighting_status and lighting_status.get("is_zero_lux_blind", False):
             is_zero_lux = True
 
-        h, w = depth_norm.shape[:2]
         d_norm = depth_norm.astype(np.float32) / 255.0
         global_std = float(np.std(d_norm))
 
@@ -433,7 +493,9 @@ class DepthEstimator:
                 mode_text="SENSOR_BLIND (0-Lux)",
                 uncertainty_score=0.95, is_wall=False,
                 sector_dists=sector_dists, all_obstacles=[blind_obs],
-                is_zero_lux_blind=True
+                is_zero_lux_blind=True,
+                is_valid=False,
+                is_scale_uncalibrated=True
             )
 
         # ── Lens Saturation Check ──
@@ -446,7 +508,11 @@ class DepthEstimator:
 
         is_saturated = (center_sat_ratio >= config.SATURATION_CENTER_RATIO) or (global_sat_ratio >= config.SATURATION_GLOBAL_RATIO)
         if is_saturated:
-            sat_dist = 13.0
+            # FIX-M03: Tách rời khoảng cách vật lý thực và cảnh báo bão hòa khẩn cấp
+            sat_raw_p90 = float(np.percentile(center_raw, 90)) if center_raw.size > 0 else config.SATURATION_RAW_THRESHOLD
+            sat_dist = compute_metric_distance_cm(sat_raw_p90, scale_factor)
+            if math.isnan(sat_dist):
+                sat_dist = 30.0
             sat_prox = 1.0
             sat_mode = "CRITICAL_SATURATED"
             sat_bbox = (s_cx1, s_cy1, s_cx2 - s_cx1, s_cy2 - s_cy1)
@@ -459,8 +525,10 @@ class DepthEstimator:
             return ObstacleDetectionResult(
                 x=w // 2, y=h // 2, bbox=sat_bbox, pan=0.0, proximity=sat_prox,
                 dist_cm=sat_dist, mode_text=sat_mode, uncertainty_score=sat_uncert,
-                is_wall=False, sector_dists={"LEFT": 13.0, "CENTER": 13.0, "RIGHT": 13.0},
-                all_obstacles=[single_sat]
+                is_wall=False, sector_dists={"LEFT": sat_dist, "CENTER": sat_dist, "RIGHT": sat_dist},
+                all_obstacles=[single_sat],
+                is_valid=True,
+                is_scale_uncalibrated=True
             )
 
         # ════════════════════════════════════════════════════════════════════════
@@ -809,30 +877,35 @@ class DepthEstimator:
                 )
                 detected_list.append(thin_obs)
 
-            # Điều kiện SAFE nghiêm ngặt: P95 trung tâm < BASE_ACTIVATION_RAW (375.0) VÀ P98 < 500.0
+            # Điều kiện CLEAR: P95 trung tâm < BASE_ACTIVATION_RAW (375.0) VÀ P98 < 500.0
             elif not is_close_frontal and p95_center < config.BASE_ACTIVATION_RAW:
+                clear_dist = compute_metric_distance_cm(p95_center, scale_factor)
+                if math.isnan(clear_dist) or clear_dist > config.DIST_SAFE_CM:
+                    clear_dist = config.DIST_SAFE_CM
                 safe_dummy = SingleObstacle(
                     id=1, x=w // 2, y=h // 2,
                     bbox=(w // 4, h // 4, w // 2, h // 2),
-                    pan=0.0, proximity=0.0, dist_cm=config.DIST_SAFE_CM,
-                    mode_text="SAFE (Clear Path >250cm)", uncertainty_score=0.05,
+                    pan=0.0, proximity=0.0, dist_cm=clear_dist,
+                    mode_text="NO_OBSTACLE_DETECTED (Unverified Path)", uncertainty_score=0.05,
                     is_wall=False
                 )
                 return ObstacleDetectionResult(
                     x=safe_dummy.x, y=safe_dummy.y, bbox=safe_dummy.bbox,
-                    pan=0.0, proximity=0.0, dist_cm=config.DIST_SAFE_CM,
+                    pan=0.0, proximity=0.0, dist_cm=clear_dist,
                     mode_text=safe_dummy.mode_text, uncertainty_score=0.05,
                     is_wall=False, sector_dists=sector_dists, all_obstacles=[safe_dummy],
-                    overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard
+                    overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard,
+                    is_valid=True,
+                    is_scale_uncalibrated=True
                 )
 
-            # Nếu vẫn không có gì nhưng không đủ điều kiện SAFE → trả về SAFE mặc định
+            # Nếu vẫn không có gì nhưng không đủ điều kiện CLEAR → trả về trạng thái mặc định
             safe_uncert = 0.05
             safe_dummy = SingleObstacle(
                 id=1, x=w // 2, y=h // 2,
                 bbox=(w // 4, h // 4, w // 2, h // 2),
                 pan=0.0, proximity=0.0, dist_cm=config.DIST_SAFE_CM,
-                mode_text="SAFE (Clear Path >250cm)", uncertainty_score=safe_uncert,
+                mode_text="NO_OBSTACLE_DETECTED (Unverified Path)", uncertainty_score=safe_uncert,
                 is_wall=False
             )
             return ObstacleDetectionResult(
@@ -841,7 +914,9 @@ class DepthEstimator:
                 dist_cm=safe_dummy.dist_cm, mode_text=safe_dummy.mode_text,
                 uncertainty_score=safe_dummy.uncertainty_score, is_wall=False,
                 sector_dists=sector_dists, all_obstacles=[safe_dummy],
-                overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard
+                overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard,
+                is_valid=True,
+                is_scale_uncalibrated=True
             )
 
         # Đánh số ID thứ tự 1, 2, 3...
@@ -855,5 +930,7 @@ class DepthEstimator:
             mode_text=primary.mode_text, uncertainty_score=primary.uncertainty_score,
             is_wall=primary.is_wall, sector_dists=sector_dists,
             all_obstacles=detected_list,
-            overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard
+            overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard,
+            is_valid=True,
+            is_scale_uncalibrated=True
         )

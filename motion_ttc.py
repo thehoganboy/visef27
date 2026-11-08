@@ -39,15 +39,17 @@ class KinematicsResult:
     primary_ttc: float               # TTC của mối nguy chính (giây)
     primary_velocity_z: float        # Vận tốc tiếp cận của mối nguy chính (cm/s)
     threats: Dict[str, SectorThreat] # Chi tiết 3 sector
-    safe_direction: str              # "LEFT", "RIGHT", hoặc "STOP"
+    safe_direction: str              # "STOP" hoặc "NONE" (không chỉ định hướng rẽ tự phát)
     is_evading: bool                 # Cờ người dùng đang chủ động né thoát (>= 4 frame đồng nhất)
     threat_level: str                # "CRITICAL", "WARNING", "SAFE"
     obstacle_ttcs: Dict[int, float] = None # Bảng tra TTC cho từng vật cản {obs.id: ttc}
     obstacle_vzs: Dict[int, float] = None  # Bảng tra vz cho từng vật cản {obs.id: vz}
     track_details: Dict[int, dict] = None # Chi tiết động học từng track {id: {vz_raw, vz_smooth, delta_d, delta_t, ttc, dist_cm, bbox}}
     sector_scores: Dict[str, float] = None # Điểm an toàn của từng sector {"LEFT": score_l, "RIGHT": score_r}
-    guidance_state: str = "ESCAPE_RIGHT"   # "ESCAPE_LEFT", "ESCAPE_RIGHT", "HAZARD_BLOCKED"
+    guidance_state: str = "PATH_UNVERIFIED"   # "HAZARD_BLOCKED (STOP)", "DROP_OFF_WARNING", "HAZARD_DETECTED", "PATH_UNVERIFIED"
     effective_ego_vz: float = 0.0          # Vận tốc tiến nền của người đi bộ (cm/s)
+    hazard_direction: str = "NONE"         # Định vị hướng vật cản: "LEFT", "CENTER", "RIGHT", "NONE"
+    motion_state: str = "UNKNOWN"          # Trạng thái chuyển động: "APPROACHING", "RECEDING", "STATIONARY", "UNKNOWN"
 
 
 def compute_sector_safety_score(
@@ -361,8 +363,9 @@ class KinematicsEngine:
         # Bộ lọc EMA cho vận tốc tiếp cận sector
         self.sector_v_z = {"LEFT": 0.0, "CENTER": 0.0, "RIGHT": 0.0}
 
-        self.smoothed_safe_dir = "RIGHT"
-        self.guidance_state = "ESCAPE_RIGHT"
+        self.smoothed_safe_dir = "NONE"
+        self.hazard_direction = "NONE"
+        self.guidance_state = "PATH_UNVERIFIED"
         self.sector_scores = {"LEFT": 0.50, "RIGHT": 0.50}
         self.dir_hysteresis_frames = 0
 
@@ -460,33 +463,34 @@ class KinematicsEngine:
             right_blocked = (right_dist < dist_danger or init_sec_scores["RIGHT"] < deadlock_thresh)
             margin = getattr(config, "SECTOR_HYSTERESIS_MARGIN", 0.10)
 
-            if center_blocked and left_blocked and right_blocked:
-                init_guidance = "HAZARD_BLOCKED"
+            if getattr(obs_res, "drop_off_hazard", False):
+                init_guidance = "DROP_OFF_WARNING"
                 init_safe_dir = "STOP"
-            elif not left_blocked and right_blocked:
-                init_guidance = "ESCAPE_LEFT"
-                init_safe_dir = "LEFT"
-            elif not right_blocked and left_blocked:
-                init_guidance = "ESCAPE_RIGHT"
-                init_safe_dir = "RIGHT"
-            elif init_sec_scores["LEFT"] > init_sec_scores["RIGHT"] + margin:
-                init_guidance = "ESCAPE_LEFT"
-                init_safe_dir = "LEFT"
-            elif init_sec_scores["RIGHT"] > init_sec_scores["LEFT"] + margin:
-                init_guidance = "ESCAPE_RIGHT"
-                init_safe_dir = "RIGHT"
+                init_hazard_dir = "CENTER"
+            elif center_blocked and left_blocked and right_blocked:
+                init_guidance = "HAZARD_BLOCKED (STOP)"
+                init_safe_dir = "STOP"
+                init_hazard_dir = "CENTER"
+            elif all_obs:
+                init_guidance = "HAZARD_DETECTED"
+                init_safe_dir = "NONE"
+                p_obs = all_obs[0]
+                init_hazard_dir = "LEFT" if p_obs.pan < -0.33 else ("RIGHT" if p_obs.pan > 0.33 else "CENTER")
             else:
-                init_safe_dir = "LEFT" if init_sec_scores["LEFT"] >= init_sec_scores["RIGHT"] else "RIGHT"
-                init_guidance = "ESCAPE_LEFT" if init_safe_dir == "LEFT" else "ESCAPE_RIGHT"
+                init_guidance = "PATH_UNVERIFIED"
+                init_safe_dir = "NONE"
+                init_hazard_dir = "NONE"
 
             self.smoothed_safe_dir = init_safe_dir
             self.guidance_state = init_guidance
+            self.hazard_direction = init_hazard_dir
             self.sector_scores = init_sec_scores
 
             res = self._create_result(
                 curr_dist, 0.0, init_ttc, sec_dists, init_threat, init_safe_dir, False,
                 obs_ttcs=obs_ttcs, obs_vzs=obs_vzs, track_details=track_details,
-                sector_scores=init_sec_scores, guidance_state=init_guidance
+                sector_scores=init_sec_scores, guidance_state=init_guidance,
+                hazard_direction=init_hazard_dir, motion_state="UNKNOWN"
             )
             self.last_result = res
             return res
@@ -532,21 +536,33 @@ class KinematicsEngine:
             else:
                 is_truly_approaching = False
 
-            # Tính TTC động học kết hợp Ego-Motion (người dùng bước tới v_user)
+            # Vận tốc tiếp cận tương đối thực tế (Relative Range Rate)
+            # FIX-M04: Loại bỏ gán cứng 120cm/s gây báo động giả vật tĩnh trước mặt
             effective_vz = ovz
             is_frontal = (abs(o.pan) < 0.45)
-            if is_frontal and user_walk_est > 0.0:
-                effective_vz = max(ovz, user_walk_est)
 
-            if (is_truly_approaching or (is_frontal and user_walk_est > 0.0)) and o.dist_cm < dist_safe:
-                ottc = max(0.05, min(10.0, o.dist_cm / max(effective_vz, 1.0)))
+            # Phân loại trạng thái chuyển động (Motion State)
+            if trk is None or len(trk.history_d) < 2:
+                o_motion_state = "UNKNOWN"
+            elif ovz >= min_approach_vz:
+                o_motion_state = "APPROACHING"
+            elif ovz <= -min_approach_vz:
+                o_motion_state = "RECEDING"
+            else:
+                o_motion_state = "STATIONARY"
+
+            # Chỉ tính TTC hữu hạn khi vật cản ĐANG TIẾP CẬN với vận tốc vượt ngưỡng
+            if is_truly_approaching and ovz >= min_approach_vz and o.dist_cm < dist_safe:
+                ottc = max(0.05, min(10.0, o.dist_cm / ovz))
+            else:
+                ottc = float("inf")
 
             obs_ttcs[o.id] = ottc
 
-            # Phân loại mức độ đe dọa (cập nhật theo ngưỡng chuẩn hóa mới)
-            if (ottc <= ttc_critical and effective_vz >= min_approach_vz) or (o.dist_cm <= dist_critical):
+            # Phân loại mức độ đe dọa (Khoảng cách tĩnh vs TTC động lực học)
+            if (ottc <= ttc_critical and ovz >= min_approach_vz) or (o.dist_cm <= dist_critical):
                 o_level = "CRITICAL"
-            elif (ottc <= ttc_warning and effective_vz >= min_approach_vz) or (o.dist_cm <= dist_danger) or (o.dist_cm < dist_warning and is_frontal):
+            elif (ottc <= ttc_warning and ovz >= min_approach_vz) or (o.dist_cm <= dist_danger) or (o.dist_cm < dist_warning and is_frontal):
                 o_level = "WARNING"
             else:
                 o_level = "SAFE"
@@ -686,41 +702,37 @@ class KinematicsEngine:
         left_blocked = (left_dist < dist_danger or score_left < deadlock_thresh or threats["LEFT"].threat_level == "CRITICAL")
         right_blocked = (right_dist < dist_danger or score_right < deadlock_thresh or threats["RIGHT"].threat_level == "CRITICAL")
 
-        # Trường hợp Deadlock: Cả 3 hướng đều bị chặn hoàn toàn
-        if center_blocked and left_blocked and right_blocked:
+        # Trường hợp Deadlock & Định vị mối nguy (TASK 01A-2 & FIX-M01)
+        if getattr(obs_res, "drop_off_hazard", False):
             safe_dir = "STOP"
-            guidance_state = "HAZARD_BLOCKED"
-            self.dir_hysteresis_frames = 0
-        elif not left_blocked and right_blocked:
-            safe_dir = "LEFT"
-            guidance_state = "ESCAPE_LEFT"
-            self.smoothed_safe_dir = "LEFT"
-            self.dir_hysteresis_frames = 0
-        elif not right_blocked and left_blocked:
-            safe_dir = "RIGHT"
-            guidance_state = "ESCAPE_RIGHT"
-            self.smoothed_safe_dir = "RIGHT"
-            self.dir_hysteresis_frames = 0
-        elif score_left > score_right + margin:
-            safe_dir = "LEFT"
-            guidance_state = "ESCAPE_LEFT"
-            self.smoothed_safe_dir = "LEFT"
-            self.dir_hysteresis_frames = 0
-        elif score_right > score_left + margin:
-            safe_dir = "RIGHT"
-            guidance_state = "ESCAPE_RIGHT"
-            self.smoothed_safe_dir = "RIGHT"
-            self.dir_hysteresis_frames = 0
-        else:
-            self.dir_hysteresis_frames += 1
-            if self.smoothed_safe_dir in ["LEFT", "RIGHT"]:
-                safe_dir = self.smoothed_safe_dir
-                guidance_state = "ESCAPE_LEFT" if safe_dir == "LEFT" else "ESCAPE_RIGHT"
+            guidance_state = "DROP_OFF_WARNING"
+            hazard_dir = "CENTER"
+        elif center_blocked and left_blocked and right_blocked:
+            safe_dir = "STOP"
+            guidance_state = "HAZARD_BLOCKED (STOP)"
+            hazard_dir = "CENTER"
+        elif all_obs or center_blocked or threats["LEFT"].threat_level != "SAFE" or threats["RIGHT"].threat_level != "SAFE":
+            safe_dir = "NONE"
+            guidance_state = "HAZARD_DETECTED"
+            if all_obs:
+                if primary_obs.pan < -0.33:
+                    hazard_dir = "LEFT"
+                elif primary_obs.pan > 0.33:
+                    hazard_dir = "RIGHT"
+                else:
+                    hazard_dir = "CENTER"
+            elif threats["LEFT"].threat_level != "SAFE":
+                hazard_dir = "LEFT"
+            elif threats["RIGHT"].threat_level != "SAFE":
+                hazard_dir = "RIGHT"
             else:
-                safe_dir = "LEFT" if score_left >= score_right else "RIGHT"
-                guidance_state = "ESCAPE_LEFT" if safe_dir == "LEFT" else "ESCAPE_RIGHT"
-                self.smoothed_safe_dir = safe_dir
+                hazard_dir = "CENTER"
+        else:
+            safe_dir = "NONE"
+            guidance_state = "PATH_UNVERIFIED"
+            hazard_dir = "NONE"
 
+        self.hazard_direction = hazard_dir
         self.smoothed_safe_dir = safe_dir
         self.guidance_state = guidance_state
         self.sector_scores = sector_scores
@@ -729,15 +741,15 @@ class KinematicsEngine:
         if (
             obs_threat_level == "CRITICAL"
             or threats["CENTER"].threat_level == "CRITICAL"
-            or (guidance_state == "HAZARD_BLOCKED" and min(sec_dists["LEFT"], sec_dists["CENTER"], sec_dists["RIGHT"]) <= dist_critical)
+            or (guidance_state == "HAZARD_BLOCKED (STOP)" and min(sec_dists["LEFT"], sec_dists["CENTER"], sec_dists["RIGHT"]) <= dist_critical)
         ):
             threat_level = "CRITICAL"
         elif (
             obs_threat_level == "WARNING"
             or threats["CENTER"].threat_level == "WARNING"
-            or guidance_state == "HAZARD_BLOCKED"
-            or (threats["LEFT"].threat_level == "WARNING" and safe_dir == "RIGHT")
-            or (threats["RIGHT"].threat_level == "WARNING" and safe_dir == "LEFT")
+            or guidance_state == "HAZARD_BLOCKED (STOP)"
+            or threats["LEFT"].threat_level == "WARNING"
+            or threats["RIGHT"].threat_level == "WARNING"
         ):
             threat_level = "WARNING"
         else:
@@ -745,30 +757,26 @@ class KinematicsEngine:
 
         # ── 6. Siết chặt phát hiện né tránh chủ động (is_evading) ──
         # Chỉ bật is_evading = True khi:
-        #   - Tâm góc dịch chuyển ra biên theo đúng hướng né (d_pan đúng chiều)
+        #   - Tâm góc dịch chuyển ra biên theo đúng hướng né tránh mối nguy
         #   - VÀ Khoảng cách Z KHÔNG GIẢM (hoặc TTC đang tăng lên), d_dist >= -1.0cm
         d_pan = curr_pan - self.prev_pan
         d_dist = curr_dist - self.prev_dist_cm
         ttc_increasing = (primary_ttc >= self.prev_ttc - 0.05)
         dist_not_decreasing = (d_dist >= -1.0 or ttc_increasing)
 
-        instant_dir = "NONE"
+        instant_evading = False
         if threat_level != "SAFE":
-            if safe_dir == "RIGHT" and d_pan < -0.03 and dist_not_decreasing:
-                instant_dir = "RIGHT"
-            elif safe_dir == "LEFT" and d_pan > 0.03 and dist_not_decreasing:
-                instant_dir = "LEFT"
+            if hazard_dir == "RIGHT" and d_pan < -0.03 and dist_not_decreasing:
+                instant_evading = True
+            elif hazard_dir == "LEFT" and d_pan > 0.03 and dist_not_decreasing:
+                instant_evading = True
+            elif hazard_dir == "CENTER" and abs(d_pan) > 0.03 and dist_not_decreasing:
+                instant_evading = True
 
-        if instant_dir != "NONE" and instant_dir == safe_dir:
-            if instant_dir == self.last_evasion_dir:
-                self.consecutive_evasion_frames += 1
-            else:
-                self.last_evasion_dir = instant_dir
-                self.consecutive_evasion_frames = 1
+        if instant_evading:
+            self.consecutive_evasion_frames += 1
         else:
             self.consecutive_evasion_frames = max(0, self.consecutive_evasion_frames - 1)
-            if self.consecutive_evasion_frames == 0:
-                self.last_evasion_dir = "NONE"
 
         is_evading = (self.consecutive_evasion_frames >= 4 and threat_level != "SAFE")
 
@@ -795,11 +803,20 @@ class KinematicsEngine:
                 "bbox": o.bbox
             }
 
+        primary_motion_state = "UNKNOWN"
+        if all_obs:
+            if primary_vz >= min_approach_vz:
+                primary_motion_state = "APPROACHING"
+            elif primary_vz <= -min_approach_vz:
+                primary_motion_state = "RECEDING"
+            else:
+                primary_motion_state = "STATIONARY"
+
         res = self._create_result(
             curr_dist, primary_vz, primary_ttc, threats,
             threat_level, safe_dir, is_evading, obs_ttcs, obs_vzs, track_details,
             sector_scores=sector_scores, guidance_state=guidance_state,
-            effective_ego_vz=user_walk_est
+            effective_ego_vz=0.0, hazard_direction=hazard_dir, motion_state=primary_motion_state
         )
         self.last_result = res
         return res
@@ -807,8 +824,8 @@ class KinematicsEngine:
     def _create_result(
         self, dist_cm, vz, ttc, threats, threat_level, safe_dir, is_evading,
         obs_ttcs=None, obs_vzs=None, track_details=None,
-        sector_scores=None, guidance_state="ESCAPE_RIGHT",
-        effective_ego_vz=0.0
+        sector_scores=None, guidance_state="PATH_UNVERIFIED",
+        effective_ego_vz=0.0, hazard_direction="NONE", motion_state="UNKNOWN"
     ) -> KinematicsResult:
         if not isinstance(threats, dict):
             threats_dict = {
@@ -831,5 +848,7 @@ class KinematicsEngine:
             track_details=track_details if track_details else {},
             sector_scores=sector_scores if sector_scores else {"LEFT": 0.50, "RIGHT": 0.50},
             guidance_state=guidance_state,
-            effective_ego_vz=effective_ego_vz
+            effective_ego_vz=effective_ego_vz,
+            hazard_direction=hazard_direction,
+            motion_state=motion_state
         )

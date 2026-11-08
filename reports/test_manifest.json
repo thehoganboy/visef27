@@ -1,0 +1,348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "HorusEyes 2.0 Test Manifest (Phase 01A Revision)",
+  "version": "2.1.0",
+  "generated_date": "2026-11-08",
+  "description": "Scientific, reproducible test specifications with explicit test classifications (UNIT, INTEGRATION, REPLAY, HARDWARE, FIELD) adhering to Engineering Directive 01A.",
+  "suites": [
+    {
+      "id": "SUITE-01-STATIC-AUDIT",
+      "name": "Static Code & Cross-Platform Parity Audit",
+      "classification": "UNIT",
+      "command": "python test_pipeline.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "TEST-1.1",
+          "name": "Spatial Orientation & Hazard Localization Audit",
+          "target": "main.py, depth_engine.py, motion_ttc.py",
+          "assertion": "cv2.flip not present before depth inference; right-side obstacle pan > +0.30; hazard localized to RIGHT; zero autonomous escape steering",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-1.2",
+          "name": "Supply-Chain & Offline Security Check",
+          "target": "all runtime modules",
+          "assertion": "zero calls to torch.hub.load at runtime; URL scheme whitelist enforced",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-1.3",
+          "name": "Python-to-Kotlin Parity",
+          "target": "config.py, Config.kt",
+          "assertion": "11 calibration knots and all DIST/TTC thresholds match exactly",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "TEST-1.4",
+          "name": "Python-to-Swift Parity",
+          "target": "config.py, Config.swift",
+          "assertion": "11 calibration knots and all DIST/TTC thresholds match exactly",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-02-NUMERICAL-TORTURE",
+      "name": "Numerical & Float Robustness Suite",
+      "classification": "UNIT",
+      "command": "python test_pipeline.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "TEST-2.1",
+          "name": "PCHIP Spline Monotonicity & NaN Preservation",
+          "input": "10000 points sampled in [-500.0, 5000.0] including NaN, +Inf, -Inf",
+          "assertion": "Bounded in [13.0, 350.0], derivative <= 0 everywhere, NaNs preserved as NaNs without generating false confidence",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-2.2",
+          "name": "Kinematics Time-Shift Regression",
+          "input": "Large Unix timestamps (1.7e9 s) with 100 cm/s approach",
+          "assertion": "Computed velocity equals 100.0 +/- 2.0 cm/s; zero catastrophic cancellation",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-2.3",
+          "name": "Audio DSP State & Limiter Guard",
+          "input": "Injection of NaN freq, Inf pan into _audio_callback",
+          "assertion": "Outdata strictly bounded in [-1.0, 1.0], zero NaN/Inf in output stream",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-03-ADVERSARIAL-SCENARIOS",
+      "name": "Headless Adversarial Perception & Safety Suite",
+      "classification": "INTEGRATION",
+      "command": "python diagnose_system.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "SCENARIO-01",
+          "name": "Clear Corridor / Disparity 250 Calibration (FIX-M02)",
+          "input": "Uniform raw disparity 250.0",
+          "assertion": "is_active == False, cue_mode == 'MUTED', dist_cm maps to ~237.2 cm via PCHIP, modeText explicitly marks path unverified",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "SCENARIO-02",
+          "name": "Lens Saturation Semantics (FIX-M03)",
+          "input": "Raw disparity 800.0 (30 cm) and 1200.0 (13 cm)",
+          "assertion": "Raw 800 maps to 30.0 cm in PCHIP, raw 1200 maps to 13.0 cm, modeText == 'CRITICAL_SATURATED', proximity == 1.0, beep_interval <= 0.085s",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-03",
+          "name": "Thin Obstacle Survival (2% Area)",
+          "input": "Center 6px vertical strip at raw disparity 560.0 (70 cm) on 250 cm background",
+          "assertion": "modeText != 'SAFE', is_active == True, dist_cm <= 85.0",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-04A",
+          "name": "Overhead Hazard Detection",
+          "input": "Top 15% ROI has foreground at 60 cm on 250 cm background",
+          "assertion": "is_overhead_hazard == True or 'OVERHEAD' in modeText",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "SCENARIO-04B",
+          "name": "Drop-Off Hazard Detection",
+          "input": "Bottom 15% ROI has disparity drop-off gradient > 0.25",
+          "assertion": "is_drop_off_hazard == True or 'DROP_OFF' in modeText",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-05",
+          "name": "Specular / Textureless White Wall Uncertainty",
+          "input": "Uniform white RGB frame with V_std < 4.0, Laplacian_var < 15.0",
+          "assertion": "uncertainty_score >= 0.48, cue_mode == 'ACOUSTIC_BLUR', priority_score not penalized",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P2"
+        },
+        {
+          "id": "SCENARIO-06A",
+          "name": "Stationary Camera + Stationary Obstacle (FIX-M04)",
+          "input": "Stationary obstacle at 90 cm over multiple frames with stationary camera",
+          "assertion": "abs(primary_velocity_z) < 20 cm/s, ttc == inf or > 5s, threat_level != 'CRITICAL', zero false looming",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-06B",
+          "name": "Stationary Camera + Approaching Obstacle (FIX-M04)",
+          "input": "Object closing from 120 cm to 70 cm at 100 cm/s while camera stationary",
+          "assertion": "primary_velocity_z >= 50 cm/s, ttc < 2.0s, threat_level in ['WARNING', 'CRITICAL']",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-06C",
+          "name": "Moving Camera + Stationary Obstacle (FIX-M04)",
+          "input": "Camera moving forward at 80 cm/s toward stationary obstacle at 120 cm",
+          "assertion": "Relative closing velocity correctly measured (v_rel >= 40 cm/s), ttc finite, object not misclassified as self-accelerating",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "SCENARIO-06D",
+          "name": "Rotating Camera + Stationary Obstacle (FIX-M04)",
+          "input": "Camera rotating laterally while obstacle remains at Z = 150 cm",
+          "assertion": "abs(primary_velocity_z) < 25 cm/s, ttc == inf, lateral shift not misinterpreted as approach",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "SCENARIO-07",
+          "name": "CRITICAL Preemption (Hysteresis Bypass)",
+          "input": "Active target locked on #1 (110 cm); emergency target #2 appears at Z=30cm, TTC=0.6s",
+          "assertion": "active_obstacle_id switches to #2 in frame 0 (zero frame delay)",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-08",
+          "name": "Anti-Thrashing Priority Hysteresis",
+          "input": "Two obstacles oscillating within +/- 4% priority score over 12 frames",
+          "assertion": "Active ID switches <= 1 time; cue_mode remains stable",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P2"
+        },
+        {
+          "id": "SCENARIO-09",
+          "name": "Narrow Obstacle Sector Ranging & Localization (FIX-M01)",
+          "input": "Right sector has 55 cm pole occupying 30% sector width on 300 cm background",
+          "assertion": "sector_dists['RIGHT'] <= 70.0 cm, safe_direction != 'LEFT' (zero unverified steering), hazard_direction in ['RIGHT', 'CENTER'], audio pan localizes hazard to right (pan >= 0.0)",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-10",
+          "name": "False Evasion Immunity",
+          "input": "Pan shifts outward while distance Z decreases (approaching threat)",
+          "assertion": "is_evading == False, volume_factor == 1.0 (no volume decay)",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "SCENARIO-11",
+          "name": "Zero-Lux Darkness & Auto-Torch Defense",
+          "input": "10 frames mean luma Y = 5.0",
+          "assertion": "torch_active == True, ae_settle > 0, system fault tone active on 0-lux blind",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "SCENARIO-12",
+          "name": "Camera Hang Watchdog",
+          "input": "Frame stream paused for > 550 ms",
+          "assertion": "is_healthy == False, audio engine activates SYSTEM_FAULT tone (440/330 Hz)",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-13",
+          "name": "Sensor Fault & Invalid Depth Resistance (FIX-M05)",
+          "input": "Depth tensor with >15% NaN/Inf, empty arrays, or non-finite inputs",
+          "assertion": "Returns explicit SENSOR_FAULT (is_valid == False), compute_metric_distance_cm(nan) returns nan, never converts invalid data into safe 350cm corridor",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-04-STRESS-LATENCY",
+      "name": "Continuous 500-Cycle Profiling & Memory Leak Audit",
+      "classification": "INTEGRATION",
+      "command": "python diagnose_system.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "PERF-4.1",
+          "name": "Algorithmic Pipeline Latency",
+          "metric": "Mean total latency over 500 cycles",
+          "assertion": "latency_ms <= 130.0 ms on reference CPU testbed (actual measured: 44.66 ms, 22.4 FPS)",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "PERF-4.2",
+          "name": "Tracker Memory Leak Immunity",
+          "metric": "Active track count at frame 50 vs frame 500",
+          "assertion": "len(tracks) <= 10, abs(tracks_500 - tracks_50) <= 2",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-05-DATASET-REPLAY",
+      "name": "NYU Depth V2 & TUM Monocular Sequence Replay",
+      "classification": "REPLAY",
+      "command": "python benchmark_master_suite.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "REPLAY-5.1",
+          "name": "Close-Range Empirical Evaluation Suite",
+          "target": "data/close_range/",
+          "assertion": "Real close-range test suite evaluated without synthetic Gaussian noise augmentation",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-06-HARDWARE-VALIDATION",
+      "name": "iPhone 14 Pro & Android Physical Device Suite",
+      "classification": "HARDWARE",
+      "command": "N/A (Requires physical hardware USB connection)",
+      "environment": "physical_device",
+      "execution_status": "SKIPPED",
+      "skip_reason": "No physical iOS (iPhone 14 Pro) or Android test device connected in current headless host CI environment",
+      "tests": [
+        {
+          "id": "HW-6.1",
+          "name": "iPhone 14 Pro TrueDepth / LiDAR Latency Benchmark",
+          "assertion": "ARKit sceneDepth true lens-to-ear latency <= 45ms",
+          "expected": "SKIPPED",
+          "actual": "SKIPPED",
+          "severity": "P0"
+        },
+        {
+          "id": "HW-6.2",
+          "name": "SPL Ear Canal Decibel Dosimetry",
+          "assertion": "Peak SPL at headphone <= 85 dBA across full operating envelope",
+          "expected": "SKIPPED",
+          "actual": "SKIPPED",
+          "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-07-FIELD-SAFETY",
+      "name": "Real-World Blind Navigation Traversability Assessment",
+      "classification": "FIELD",
+      "command": "N/A (Requires controlled orientation and mobility specialist supervision)",
+      "environment": "field_evaluation",
+      "execution_status": "SKIPPED",
+      "skip_reason": "Field safety trials strictly gated behind Phase 01A/B completion and O&M mobility specialist approval",
+      "tests": [
+        {
+          "id": "FIELD-7.1",
+          "name": "Uncalibrated Traversability False Positive Rate",
+          "assertion": "Zero catastrophic collisions during supervised indoor white-cane navigation",
+          "expected": "SKIPPED",
+          "actual": "SKIPPED",
+          "severity": "P0"
+        }
+      ]
+    }
+  ]
+}

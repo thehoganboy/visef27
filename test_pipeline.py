@@ -88,9 +88,12 @@ def test_stage_1_static_security_parity_audit():
 
     kin = KinematicsEngine()
     kin_res = kin.compute(obs_right, time.perf_counter())
-    print(f"  [Audit 1.1] Hướng thoát hiểm: Safe Direction = '{kin_res.safe_direction}'")
-    assert kin_res.safe_direction == "LEFT", (
-        f"Vật cản ở bên phải thì hướng thoát an toàn bắt buộc phải là LEFT, nhận '{kin_res.safe_direction}'!"
+    print(f"  [Audit 1.1] Định vị Mối nguy: Hazard Direction = '{getattr(kin_res, 'hazard_direction', 'NONE')}', Safe Dir = '{kin_res.safe_direction}'")
+    assert getattr(kin_res, "hazard_direction", "") in ["RIGHT", "CENTER"], (
+        f"Vật cản ở bên phải thì hazard_direction phải là RIGHT/CENTER, nhận '{getattr(kin_res, 'hazard_direction', '')}'!"
+    )
+    assert kin_res.safe_direction != "LEFT", (
+        f"FIX-M01: Nghiêm cấm ra lệnh né tự phát sang LEFT khi chưa kiểm chứng hành lang!"
     )
     print("  -> Spatial Orientation Audit: PASS!")
 
@@ -195,12 +198,18 @@ def test_stage_2_numerical_torture_tests():
     assert np.all(pred_dists >= 13.0 - 1e-5), f"Vọt lố cận dưới: min={np.min(pred_dists)}"
     assert np.all(pred_dists <= 350.0 + 1e-5), f"Vọt lố cận trên: max={np.max(pred_dists)}"
 
-    # Truyền mảng chứa NaN, +Inf, -Inf -> Hoàn toàn hữu hạn, không văng exception
+    # Truyền mảng chứa NaN, +Inf, -Inf -> Bảo tồn NaN/Inf chính xác, không âm thầm sinh số an toàn
     poisoned_raws = np.array([-np.inf, float("nan"), 135.0, float("nan"), 600.0, float("inf"), np.inf])
     poisoned_out = interp(poisoned_raws)
-    assert np.all(np.isfinite(poisoned_out)), "PCHIP trả về NaN/Inf khi nhận input độc hại!"
+    assert np.isnan(poisoned_out[1]), "PCHIP phải bảo tồn NaN cho input NaN!"
+    assert np.isnan(poisoned_out[3]), "PCHIP phải bảo tồn NaN cho input NaN!"
+    assert np.isfinite(poisoned_out[2]), "PCHIP phải tính được giá trị cho input hợp lệ 135.0!"
+    assert np.isfinite(poisoned_out[4]), "PCHIP phải tính được giá trị cho input hợp lệ 600.0!"
+    assert math.isnan(compute_metric_distance_cm(float("nan"))), (
+        "compute_metric_distance_cm(nan) bắt buộc phải trả về NaN!"
+    )
     assert len(poisoned_out) == len(poisoned_raws)
-    print("  [Torture 2.1] PCHIP Spline (10,000 pts Monotonic, Bounded [13, 350], NaN/Inf Safe): PASS!")
+    print("  [Torture 2.1] PCHIP Spline (10,000 pts Monotonic, Bounded [13, 350], NaN Preservation): PASS!")
 
     # 2. Torture Test Hồi quy Vận tốc v_z & Frame Trùng lặp (KinematicsEngine)
     kin = KinematicsEngine()

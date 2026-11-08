@@ -25,6 +25,7 @@ Kịch bản kiểm thử chẩn đoán tự động toàn diện (Headless Auto
 import sys
 import os
 import time
+import math
 import numpy as np
 import cv2
 
@@ -47,7 +48,10 @@ from telemetry_gui import TelemetryHUD
 
 
 def test_scenario_01_clear_corridor(depth_est, kin_engine, budget_mgr):
-    """[Scenario 01] Clear Corridor (>2.5m): Phòng trống thông thoáng (raw < 375)."""
+    """[Scenario 01] Clear Corridor: Phòng trống thông thoáng (raw 250).
+    FIX-M02: Raw disparity 250 maps to ~237.2cm theo mô hình PCHIP đã kiểm chứng.
+    Hệ thống nhận diện không có vật cản, triệt tiêu âm thanh (MUTED), nhưng
+    gắn nhãn rõ ràng là hành lang chưa qua kiểm chứng độ sâu tuyệt đối (Unverified)."""
     h, w = config.CAM_HEIGHT, config.CAM_WIDTH
     mock_raw = np.full((h, w), 250.0, dtype=np.float32)
     mock_norm = np.full((h, w), 30, dtype=np.uint8)
@@ -62,32 +66,45 @@ def test_scenario_01_clear_corridor(depth_est, kin_engine, budget_mgr):
 
     assert decision.is_active is False, "LỖI KỊCH BẢN 1: Phòng trống nhưng hệ thống vẫn phát âm thanh!"
     assert decision.cue_mode == "MUTED", f"LỖI KỊCH BẢN 1: Cue mode phải là MUTED, nhận '{decision.cue_mode}'"
-    assert decision.dist_cm >= config.DIST_SAFE_CM, "LỖI KỊCH BẢN 1: Khoảng cách phòng trống phải >= 250cm"
+    # FIX-M02: Raw 250 -> 237.2cm theo PCHIP
+    assert abs(obs_res.dist_cm - 237.2) < 2.0 or obs_res.dist_cm >= 235.0, (
+        f"LỖI KỊCH BẢN 1: Cự ly PCHIP cho raw 250 phải xấp xỉ 237.2cm, nhận {obs_res.dist_cm}cm"
+    )
+    assert "Unverified" in obs_res.mode_text or "NO_OBSTACLE" in obs_res.mode_text, (
+        f"LỖI KỊCH BẢN 1: Trạng thái phải ghi nhận rõ đường đi chưa kiểm chứng, nhận '{obs_res.mode_text}'"
+    )
     return True
 
 
 def test_scenario_02_lens_saturation(depth_est, kin_engine, budget_mgr, audio_engine):
-    """[Scenario 02] Lens Saturation (<15cm): Vật cản che sát ống kính (>25% trung tâm raw >= 800)."""
+    """[Scenario 02] Lens Saturation: Vật cản che sát ống kính (raw >= 800).
+    FIX-M03: Tách rời ước lượng cự ly PCHIP (raw 800 -> 30cm, raw 1200 -> 13cm)
+    khỏi cơ chế kích hoạt cảnh báo bão hòa khẩn cấp."""
     h, w = config.CAM_HEIGHT, config.CAM_WIDTH
-    mock_raw = np.full((h, w), 1200.0, dtype=np.float32)
-    mock_norm = np.full((h, w), 255, dtype=np.uint8)
 
+    # Thử nghiệm 2A: Ngưỡng bão hòa tại raw = 800 (PCHIP = 30.0cm)
+    mock_raw_800 = np.full((h, w), 800.0, dtype=np.float32)
+    mock_norm_800 = np.full((h, w), 200, dtype=np.uint8)
     t_now = time.perf_counter()
-    obs_res = depth_est.detect_obstacle(mock_norm, mock_raw)
-    kin_res = kin_engine.compute(obs_res, t_now)
-    decision = budget_mgr.coordinate(obs_res, kin_res)
-    audio_engine.update_state(decision)
+    obs_res_800 = depth_est.detect_obstacle(mock_norm_800, mock_raw_800)
+    decision_800 = budget_mgr.coordinate(obs_res_800, kin_engine.compute(obs_res_800, t_now))
 
+    assert obs_res_800.mode_text == "CRITICAL_SATURATED", f"Lỗi 2A: nhận '{obs_res_800.mode_text}'"
+    assert decision_800.is_active is True, "Lỗi 2A: không kích hoạt cảnh báo"
+    assert abs(obs_res_800.dist_cm - 30.0) < 1.0, f"Lỗi 2A: raw 800 phải đo được 30cm, nhận {obs_res_800.dist_cm}cm"
+    assert decision_800.proximity >= 0.99, "Lỗi 2A: proximity phải đạt cực đại"
+
+    # Thử nghiệm 2B: Bão hòa tối đa tại raw = 1200 (PCHIP = 13.0cm)
+    mock_raw_1200 = np.full((h, w), 1200.0, dtype=np.float32)
+    mock_norm_1200 = np.full((h, w), 255, dtype=np.uint8)
+    obs_res_1200 = depth_est.detect_obstacle(mock_norm_1200, mock_raw_1200)
+    decision_1200 = budget_mgr.coordinate(obs_res_1200, kin_engine.compute(obs_res_1200, t_now + 0.05))
+    audio_engine.update_state(decision_1200)
     beep_interval = audio_engine.get_current_beep_interval()
 
-    print(f"  [Output] is_active={decision.is_active}, mode='{obs_res.mode_text}', "
-          f"dist_cm={decision.dist_cm:.1f}cm, proximity={decision.proximity:.2f}, beep_interval={beep_interval:.3f}s")
-
-    assert obs_res.mode_text == "CRITICAL_SATURATED", f"LỖI KỊCH BẢN 2: Mode text phải là CRITICAL_SATURATED, nhận '{obs_res.mode_text}'"
-    assert decision.is_active is True, "LỖI KỊCH BẢN 2: Bão hòa thấu kính nhưng không kích hoạt âm thanh!"
-    assert decision.dist_cm <= 15.0, f"LỖI KỊCH BẢN 2: Khoảng cách bão hòa phải <= 15cm, nhận {decision.dist_cm}"
-    assert decision.proximity >= 0.99, "LỖI KỊCH BẢN 2: Proximity phải đạt cực đại (1.0)!"
-    assert beep_interval <= config.BEEP_INTERVAL_MIN + 0.005, f"LỖI KỊCH BẢN 2: Nhịp bíp phải <= 0.08s, nhận {beep_interval}s"
+    print(f"  [Output] Raw 800: dist={obs_res_800.dist_cm:.1f}cm | Raw 1200: dist={obs_res_1200.dist_cm:.1f}cm | beep={beep_interval:.3f}s")
+    assert obs_res_1200.dist_cm <= 15.0, f"Lỗi 2B: raw 1200 phải <= 15cm, nhận {obs_res_1200.dist_cm}"
+    assert beep_interval <= config.BEEP_INTERVAL_MIN + 0.005, f"Lỗi 2B: Nhịp bíp phải <= 0.08s, nhận {beep_interval}s"
     return True
 
 
@@ -184,44 +201,128 @@ def test_scenario_05_specular_white_wall(depth_est, kin_engine, budget_mgr):
     return True
 
 
-def test_scenario_06_ego_motion_walking(budget_mgr):
-    """
-    [Scenario 06] Ego-Motion Walking Compensation (Vật tĩnh trên đường đi vs Người đi ngang):
-    Người dùng bước tới (v_ego = 100 cm/s): Cây cột tĩnh trực diện ở 90cm (TTC_effective = 0.9s)
-    và một vật ở rìa xa 220cm.
-    Assert: Cây cột ở 90cm trước mặt phải giữ quyền phát âm cảnh báo, tuyệt đối không bị câm!
-    """
-    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+def test_scenario_06a_stationary_camera_stationary_obstacle(budget_mgr):
+    """[Scenario 06A] Stationary Camera + Stationary Obstacle (FIX-M04):
+    Cả người dùng và vật cản ở 90cm đều đứng yên.
+    Assert: Vận tốc tiếp cận v_rel xấp xỉ 0, không có hiện tượng false looming,
+    TTC = inf, không kích hoạt báo động khẩn cấp giả CRITICAL do chuyển động."""
     kin_engine = KinematicsEngine()
-
-    obs_pole = SingleObstacle(
-        id=1, x=w // 2, y=h // 2, bbox=(int(w * 0.45), int(h * 0.3), 60, 100),
-        pan=0.0, proximity=dist_to_proximity(90.0), dist_cm=90.0,
+    obs = SingleObstacle(
+        id=1, x=320, y=240, bbox=(280, 200, 80, 80), pan=0.0,
+        proximity=dist_to_proximity(90.0), dist_cm=90.0,
         mode_text="WARNING (~90cm)", uncertainty_score=0.10, is_wall=False
     )
-    obs_side = SingleObstacle(
-        id=2, x=int(w * 0.85), y=h // 2, bbox=(int(w * 0.8), int(h * 0.3), 60, 100),
-        pan=+0.85, proximity=dist_to_proximity(220.0), dist_cm=220.0,
-        mode_text="SAFE (>200cm)", uncertainty_score=0.10, is_wall=False
-    )
+    t0 = 1000.0
+    for i in range(5):
+        t_i = t0 + i * 0.05
+        res_i = ObstacleDetectionResult(
+            x=obs.x, y=obs.y, bbox=obs.bbox, pan=obs.pan,
+            proximity=obs.proximity, dist_cm=90.0,
+            mode_text=obs.mode_text, uncertainty_score=0.10, is_wall=False,
+            sector_dists={"LEFT": 250.0, "CENTER": 90.0, "RIGHT": 250.0},
+            all_obstacles=[obs]
+        )
+        kin_res = kin_engine.compute(res_i, t_i)
 
-    t0 = time.perf_counter()
-    res0 = ObstacleDetectionResult(
-        x=obs_pole.x, y=obs_pole.y, bbox=obs_pole.bbox, pan=obs_pole.pan,
-        proximity=obs_pole.proximity, dist_cm=obs_pole.dist_cm,
-        mode_text=obs_pole.mode_text, uncertainty_score=0.10, is_wall=False,
-        sector_dists={"LEFT": 250.0, "CENTER": 90.0, "RIGHT": 220.0},
-        all_obstacles=[obs_pole, obs_side]
-    )
-    kin_res = kin_engine.compute(res0, t0)
-    decision = budget_mgr.coordinate(res0, kin_res)
+    vz = kin_res.primary_velocity_z
+    ttc = kin_res.primary_ttc
+    print(f"  [Output 6A] vz={vz:.1f}cm/s | ttc={ttc} | threat={kin_res.threat_level}")
+    assert abs(vz) < 20.0, f"LỖI 6A: Vật đứng yên nhưng bị gán vận tốc giả {vz}cm/s!"
+    assert math.isinf(ttc) or ttc > 5.0, f"LỖI 6A: TTC phải là inf khi đứng yên, nhận {ttc}s"
+    assert kin_res.threat_level != "CRITICAL", "LỖI 6A: Vật ở 90cm đứng yên không được báo CRITICAL giả!"
+    return True
 
-    print(f"  [Output] Active Obstacle: #{decision.active_obstacle_id} | Dist: {decision.dist_cm:.1f}cm | "
-          f"TTC: {decision.ttc:.2f}s | Active: {decision.is_active}")
 
-    assert decision.is_active is True, "LỖI KỊCH BẢN 6: Người dùng đang bước tới cây cột 90cm nhưng bị câm (MUTED)!"
-    assert decision.active_obstacle_id == 1, f"LỖI KỊCH BẢN 6: Mục tiêu active phải là cột #1, nhận #{decision.active_obstacle_id}"
-    assert decision.dist_cm == 90.0, "Khoảng cách active phải là 90cm!"
+def test_scenario_06b_stationary_camera_approaching_obstacle(budget_mgr):
+    """[Scenario 06B] Stationary Camera + Approaching Obstacle (FIX-M04):
+    Người dùng đứng yên, nhưng một vật thể đang lao tới (120cm -> 70cm với vz = 100cm/s).
+    Assert: Phát hiện vận tốc dương, TTC hữu hạn (< 2.0s), cảnh báo nguy cơ va chạm."""
+    kin_engine = KinematicsEngine()
+    t0 = 1000.0
+    dt = 0.05
+    vz_real = 100.0
+    kin_res = None
+    for i in range(8):
+        t_i = t0 + i * dt
+        d_i = 120.0 - vz_real * (i * dt)
+        obs = SingleObstacle(
+            id=1, x=320, y=240, bbox=(280, 200, 80, 80), pan=0.0,
+            proximity=dist_to_proximity(d_i), dist_cm=d_i,
+            mode_text="APPROACHING", uncertainty_score=0.10, is_wall=False
+        )
+        res_i = ObstacleDetectionResult(
+            x=obs.x, y=obs.y, bbox=obs.bbox, pan=obs.pan,
+            proximity=obs.proximity, dist_cm=d_i,
+            mode_text=obs.mode_text, uncertainty_score=0.10, is_wall=False,
+            sector_dists={"LEFT": 250.0, "CENTER": d_i, "RIGHT": 250.0},
+            all_obstacles=[obs]
+        )
+        kin_res = kin_engine.compute(res_i, t_i)
+
+    print(f"  [Output 6B] vz={kin_res.primary_velocity_z:.1f}cm/s | ttc={kin_res.primary_ttc:.2f}s | threat={kin_res.threat_level}")
+    assert kin_res.primary_velocity_z >= 50.0, f"LỖI 6B: Vận tốc tiếp cận phải >= 50cm/s, nhận {kin_res.primary_velocity_z}"
+    assert kin_res.primary_ttc < 2.0, f"LỖI 6B: TTC phải < 2.0s khi vật đang lao tới, nhận {kin_res.primary_ttc}"
+    assert kin_res.threat_level in ["WARNING", "CRITICAL"], f"LỖI 6B: Phải phát cảnh báo cho vật đang lao tới!"
+    return True
+
+
+def test_scenario_06c_moving_camera_stationary_obstacle(budget_mgr):
+    """[Scenario 06C] Moving Camera + Stationary Obstacle (FIX-M04):
+    Người dùng bước tới cây cột ở cự ly 120cm với tốc độ 80cm/s.
+    Assert: Đo chính xác vận tốc tương đối v_rel mà không gán nhãn sai vật thể là tự di chuyển."""
+    kin_engine = KinematicsEngine()
+    t0 = 1000.0
+    dt = 0.05
+    for i in range(8):
+        t_i = t0 + i * dt
+        d_i = 120.0 - 80.0 * (i * dt)
+        obs = SingleObstacle(
+            id=1, x=320, y=240, bbox=(280, 200, 80, 80), pan=0.0,
+            proximity=dist_to_proximity(d_i), dist_cm=d_i,
+            mode_text="OBSTACLE", uncertainty_score=0.10, is_wall=False
+        )
+        res_i = ObstacleDetectionResult(
+            x=obs.x, y=obs.y, bbox=obs.bbox, pan=obs.pan,
+            proximity=obs.proximity, dist_cm=d_i,
+            mode_text=obs.mode_text, uncertainty_score=0.10, is_wall=False,
+            sector_dists={"LEFT": 250.0, "CENTER": d_i, "RIGHT": 250.0},
+            all_obstacles=[obs]
+        )
+        kin_res = kin_engine.compute(res_i, t_i)
+
+    print(f"  [Output 6C] v_rel={kin_res.primary_velocity_z:.1f}cm/s | ttc={kin_res.primary_ttc:.2f}s")
+    assert kin_res.primary_velocity_z >= 40.0, f"LỖI 6C: Phải ghi nhận vận tốc tiếp cận tương đối, nhận {kin_res.primary_velocity_z}"
+    assert kin_res.primary_ttc < 3.0, "LỖI 6C: TTC tiếp cận phải hữu hạn"
+    return True
+
+
+def test_scenario_06d_rotating_camera_stationary_obstacle(budget_mgr):
+    """[Scenario 06D] Rotating Camera + Stationary Obstacle (FIX-M04):
+    Camera xoay ngang (pan dịch chuyển mạnh từ -0.50 đến +0.50), khoảng cách Z giữ nguyên 150cm.
+    Assert: Không bị diễn giải sai thành vật thể lao tới (false approach/looming), TTC giữ inf."""
+    kin_engine = KinematicsEngine()
+    t0 = 1000.0
+    dt = 0.05
+    for i in range(6):
+        t_i = t0 + i * dt
+        pan_i = -0.50 + 0.20 * i
+        obs = SingleObstacle(
+            id=1, x=int(320 + pan_i * 200), y=240, bbox=(280, 200, 80, 80), pan=pan_i,
+            proximity=dist_to_proximity(150.0), dist_cm=150.0,
+            mode_text="OBSTACLE", uncertainty_score=0.10, is_wall=False
+        )
+        res_i = ObstacleDetectionResult(
+            x=obs.x, y=obs.y, bbox=obs.bbox, pan=pan_i,
+            proximity=obs.proximity, dist_cm=150.0,
+            mode_text=obs.mode_text, uncertainty_score=0.10, is_wall=False,
+            sector_dists={"LEFT": 150.0, "CENTER": 150.0, "RIGHT": 150.0},
+            all_obstacles=[obs]
+        )
+        kin_res = kin_engine.compute(res_i, t_i)
+
+    print(f"  [Output 6D] vz={kin_res.primary_velocity_z:.1f}cm/s | ttc={kin_res.primary_ttc}")
+    assert abs(kin_res.primary_velocity_z) < 25.0, f"LỖI 6D: Xoay camera tạo vận tốc z giả {kin_res.primary_velocity_z}cm/s!"
+    assert math.isinf(kin_res.primary_ttc) or kin_res.primary_ttc > 5.0, "LỖI 6D: Không được tạo TTC giả khi chỉ xoay camera"
     return True
 
 
@@ -336,7 +437,11 @@ def test_scenario_09_sector_p20_rejection(depth_est, kin_engine, budget_mgr):
     [Scenario 09] Sector Narrow-Obstacle Rejection (Phân vị P20 chống lọt cột):
     Sector Giữa bị chặn. Sector Phải có 70% diện tích xa 300cm (median = 300cm), nhưng 30% bị cột 55cm chắn.
     Sector Trái thông thoáng đều ở 180cm.
-    Assert: Nhờ P20, hệ thống nhận ra Sector Phải bị vướng cột và chỉ dẫn né sang LEFT.
+    FIX-M01:
+    - Vật cản bên Phải được phát hiện rõ ràng.
+    - Hướng mối nguy được định vị chính xác là RIGHT hoặc CENTER.
+    - KHÔNG phát lệnh điều hướng né tự phát (safe_direction != 'LEFT').
+    - Âm thanh cảnh báo khi phát phải định vị mối nguy sang bên Phải (pan >= 0.0).
     """
     h, w = config.CAM_HEIGHT, config.CAM_WIDTH
     mock_raw = np.full((h, w), 175.0, dtype=np.float32)  # Nền xa ~300cm
@@ -360,14 +465,21 @@ def test_scenario_09_sector_p20_rejection(depth_est, kin_engine, budget_mgr):
     decision = budget_mgr.coordinate(obs_res, kin_res)
 
     print(f"  [Output] Sector Dists: Left={obs_res.sector_dists['LEFT']:.1f}cm, Right={obs_res.sector_dists['RIGHT']:.1f}cm")
-    print(f"  [Output] Safe Direction: '{kin_res.safe_direction}', Guidance: '{kin_res.guidance_state}'")
+    print(f"  [Output] Hazard Dir: '{getattr(kin_res, 'hazard_direction', 'NONE')}', Safe Dir: '{kin_res.safe_direction}', Pan: {decision.pan:+.2f}")
 
     assert obs_res.sector_dists["RIGHT"] <= 70.0, (
         f"LỖI KỊCH BẢN 9: Phân vị P20 thất bại! Cự ly Sector Phải nhận {obs_res.sector_dists['RIGHT']}cm thay vì <= 70cm!"
     )
-    assert kin_res.safe_direction == "LEFT", (
-        f"LỖI KỊCH BẢN 9: Hệ thống phải chỉ dẫn né sang LEFT, nhận '{kin_res.safe_direction}'!"
+    # FIX-M01: Không được ra lệnh né tự phát sang LEFT
+    assert kin_res.safe_direction != "LEFT", (
+        f"LỖI KỊCH BẢN 9 (FIX-M01): Nghiêm cấm ra lệnh né tự phát sang LEFT khi chưa kiểm chứng hành lang!"
     )
+    assert getattr(kin_res, "hazard_direction", "") in ["RIGHT", "CENTER"], (
+        f"LỖI KỊCH BẢN 9: Hướng mối nguy phải ghi nhận là RIGHT/CENTER, nhận '{getattr(kin_res, 'hazard_direction', '')}'"
+    )
+    # Âm thanh định vị trực tiếp mối nguy sang bên Phải nếu phát âm thanh
+    if decision.is_active and getattr(kin_res, "hazard_direction", "") == "RIGHT":
+        assert decision.pan >= 0.0, f"LỖI KỊCH BẢN 9: Âm thanh cảnh báo vật cản bên phải phải có pan >= 0.0, nhận {decision.pan}"
     return True
 
 
@@ -486,6 +598,40 @@ def test_scenario_12_camera_watchdog_hang(audio_engine):
     assert max_amp > 0.0, "Watchdog camera treo phải phát âm báo lỗi, không được im lặng!"
     audio_engine.set_fault_mode("NONE")
     print(f"  [Output] Camera Freeze Watchdog: Kích hoạt SYSTEM_FAULT chính xác (max_amp={max_amp:.4f})")
+    return True
+
+
+def test_scenario_13_sensor_fault_and_invalid_depth(depth_est, kin_engine, budget_mgr):
+    """
+    [Scenario 13] Sensor Fault & Invalid Depth Resistance (FIX-M05):
+    Kiểm tra hệ thống khi nhận input độc hại:
+    - Mảng chứa > 15% NaN/Inf
+    - Mảng rỗng / sai chiều
+    - Cự ly ngoài miền
+    Assert: Trả về trạng thái lỗi tường minh (is_valid == False, SENSOR_FAULT),
+    TUYỆT ĐỐI KHÔNG âm thầm biến thành cự ly an toàn 350cm.
+    """
+    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+
+    # 1. Mảng chứa 50% NaN
+    poisoned_raw = np.full((h, w), 250.0, dtype=np.float32)
+    poisoned_raw[:h // 2, :] = float("nan")
+    poisoned_norm = np.full((h, w), 50, dtype=np.uint8)
+
+    res_nan = depth_est.detect_obstacle(poisoned_norm, poisoned_raw)
+    print(f"  [Output 13A NaN] is_valid={res_nan.is_valid}, mode='{res_nan.mode_text}', dist={res_nan.dist_cm}")
+    assert res_nan.is_valid is False, "LỖI 13A: Mảng >15% NaN phải trả về is_valid=False!"
+    assert "SENSOR_FAULT" in res_nan.mode_text, f"LỖI 13A: Mode text phải chứa SENSOR_FAULT, nhận '{res_nan.mode_text}'"
+    assert math.isnan(res_nan.dist_cm), f"LỖI 13A: dist_cm không được là số hữu hạn khi lỗi cảm biến, nhận {res_nan.dist_cm}"
+
+    # 2. Hàm compute_metric_distance_cm với NaN
+    nan_dist = compute_metric_distance_cm(float("nan"))
+    assert math.isnan(nan_dist), f"LỖI 13B: compute_metric_distance_cm(nan) phải trả về nan, nhận {nan_dist}"
+
+    # 3. Mảng rỗng
+    empty_res = depth_est.detect_obstacle(np.zeros((0, 0), dtype=np.uint8), np.zeros((0, 0), dtype=np.float32))
+    assert empty_res.is_valid is False, "LỖI 13C: Mảng rỗng phải trả về is_valid=False!"
+    assert "SENSOR_FAULT" in empty_res.mode_text, "LỖI 13C: Mode text phải là SENSOR_FAULT!"
     return True
 
 
@@ -616,13 +762,17 @@ def main():
         ("[Scenario 03] Thin Obstacle Survival (2% Area)", lambda: test_scenario_03_thin_obstacle_survival(depth_est, kin_engine, budget_mgr)),
         ("[Scenario 04] Drop-Off & Overhead Hazard", lambda: test_scenario_04_dropoff_and_overhead(depth_est)),
         ("[Scenario 05] Specular White Wall Uncertainty", lambda: test_scenario_05_specular_white_wall(depth_est, kin_engine, budget_mgr)),
-        ("[Scenario 06] Ego-Motion Walking Compensation", lambda: test_scenario_06_ego_motion_walking(budget_mgr)),
+        ("[Scenario 06A] Stat Camera + Stat Obstacle", lambda: test_scenario_06a_stationary_camera_stationary_obstacle(budget_mgr)),
+        ("[Scenario 06B] Stat Camera + Approaching Obj", lambda: test_scenario_06b_stationary_camera_approaching_obstacle(budget_mgr)),
+        ("[Scenario 06C] Moving Camera + Stat Obstacle", lambda: test_scenario_06c_moving_camera_stationary_obstacle(budget_mgr)),
+        ("[Scenario 06D] Rotating Camera + Stat Obstacle", lambda: test_scenario_06d_rotating_camera_stationary_obstacle(budget_mgr)),
         ("[Scenario 07] CRITICAL Preemption (Hysteresis Bypass)", lambda: test_scenario_07_critical_preemption(budget_mgr)),
         ("[Scenario 08] Anti-Thrashing Stability", lambda: test_scenario_08_anti_thrashing_and_hysteresis(budget_mgr)),
         ("[Scenario 09] Sector P20 Narrow-Obstacle Rejection", lambda: test_scenario_09_sector_p20_rejection(depth_est, kin_engine, budget_mgr)),
         ("[Scenario 10] False Evasion Immunity", lambda: test_scenario_10_false_evasion_immunity(budget_mgr)),
         ("[Scenario 11] Zero-Lux Flash & AE Blanking", lambda: test_scenario_11_zero_lux_auto_flash(audio_engine)),
         ("[Scenario 12] Camera Freeze Watchdog", lambda: test_scenario_12_camera_watchdog_hang(audio_engine)),
+        ("[Scenario 13] Sensor Fault & Invalid Depth", lambda: test_scenario_13_sensor_fault_and_invalid_depth(depth_est, kin_engine, budget_mgr)),
     ]
 
     for name, test_func in scenarios:

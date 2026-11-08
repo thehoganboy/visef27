@@ -187,16 +187,12 @@ final class AuditoryBudgetManager {
             }
         }
 
-        // ── 3. Panning Guidance ───────────────────────────────────────────────
+        // ── 3. Direct Spatial Hazard Localization (FIX-M01 & TASK 01A-2) ──────
         let outputPan: Float
         if safeDir == "STOP" {
             outputPan = 0.0
-        } else if threatLevel == "CRITICAL" || winnerTtc <= Config.ttcCritical {
-            outputPan = (safeDir == "LEFT") ? -0.75 : 0.75
-        } else if threatLevel == "WARNING" {
-            outputPan = (safeDir == "LEFT") ? -0.65 : 0.65
         } else {
-            outputPan = winnerObs.pan
+            outputPan = max(-1.0, min(1.0, winnerObs.pan))
         }
 
         // ── 4. Closed-Loop Evasion Volume Hysteresis ──────────────────────────

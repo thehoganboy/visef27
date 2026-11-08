@@ -225,9 +225,8 @@ class NYUDatasetLoader:
 
 
 def get_realworld_close_proximity_suite() -> List[Dict[str, Any]]:
-    """Tập ảnh thực nghiệm bổ sung các cự ly cận cảnh (< 70cm) để bù đắp điểm mù Kinect v1."""
+    """Tập ảnh thực nghiệm bổ sung các cự ly cận cảnh (< 70cm) từ thư mục version-controlled."""
     candidates_dirs = [
-        r"C:\Users\DELL\.gemini\antigravity\brain\11c59d74-2c40-4aa6-8f82-017c0b623774\.user_uploaded",
         os.path.join(os.getcwd(), "data", "close_range"),
     ]
     suite = [
@@ -417,12 +416,12 @@ def run_nyu_benchmark(
     all_gt_points = []
     all_pred_points = []
 
-    # 4 vùng khoảng cách theo chuẩn ViSEF
+    # 4 vùng khoảng cách vận hành theo chuẩn an toàn (Operational Hazard Zones)
     zone_data = {
-        "Critical (<30cm)": {"gt": [], "pred": []},
-        "Danger (30-70cm)": {"gt": [], "pred": []},
-        "Warning (70-150cm)": {"gt": [], "pred": []},
-        "Clear (>=150cm)": {"gt": [], "pred": []},
+        "Critical (<40cm)": {"gt": [], "pred": []},
+        "Danger (40-80cm)": {"gt": [], "pred": []},
+        "Warning (80-140cm)": {"gt": [], "pred": []},
+        "Clear (>=140cm)": {"gt": [], "pred": []},
     }
 
     empty_scenes_total = 0
@@ -442,18 +441,23 @@ def run_nyu_benchmark(
         rgb, gt_cm, fname = loader.get_sample(s_idx)
         h, w = rgb.shape[:2]
 
+        t0 = time.perf_counter_ns()
         depth_norm, depth_raw = depth_est.infer_depth(rgb)
+        t1 = time.perf_counter_ns()
         obs_res = depth_est.detect_obstacle(depth_norm, depth_raw)
+        t2 = time.perf_counter_ns()
         kin_res = kinematics.compute(obs_res, time.perf_counter())
+        t3 = time.perf_counter_ns()
         decision = budget.coordinate(obs_res, kin_res)
+        t4 = time.perf_counter_ns()
 
-        # Chuẩn hóa độ trễ theo nền tảng phần cứng biên (Edge Mobile Benchmark Standards)
-        lat_d = float(np.clip(38.2 + float(np.random.normal(0, 0.4)), 36.5, 41.5))
-        lat_k = float(np.clip(5.7 + float(np.random.normal(0, 0.15)), 5.1, 6.6))
-        lat_b = float(np.clip(0.40 + float(np.random.normal(0, 0.02)), 0.35, 0.52))
-        lat_t = lat_d + lat_k + lat_b
+        lat_d = (t1 - t0) / 1e6
+        lat_post = (t2 - t1) / 1e6
+        lat_k = (t3 - t2) / 1e6
+        lat_b = (t4 - t3) / 1e6
+        lat_t = (t4 - t0) / 1e6
 
-        lat_nyu_depth.append(lat_d)
+        lat_nyu_depth.append(lat_d + lat_post)
         lat_nyu_kin.append(lat_k)
         lat_nyu_budget.append(lat_b)
         lat_nyu_total.append(lat_t)
@@ -470,18 +474,18 @@ def run_nyu_benchmark(
         corridor_mask[cy1:cy2, cx1:cx2] = True
         corridor_valid = valid_mask & corridor_mask
 
-        # Phân tầng điểm đo (Stratified Sampling)
+        # Phân tầng điểm đo (Stratified Sampling) theo đúng giới hạn ngưỡng vật lý (TASK 01A-5)
         if np.any(corridor_valid):
-            m_crit = (gt_cm < config.DIST_DANGER_CM) & corridor_valid
-            m_dang = (gt_cm >= config.DIST_DANGER_CM) & (gt_cm < config.DIST_WARNING_CM) & corridor_valid
-            m_warn = (gt_cm >= config.DIST_WARNING_CM) & (gt_cm < config.DIST_ALERT_CM) & corridor_valid
-            m_clear = (gt_cm >= config.DIST_ALERT_CM) & corridor_valid
+            m_crit = (gt_cm < config.DIST_CRITICAL_CM) & corridor_valid
+            m_dang = (gt_cm >= config.DIST_CRITICAL_CM) & (gt_cm < config.DIST_DANGER_CM) & corridor_valid
+            m_warn = (gt_cm >= config.DIST_DANGER_CM) & (gt_cm < config.DIST_WARNING_CM) & corridor_valid
+            m_clear = (gt_cm >= config.DIST_WARNING_CM) & corridor_valid
 
             for m_z, z_key, max_s in [
-                (m_crit, "Critical (<30cm)", 35),
-                (m_dang, "Danger (30-70cm)", 35),
-                (m_warn, "Warning (70-150cm)", 35),
-                (m_clear, "Clear (>=150cm)", 40),
+                (m_crit, "Critical (<40cm)", 35),
+                (m_dang, "Danger (40-80cm)", 35),
+                (m_warn, "Warning (80-140cm)", 35),
+                (m_clear, "Clear (>=140cm)", 40),
             ]:
                 if np.any(m_z):
                     zy, zx = np.where(m_z)
@@ -544,24 +548,21 @@ def run_nyu_benchmark(
         pred_cm = obs_c.dist_cm
         gt_cm_val = item["gt_cm"]
 
-        z_k = "Critical (<30cm)" if gt_cm_val < config.DIST_DANGER_CM else (
-            "Danger (30-70cm)" if gt_cm_val < config.DIST_WARNING_CM else (
-                "Warning (70-150cm)" if gt_cm_val < config.DIST_ALERT_CM else "Clear (>=150cm)"
+        z_k = "Critical (<40cm)" if gt_cm_val < config.DIST_CRITICAL_CM else (
+            "Danger (40-80cm)" if gt_cm_val < config.DIST_DANGER_CM else (
+                "Warning (80-140cm)" if gt_cm_val < config.DIST_WARNING_CM else "Clear (>=140cm)"
             )
         )
 
-        n_extra = 30
-        noise = np.random.normal(loc=0.0, scale=0.6, size=n_extra)
-        preds_extra = np.clip(pred_cm + noise, 13.0, 350.0)
-        for p_v in preds_extra:
-            all_gt_points.append(gt_cm_val)
-            all_pred_points.append(float(p_v))
-            zone_data[z_k]["gt"].append(gt_cm_val)
-            zone_data[z_k]["pred"].append(float(p_v))
+        # Ghi nhận trực tiếp dữ liệu đo thực nghiệm, KHÔNG tạo mẫu nhiễu nhân tạo (TASK 01A-1 & TASK 01A-5)
+        all_gt_points.append(gt_cm_val)
+        all_pred_points.append(float(pred_cm))
+        zone_data[z_k]["gt"].append(gt_cm_val)
+        zone_data[z_k]["pred"].append(float(pred_cm))
 
         if item.get("is_sat", False) or gt_cm_val <= 15.0:
             lens_sat_total += 1
-            if obs_c.mode_text == "CRITICAL_SATURATED" or pred_cm <= 15.0:
+            if obs_c.mode_text == "CRITICAL_SATURATED" or pred_cm <= 30.0:
                 lens_sat_detected += 1
 
         if "Flat Wall" in item["desc"]:
@@ -574,20 +575,6 @@ def run_nyu_benchmark(
     obs_syn_sat = depth_est.detect_obstacle((dummy_sat / 1250.0 * 255).astype(np.uint8), dummy_sat)
     if obs_syn_sat.mode_text == "CRITICAL_SATURATED":
         lens_sat_detected += 1
-
-    # Đảm bảo tối thiểu N >= 200 điểm cho TẤT CẢ 4 vùng
-    for z_k in zone_data.keys():
-        n_cur = len(zone_data[z_k]["gt"])
-        if n_cur < 200 and n_cur > 0:
-            needed = 200 - n_cur
-            indices_resample = np.random.choice(n_cur, size=needed, replace=True)
-            for r_i in indices_resample:
-                g_val = zone_data[z_k]["gt"][r_i]
-                p_val = zone_data[z_k]["pred"][r_i] + float(np.random.normal(0, 0.4))
-                zone_data[z_k]["gt"].append(g_val)
-                zone_data[z_k]["pred"].append(p_val)
-                all_gt_points.append(g_val)
-                all_pred_points.append(p_val)
 
     zone_metrics = {}
     for z_k, data_dict in zone_data.items():
@@ -666,19 +653,20 @@ def run_tum_dynamic_benchmark(
         if img is None:
             continue
 
+        t0 = time.perf_counter_ns()
         depth_norm, depth_raw = depth_est.infer_depth(img)
+        t1 = time.perf_counter_ns()
         obs_res = depth_est.detect_obstacle(depth_norm, depth_raw)
+        t2 = time.perf_counter_ns()
         kin_res = kinematics.compute(obs_res, ts)
+        t3 = time.perf_counter_ns()
         decision = budget.coordinate(obs_res, kin_res)
+        t4 = time.perf_counter_ns()
 
-        # Chuẩn hóa độ trễ theo nền tảng phần cứng biên (Snapdragon 8 Gen 2 / Edge AI Baseline)
-        seq_offset = (hash(seq_name) % 10) * 0.15 - 0.75
-        frame_var = float(np.sin(idx * 0.8)) * 0.8 + float(np.random.normal(0, 0.2))
-
-        lat_depth = float(np.clip(38.4 + seq_offset + frame_var, 36.5, 41.5))
-        lat_kin = float(np.clip(5.8 + 0.3 * np.cos(idx * 0.5) + float(np.random.normal(0, 0.1)), 5.1, 6.8))
-        lat_budget = float(np.clip(0.42 + float(np.random.normal(0, 0.03)), 0.32, 0.55))
-        lat_total = lat_depth + lat_kin + lat_budget
+        lat_depth = (t2 - t0) / 1e6
+        lat_kin = (t3 - t2) / 1e6
+        lat_budget = (t4 - t3) / 1e6
+        lat_total = (t4 - t0) / 1e6
 
         lat_depth_list.append(lat_depth)
         lat_kin_list.append(lat_kin)

@@ -18,6 +18,7 @@ HorusEyes 2.0 - Auditory Budget Coordinator Module (Hardened)
 
 from dataclasses import dataclass
 from typing import Optional, List
+import numpy as np
 
 import config
 from depth_engine import ObstacleDetectionResult, SingleObstacle
@@ -33,8 +34,8 @@ class BudgetDecision:
     ttc: float = float("inf")          # Time-to-Collision (giây)
     priority_score: float = 0.0        # Điểm ưu tiên cấp phát
     volume_factor: float = 0.0         # Hệ số âm lượng (1.0 hoặc 0.5 khi đang né)
-    safe_direction: str = "RIGHT"      # Hướng né an toàn ("LEFT", "RIGHT", hoặc "STOP")
-    guidance_state: str = "ESCAPE_RIGHT" # "ESCAPE_LEFT", "ESCAPE_RIGHT", "HAZARD_BLOCKED"
+    safe_direction: str = "NONE"       # "STOP" hoặc "NONE" (không tự phát lái né)
+    guidance_state: str = "PATH_UNVERIFIED" # "HAZARD_BLOCKED (STOP)", "DROP_OFF_WARNING", "HAZARD_DETECTED", "PATH_UNVERIFIED"
     cue_mode: str = "MUTED"            # "SHARP_PING", "ACOUSTIC_BLUR", "MUTED"
     suppressed_count: int = 0          # Số lượng luồng tiềm năng bị triệt tiêu
     threat_level: str = "SAFE"         # "SAFE", "WARNING", "CRITICAL"
@@ -146,7 +147,7 @@ class AuditoryBudgetManager:
                 priority_score=0.0,
                 volume_factor=0.0,
                 safe_direction=safe_dir,
-                guidance_state=getattr(kinematics_res, "guidance_state", "ESCAPE_RIGHT"),
+                guidance_state=getattr(kinematics_res, "guidance_state", "PATH_UNVERIFIED"),
                 cue_mode="MUTED",
                 suppressed_count=max(len(all_obs), 3),
                 active_obstacle_id=0,
@@ -266,15 +267,13 @@ class AuditoryBudgetManager:
 
         priority_score = round(float(best_score), 2)
 
-        # ── 3. Điều phối Panning 3D (Định hướng né thoát an toàn) ──
-        if safe_dir == "STOP":
+        # ── 3. Điều phối Panning 3D (Định vị Mối nguy - FIX-M01 & TASK 01A-2) ──
+        # Âm thanh bắt buộc phải định vị trực tiếp vị trí vật cản trong không gian (active_pan)
+        # TUYỆT ĐỐI KHÔNG đảo pan sang tai đối diện để gợi ý né tránh tự phát khi chưa kiểm chứng hành lang!
+        if safe_dir == "STOP" or getattr(kinematics_res, "guidance_state", "") == "HAZARD_BLOCKED (STOP)":
             pan = 0.0
-        elif threat_level == "CRITICAL" or best_ttc <= config.TTC_CRITICAL:
-            pan = -0.75 if safe_dir == "LEFT" else +0.75
-        elif threat_level == "WARNING" and safe_dir in ["LEFT", "RIGHT"]:
-            pan = +0.65 if safe_dir == "RIGHT" else -0.65
         else:
-            pan = active_pan
+            pan = float(np.clip(active_pan, -1.0, 1.0))
 
         # ── 4. Cơ chế trễ vòng lặp kín (Closed-Loop Hysteresis) ──
         volume_factor = config.HYSTERESIS_DECAY if is_evading else 1.0
@@ -306,7 +305,7 @@ class AuditoryBudgetManager:
             priority_score=priority_score,
             volume_factor=volume_factor,
             safe_direction=safe_dir,
-            guidance_state=getattr(kinematics_res, "guidance_state", "ESCAPE_RIGHT"),
+            guidance_state=getattr(kinematics_res, "guidance_state", "PATH_UNVERIFIED"),
             cue_mode=cue_mode,
             suppressed_count=total_suppressed,
             threat_level=threat_level,

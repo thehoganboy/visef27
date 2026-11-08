@@ -147,17 +147,12 @@ class AuditoryBudgetManager {
             }
         }
 
-        // ── 4. Điều phối Panning 3D (Định hướng né thoát an toàn) ──
-        val pan = when {
-            safeDir == "STOP" -> 0.0f
-            threatLevel == "CRITICAL" || winnerTtc <= Config.TTC_CRITICAL -> {
-                if (safeDir == "LEFT") -0.75f else +0.75f
-            }
-            threatLevel == "WARNING" && safeDir in listOf("LEFT", "RIGHT") -> {
-                if (safeDir == "RIGHT") +0.65f else -0.65f
-            }
-            else -> winnerObs.pan
-        }.coerceIn(-1.0f, 1.0f)
+        // ── 4. Điều phối Panning 3D (Định vị Mối nguy Trực tiếp - FIX-M01 & TASK 01A-2) ──
+        val pan = if (safeDir == "STOP" || kinRes.guidanceState.contains("BLOCKED")) {
+            0.0f
+        } else {
+            winnerObs.pan.coerceIn(-1.0f, 1.0f)
+        }
 
         // ── 5. Mã hóa âm học theo độ bất định AI ──
         val cueMode = if (winnerObs.uncertaintyScore >= Config.UNCERTAINTY_BLUR_THRESHOLD) {

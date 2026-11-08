@@ -90,11 +90,12 @@ struct ContentView: View {
                                     .font(.system(size: 12, weight: .bold))
                                     .foregroundColor(bannerColor)
                                 if isSafe {
-                                    Text("ĐƯỜNG THOÁNG (>2.5m)")
+                                    Text("ĐƯỜNG THOÁNG (Chưa kiểm chứng)")
                                         .font(.system(size: 12, weight: .black, design: .rounded))
                                         .foregroundColor(.white)
                                 } else {
-                                    Text("\(Int(res.distCM))cm • NÉ \(safeDirection == "LEFT" ? "TRÁI ◄" : "PHẢI ►")")
+                                    let dirLabel = res.pan < -0.33 ? "BÊN TRÁI ◄" : (res.pan > 0.33 ? "BÊN PHẢI ►" : "TRỰC DIỆN ▲")
+                                    Text("\(Int(res.distCM))cm • CẢNH BÁO \(dirLabel)")
                                         .font(.system(size: 12, weight: .black, design: .rounded))
                                         .foregroundColor(bannerColor)
                                 }

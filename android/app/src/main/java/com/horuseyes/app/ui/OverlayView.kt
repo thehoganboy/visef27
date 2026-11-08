@@ -388,25 +388,24 @@ class OverlayView @JvmOverloads constructor(
             canvas.drawRoundRect(stopRect, 32f, 32f, guidanceBorderPaint)
             guidanceTextPaint.color = stopTextColor
             canvas.drawText("[STOP - PATH BLOCKED]", midX, stopY + 43f, guidanceTextPaint)
-        } else if (kRes.threatLevel != "SAFE" && kRes.safeDirection in listOf("LEFT", "RIGHT")) {
+        } else if (kRes.threatLevel != "SAFE") {
             val guideW = 460f
             val guideH = 56f
             val guideY = viewH - 240f
             val midX = viewW * 0.5f
 
-            val escText = if (kRes.safeDirection == "RIGHT") {
-                "HƯỚNG NÉ AN TOÀN: SANG PHẢI →"
-            } else {
-                "← HƯỚNG NÉ AN TOÀN: SANG TRÁI"
-            }
+            val hazardDir = if (dRes.pan < -0.33f) "BÊN TRÁI" else if (dRes.pan > 0.33f) "BÊN PHẢI" else "TRỰC DIỆN"
+            val distCmInt = dRes.distCm.toInt()
+            val hazardText = "MỐI NGUY: $hazardDir (${distCmInt}cm)"
 
             val escRect = RectF((viewW - guideW) / 2f, guideY, (viewW + guideW) / 2f, guideY + guideH)
             canvas.drawRoundRect(escRect, 28f, 28f, guidanceBgPaint)
-            guidanceBorderPaint.color = Color.parseColor("#00E676")
+            val bannerColor = if (kRes.threatLevel == "CRITICAL") Color.parseColor("#FF1744") else Color.parseColor("#FFA000")
+            guidanceBorderPaint.color = bannerColor
             guidanceBorderPaint.strokeWidth = 3f
             canvas.drawRoundRect(escRect, 28f, 28f, guidanceBorderPaint)
-            guidanceTextPaint.color = Color.parseColor("#00E676")
-            canvas.drawText(escText, midX, guideY + 39f, guidanceTextPaint)
+            guidanceTextPaint.color = bannerColor
+            canvas.drawText(hazardText, midX, guideY + 39f, guidanceTextPaint)
         }
     }
 

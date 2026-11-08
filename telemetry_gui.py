@@ -16,6 +16,7 @@ Render giao diện telemetry HUD side-by-side thời gian thực (RGB + Depth He
 ================================================================================
 """
 
+import math
 import time
 from typing import Optional, Dict
 import cv2
@@ -128,7 +129,7 @@ class TelemetryHUD:
         l_score = float(sec_scores.get("LEFT", 0.50))
         r_score = float(sec_scores.get("RIGHT", 0.50))
         guidance_state = getattr(kinematics_res, "guidance_state", "")
-        is_hazard_blocked = (guidance_state == "HAZARD_BLOCKED" or kinematics_res.safe_direction == "STOP")
+        is_hazard_blocked = ("BLOCKED" in guidance_state or kinematics_res.safe_direction == "STOP")
 
         # Màu sắc trạng thái theo mức độ nguy cơ
         dist_cm = obs_res.dist_cm
@@ -212,11 +213,11 @@ class TelemetryHUD:
                 arrow_len = int(np.clip(abs(pvz) * 0.7, 20, 70))
                 cv2.arrowedLine(rgb_panel, (ox, oy), (ox, oy - arrow_len), (255, 180, 0), 2, tipLength=0.35)
 
-        # ── Mũi tên dẫn hướng né thoát an toàn / Cảnh báo Deadlock ──
+        # ── Banner cảnh báo mối nguy không gian (Loại bỏ chỉ định né tránh tự phát - TASK 01A-2) ──
         if is_hazard_blocked:
             flash_on = (int(time.time() * 4) % 2) == 0
             banner_y = int(h * 0.52)
-            banner_text = "[STOP - PATH BLOCKED]"
+            banner_text = "[STOP - ALL PATHS BLOCKED]"
             (bw_txt, bh_txt), _ = cv2.getTextSize(banner_text, cv2.FONT_HERSHEY_SIMPLEX, 0.72, 2)
             bx_txt = w // 2 - bw_txt // 2
 
@@ -231,23 +232,18 @@ class TelemetryHUD:
                 cv2.putText(rgb_panel, banner_text, (bx_txt, banner_y),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 0, 180), 2, cv2.LINE_AA)
         elif kinematics_res.threat_level != "SAFE":
-            safe_dir = kinematics_res.safe_direction
-            arrow_color = (0, 255, 100)
+            hazard_dir = getattr(kinematics_res, "hazard_direction", "CENTER")
+            dist_val = int(obs_res.dist_cm) if not math.isnan(obs_res.dist_cm) else 0
+            banner_text = f"HAZARD DETECTED: {hazard_dir} ({dist_val}cm)"
+            banner_color = (0, 165, 255) if kinematics_res.threat_level == "WARNING" else (0, 0, 255)
             arrow_y = int(h * 0.52)
-            if safe_dir == "RIGHT":
-                esc_text = "SAFE ESCAPE: -> RIGHT"
-                cv2.arrowedLine(rgb_panel, (w // 2 - 35, arrow_y), (w // 2 + 55, arrow_y), arrow_color, 3, tipLength=0.3)
-            else:
-                esc_text = "SAFE ESCAPE: <- LEFT"
-                cv2.arrowedLine(rgb_panel, (w // 2 + 35, arrow_y), (w // 2 - 55, arrow_y), arrow_color, 3, tipLength=0.3)
-
-            (ew, eh), _ = cv2.getTextSize(esc_text, cv2.FONT_HERSHEY_SIMPLEX, 0.50, 2)
-            cv2.rectangle(rgb_panel, (w // 2 - ew // 2 - 8, arrow_y + 12),
-                          (w // 2 + ew // 2 + 8, arrow_y + 36), (15, 20, 30), -1)
-            cv2.rectangle(rgb_panel, (w // 2 - ew // 2 - 8, arrow_y + 12),
-                          (w // 2 + ew // 2 + 8, arrow_y + 36), arrow_color, 1)
-            cv2.putText(rgb_panel, esc_text, (w // 2 - ew // 2, arrow_y + 29),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.50, arrow_color, 2, cv2.LINE_AA)
+            (ew, eh), _ = cv2.getTextSize(banner_text, cv2.FONT_HERSHEY_SIMPLEX, 0.58, 2)
+            cv2.rectangle(rgb_panel, (w // 2 - ew // 2 - 10, arrow_y - eh - 8),
+                          (w // 2 + ew // 2 + 10, arrow_y + 8), (15, 20, 30), -1)
+            cv2.rectangle(rgb_panel, (w // 2 - ew // 2 - 10, arrow_y - eh - 8),
+                          (w // 2 + ew // 2 + 10, arrow_y + 8), banner_color, 2)
+            cv2.putText(rgb_panel, banner_text, (w // 2 - ew // 2, arrow_y),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.58, banner_color, 2, cv2.LINE_AA)
 
         # ── Thẻ Telemetry HUD góc trên trái (Glassmorphic Card) ──
         card_w, card_h = 330, 155
