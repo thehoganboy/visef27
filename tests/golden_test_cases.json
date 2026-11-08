@@ -1,6 +1,6 @@
 {
-  "schema_version": "1.0",
-  "directive": "ENGINEERING DIRECTIVE 01B-A",
+  "schema_version": "1.1",
+  "directive": "ENGINEERING DIRECTIVE 01B-A+ & 01B-B0",
   "description": "Standardized Golden Test Cases for Cross-Platform Evaluation (Python, Android Kotlin, iOS Swift)",
   "test_cases": [
     {
@@ -85,36 +85,53 @@
       },
       "expected_outputs": {
         "is_evading": false,
+        "evasion_state": "CAMERA_ROTATION",
         "volume_factor": 1.0,
         "audio_active": true
       }
     },
     {
       "id": "GOLDEN-06-HAZARD-PERSISTENCE-COASTING",
-      "description": "Critical obstacle at 50cm exits camera FOV due to camera turn. Must persist warning for up to 5 coasting frames.",
+      "description": "Critical obstacle at 35cm exits camera FOV due to camera turn. Must persist CRITICAL warning for up to 0.60 seconds.",
       "inputs": {
-        "prior_dist_cm": 50.0,
-        "prior_threat_level": "WARNING",
-        "current_all_obs_empty": true
+        "prior_dist_cm": 35.0,
+        "prior_threat_level": "CRITICAL",
+        "current_all_obs_empty": true,
+        "elapsed_seconds": 0.20
       },
       "expected_outputs": {
         "hazard_persistence_active": true,
-        "threat_level": "WARNING",
+        "threat_level": "CRITICAL",
         "audio_active": true
       }
     },
     {
-      "id": "GOLDEN-07-CROSSING-OUTSIDE-CORRIDOR",
-      "description": "Lateral moving object outside collision corridor (pan = 0.85). Must not trigger frontal preemption.",
+      "id": "GOLDEN-07-PERIPHERAL-CORRIDOR-CANDIDATE",
+      "description": "Close obstacle at 50cm at peripheral angle (pan = 0.70). Must be treated as CORRIDOR_CANDIDATE within shoulder envelope.",
       "inputs": {
-        "dist_cm": 90.0,
-        "pan": 0.85,
+        "dist_cm": 50.0,
+        "pan": 0.70,
         "velocity_z": 0.0
       },
       "expected_outputs": {
-        "path_risk": "OUTSIDE",
-        "threat_level": "SAFE",
+        "path_risk": "CORRIDOR_CANDIDATE",
+        "threat_level": "WARNING",
+        "evasion_state": "COLLISION_RISK_UNRESOLVED",
+        "volume_factor": 1.0,
         "safe_direction": "NONE"
+      }
+    },
+    {
+      "id": "GOLDEN-08-VISUAL-OBSERVABILITY-NEGATIVE-CONTROL",
+      "description": "Featureless white wall (luminance std < 10, laplacian var < 15). Must NOT be falsely marked as UNOBSERVABLE.",
+      "inputs": {
+        "luminance_mean": 180.0,
+        "luminance_std": 6.0,
+        "laplacian_var": 5.0
+      },
+      "expected_outputs": {
+        "quality_state": "OBSERVABLE",
+        "is_valid": true
       }
     }
   ]

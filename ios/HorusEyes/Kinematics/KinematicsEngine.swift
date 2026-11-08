@@ -107,8 +107,8 @@ final class KinematicsEngine {
         let alpha = Config.velocitySmoothing
         smoothedVz = alpha * rawVz + (1.0 - alpha) * smoothedVz
 
-        // Ego-motion compensation: stationary obstacles in path approach at user's walk speed
-        let effectiveVz = max(smoothedVz, userWalkSpeedCmS)
+        // Relative range rate (FIX-M04: loại bỏ gán ép 120cm/s cho vật tĩnh)
+        let effectiveVz = smoothedVz
 
         // Calculate primary TTC
         let primaryTTC: Float
@@ -180,19 +180,9 @@ final class KinematicsEngine {
         }
         lastSafeDirection = safeDir
 
-        // Evasion Intent Verification:
-        // 1. Pan shifting outward to periphery
-        // 2. IMU yaw rate confirms intentional turn
-        // 3. Distance Z is not decreasing rapidly
-        var isEvading = false
-        if historyPan.count >= 4 {
-            let firstPan = historyPan.first!
-            let currentPan = historyPan.last!
-            let panMovingOutward = abs(currentPan) > abs(firstPan) + 0.15
-            let turningConfirmed = abs(imuYawRateRadS) > 0.35
-            let distStable = rawVz < 30.0
-            isEvading = panMovingOutward && turningConfirmed && distStable
-        }
+        // Directive 01B-A+ Task A+1: Không triệt tiêu cảnh báo chỉ vì quay camera/IMU pan.
+        // isEvading giữ nguyên false trong camera-only để bảo toàn 100% cảnh báo an toàn.
+        let isEvading = false
 
         let result = KinematicsResult(
             primaryTTC: primaryTTC,

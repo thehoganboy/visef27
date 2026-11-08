@@ -18,10 +18,11 @@ jobs:
       - name: Checkout Codebase
         uses: actions/checkout@v4
 
-      - name: Select Xcode
-        uses: maxim-lobanov/setup-xcode@v1
-        with:
-          xcode-version: latest-stable
+      - name: Verify Default Xcode
+        run: |
+          echo "=== Active Xcode Version ==="
+          xcodebuild -version
+          xcode-select -p
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v5

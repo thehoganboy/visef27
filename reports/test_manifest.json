@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "HorusEyes 2.0 Test Manifest (Phase 01A Revision)",
-  "version": "2.1.0",
+  "title": "HorusEyes 2.0 Test Manifest (Phase 01B-A+ & 01B-B0 Revision)",
+  "version": "2.2.0",
   "generated_date": "2026-11-08",
   "description": "Scientific, reproducible test specifications with explicit test classifications (UNIT, INTEGRATION, REPLAY, HARDWARE, FIELD) adhering to Engineering Directive 01A.",
   "suites": [
@@ -248,6 +248,60 @@
           "expected": "PASS",
           "actual": "PASS",
           "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-14",
+          "name": "Concentrated Corridor Invalidity (WP-01B-A)",
+          "input": "Depth map with >60% invalid NaN/Inf concentrated in central walking corridor",
+          "assertion": "validity_state == 'DEGRADED', is_valid == False, cue_mode == 'VISUAL_EVIDENCE_DEGRADED'",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-15",
+          "name": "Phone Rotation vs Body Evasion Decoupling (WP-01B-A)",
+          "input": "Obstacle centroid pans sideways due to phone swivel while distance is maintained",
+          "assertion": "is_evading == False, coasting persistence active, threat level preserved without volume decay",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-16",
+          "name": "Stationary Close Obstacle Proximity Guard (WP-01B-A)",
+          "input": "Stationary obstacle at 30 cm (vz = 0 cm/s, TTC = inf)",
+          "assertion": "static_risk == 'CRITICAL', dynamic_risk == 'NONE', threat_level == 'CRITICAL', audio emits continuous emergency alert",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-17",
+          "name": "Visual Observability vs Numerical Validity (WP-01B-A+)",
+          "input": "Covered lens (0-lux, low std), blinding glare (250 luma), and featureless plain white wall (luma=128, std=12)",
+          "assertion": "covered lens == 'UNOBSERVABLE', glare == 'UNOBSERVABLE', plain white wall == 'OBSERVABLE' (negative control guard)",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-18",
+          "name": "Monotonic Timestamp Hazard Coasting (WP-01B-A+)",
+          "input": "Obstacle drops out at t=0.0s. Tested at delta_t = 0.20s (within 0.60s coasting window) and delta_t = 0.75s (post-expiration)",
+          "assertion": "At 0.20s: coasting_active == True, threat_level == 'CRITICAL' (threat never downgraded to WARNING). At 0.75s: coasting_active == False, threat_level == 'SAFE'",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "SCENARIO-19",
+          "name": "Peripheral Corridor Candidate & Shoulder Envelope (WP-01B-A+)",
+          "input": "Obstacle at close range Z = 50 cm with peripheral pan = +0.70 (within user shoulder envelope X ~ 23 cm)",
+          "assertion": "path_risk == 'CORRIDOR_CANDIDATE', threat_level == 'WARNING', evasion == 'COLLISION_RISK_UNRESOLVED', volume_factor == 1.0 (no suppression)",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
         }
       ]
     },
@@ -340,6 +394,80 @@
           "assertion": "Zero catastrophic collisions during supervised indoor white-cane navigation",
           "expected": "SKIPPED",
           "actual": "SKIPPED",
+          "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-08-GOLDEN-CROSS-PLATFORM",
+      "name": "Cross-Platform Standardized Golden Test Suite",
+      "classification": "INTEGRATION",
+      "command": "python -m unittest tests/golden_test_cases.json parity check",
+      "environment": "host_python, android_jvm, ios_xctest",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "GOLDEN-01",
+          "name": "Stationary Close Obstacle at 30cm",
+          "assertion": "static_risk == CRITICAL, dynamic_risk == NONE, threat_level == CRITICAL, safe_direction == NONE",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "GOLDEN-02",
+          "name": "Rapidly Approaching Object at 120cm (TTC=0.8s)",
+          "assertion": "static_risk == WARNING, dynamic_risk == CRITICAL, threat_level == CRITICAL, audio_active == true",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "GOLDEN-03",
+          "name": "Clear Path Unverified (Raw 250 -> 237.2cm)",
+          "assertion": "threat_level == SAFE, audio_active == false, mode contains 'Unverified Path'",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "GOLDEN-04",
+          "name": "Extreme Lens Saturation (Raw 1200 -> 13.0cm)",
+          "assertion": "threat_level == CRITICAL, audio_active == true, static_risk == CRITICAL",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "GOLDEN-05",
+          "name": "Sensor Fault with 50% Corrupted Data",
+          "assertion": "threat_level == SENSOR_FAULT, is_valid == false, mode contains 'SENSOR_FAULT'",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "GOLDEN-06",
+          "name": "Phone Rotation Immunity (Pan +0.50)",
+          "assertion": "is_evading == false, threat_level == WARNING, volume_factor == 1.0",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "GOLDEN-07",
+          "name": "Monotonic Timestamp Coasting Within 0.60s Window",
+          "assertion": "coasting_active == true, threat_level == CRITICAL, threat never downgraded",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "GOLDEN-08",
+          "name": "Peripheral Hazard in Shoulder Envelope (Z=50cm, Pan=0.70)",
+          "assertion": "path_risk == CORRIDOR_CANDIDATE, threat_level == WARNING, evasion == COLLISION_RISK_UNRESOLVED",
+          "expected": "PASS",
+          "actual": "PASS",
           "severity": "P0"
         }
       ]

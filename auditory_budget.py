@@ -125,8 +125,13 @@ class AuditoryBudgetManager:
         # - Hoặc khoảng cách >= DIST_SAFE_CM (250cm)
         # - Hoặc nhãn SAFE (Clear Path)
         # - Hoặc TTC > TTC_WARNING (2.5s) và khoảng cách >= DIST_ALERT_CM (200cm)
-        # Ngoại lệ: Không triệt tiêu nếu là lỗi cảm biến (SENSOR_BLIND / DEGRADED) hoặc đang lưu vết trễ (Coasting)
-        is_sensor_fault = (obs_res.mode_text == "SENSOR_BLIND (0-Lux)" or not getattr(obs_res, "is_valid", True))
+        # Ngoại lệ: Không triệt tiêu nếu là lỗi cảm biến / suy giảm thị giác (SENSOR_FAULT / DEGRADED / UNOBSERVABLE) hoặc đang lưu vết trễ (Coasting)
+        is_sensor_fault = (
+            obs_res.mode_text == "SENSOR_BLIND (0-Lux)"
+            or not getattr(obs_res, "is_valid", True)
+            or getattr(obs_res, "validity_state", "") in ["SENSOR_FAULT", "DEGRADED", "UNOBSERVABLE"]
+            or getattr(obs_res, "quality_state", "") in ["DEGRADED", "UNOBSERVABLE"]
+        )
         is_coasting = getattr(kinematics_res, "hazard_persistence_active", False)
 
         if not is_sensor_fault and not is_coasting and (

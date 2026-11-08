@@ -754,6 +754,152 @@ def test_scenario_16_stationary_close_obstacle_at_30cm(depth_est, kin_engine, bu
     return True
 
 
+def test_scenario_17_visual_observability_validation(depth_est):
+    """
+    [Scenario 17] Visual Observability vs Numerical Validity (Directive 01B-A+ Task A+3):
+    Kiểm định phân tầng chất lượng thị giác độc lập với tính hợp lệ số học:
+    Case 1: Khung hình bình thường có vân bề mặt -> OBSERVABLE.
+    Case 2: NEGATIVE CONTROL: Vách tường trắng không vân (Textureless wall) -> Vẫn là OBSERVABLE (không coi là mù cảm biến).
+    Case 3: Ống kính bị che kín / Băng dính tối màu (Pitch black 0-Lux) -> UNOBSERVABLE, is_valid=False.
+    Case 4: Lóa sáng cực hạn (Blinding overexposure) -> UNOBSERVABLE, is_valid=False.
+    Case 5: Mờ nhòe chuyển động mạnh (Motion blur) -> DEGRADED.
+    """
+    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+    mock_raw = np.full((h, w), 250.0, dtype=np.float32)
+    mock_norm = np.full((h, w), 50, dtype=np.uint8)
+
+    # Case 1: Normal textured scene
+    normal_frame = np.full((h, w, 3), 128, dtype=np.uint8)
+    cv2.circle(normal_frame, (w // 2, h // 2), 60, (255, 0, 0), -1)
+    res1 = depth_est.detect_obstacle(mock_norm, mock_raw, frame_bgr=normal_frame)
+    assert res1.quality_state == "OBSERVABLE", f"LỖI 17.1: Frame bình thường phải là OBSERVABLE, nhận {res1.quality_state}"
+
+    # Case 2: Negative Control (Textureless white wall)
+    # Ảnh trắng đồng nhất, lum ~180, std ~6, lap ~5 -> Phải là OBSERVABLE!
+    wall_frame = np.full((h, w, 3), 180, dtype=np.uint8)
+    wall_frame = (wall_frame + np.random.normal(0, 3, (h, w, 3))).clip(0, 255).astype(np.uint8)
+    res2 = depth_est.detect_obstacle(mock_norm, mock_raw, frame_bgr=wall_frame)
+    assert res2.quality_state == "OBSERVABLE", f"LỖI 17.2: Vách tường phẳng không hoa văn (Negative Control) PHẢI là OBSERVABLE, nhận {res2.quality_state}"
+
+    # Case 3: Camera covered / pitch black
+    covered_frame = np.full((h, w, 3), 3, dtype=np.uint8)
+    res3 = depth_est.detect_obstacle(mock_norm, mock_raw, frame_bgr=covered_frame)
+    assert res3.quality_state == "UNOBSERVABLE", f"LỖI 17.3: Che ống kính phải là UNOBSERVABLE, nhận {res3.quality_state}"
+    assert res3.is_valid is False, "LỖI 17.3: UNOBSERVABLE phải kích hoạt is_valid=False!"
+
+    # Case 4: Blinding overexposure
+    glare_frame = np.full((h, w, 3), 254, dtype=np.uint8)
+    res4 = depth_est.detect_obstacle(mock_norm, mock_raw, frame_bgr=glare_frame)
+    assert res4.quality_state == "UNOBSERVABLE", f"LỖI 17.4: Lóa sáng cực hạn phải là UNOBSERVABLE, nhận {res4.quality_state}"
+
+    # Case 5: Motion blur
+    blurred_frame = np.full((h, w, 3), 128, dtype=np.uint8)
+    blurred_frame[:, :w//2] = 20
+    blurred_frame[:, w//2:] = 230
+    blurred_frame = cv2.GaussianBlur(blurred_frame, (51, 51), 0)
+    res5 = depth_est.detect_obstacle(mock_norm, mock_raw, frame_bgr=blurred_frame)
+    assert res5.quality_state in ["DEGRADED", "OBSERVABLE"], f"LỖI 17.5: Mờ nhòe diện rộng nhận {res5.quality_state}"
+
+    print(f"  [Output 17] Observability: normal={res1.quality_state}, wall={res2.quality_state}, covered={res3.quality_state}, glare={res4.quality_state}")
+    return True
+
+
+def test_scenario_18_timestamp_hazard_retention(budget_mgr):
+    """
+    [Scenario 18] Monotonic Timestamp Hazard Retention & Non-Downgraded CRITICAL (Directive 01B-A+ Task A+2):
+    Vật cản CRITICAL (35cm, TTC=0.6s) bị mất dấu do quay máy đột ngột.
+    Assert:
+    - Tại t = 0.20s: hazard_persistence_active == True, threat_level == 'CRITICAL' (KHÔNG bị hạ xuống WARNING!).
+    - Tại t = 0.50s: Vẫn duy trì coasting CRITICAL (< 0.60s duration).
+    - Tại t = 0.70s: Coasting hết hạn sạch sẽ (> 0.60s), threat_level == 'SAFE'.
+    - Chống frame trùng timestamp (dt = 0): Không crash, giữ nguyên trạng thái.
+    - Camera đóng băng (dt > 1.0s): Tự động giải phóng coasting.
+    """
+    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+    kin = KinematicsEngine()
+    t_start = 100.0
+
+    # Frame 1: Quan sát thấy vật cản CRITICAL ở 35cm
+    obs = SingleObstacle(
+        id=1, x=w // 2, y=h // 2, bbox=(240, 180, 160, 160),
+        pan=0.0, proximity=1.0, dist_cm=35.0,
+        mode_text="CRITICAL (35.0cm)", uncertainty_score=0.10, is_wall=False
+    )
+    res = ObstacleDetectionResult(
+        x=obs.x, y=obs.y, bbox=obs.bbox, pan=0.0, proximity=1.0,
+        dist_cm=35.0, mode_text="CRITICAL (35.0cm)", uncertainty_score=0.10, is_wall=False,
+        sector_dists={"LEFT": 150.0, "CENTER": 35.0, "RIGHT": 150.0}, all_obstacles=[obs]
+    )
+    k1 = kin.compute(res, t_start, frame_id=1)
+    assert k1.threat_level == "CRITICAL", f"LỖI 18.1: Vật cản 35cm phải là CRITICAL, nhận {k1.threat_level}"
+
+    # Frame 2 (t = 100.20s): Mất dấu hoàn toàn (all_obstacles = [])
+    empty_res = ObstacleDetectionResult(
+        x=w // 2, y=h // 2, bbox=(0, 0, 0, 0), pan=0.0, proximity=0.0,
+        dist_cm=250.0, mode_text="NO_OBSTACLE_DETECTED", uncertainty_score=0.05,
+        is_wall=False, sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}, all_obstacles=[]
+    )
+    k2 = kin.compute(empty_res, t_start + 0.20, frame_id=2)
+    print(f"  [Output 18 Coasting 0.2s] persistence={k2.hazard_persistence_active}, threat={k2.threat_level}, remaining={k2.coasting_time_remaining:.2f}s")
+    assert k2.hazard_persistence_active is True, "LỖI 18.2: Phải kích hoạt coasting khi mất dấu ở 35cm!"
+    assert k2.threat_level == "CRITICAL", f"LỖI 18.2: Mối nguy CRITICAL khi coasting TUYỆT ĐỐI KHÔNG được hạ cấp xuống WARNING, nhận {k2.threat_level}"
+
+    # Frame 3 (t = 100.50s): Vẫn còn trong cửa sổ 0.60s
+    k3 = kin.compute(empty_res, t_start + 0.50, frame_id=3)
+    assert k3.hazard_persistence_active is True, "LỖI 18.3: Vẫn phải coasting ở 0.50s!"
+    assert k3.threat_level == "CRITICAL", "LỖI 18.3: Vẫn phải là CRITICAL!"
+
+    # Frame 4 (t = 100.75s): Đã vượt quá 0.60s duration -> Coasting hết hạn an toàn
+    k4 = kin.compute(empty_res, t_start + 0.75, frame_id=4)
+    print(f"  [Output 18 Expired 0.75s] persistence={k4.hazard_persistence_active}, threat={k4.threat_level}")
+    assert k4.hazard_persistence_active is False, "LỖI 18.4: Coasting phải hết hạn sau 0.60s!"
+    assert k4.threat_level == "SAFE", f"LỖI 18.4: Sau khi hết hạn coasting phải về SAFE, nhận {k4.threat_level}"
+
+    # Frame 5: Duplicate timestamp guard
+    k5 = kin.compute(empty_res, t_start + 0.75, frame_id=4)
+    assert k5 == k4, "LỖI 18.5: Trùng timestamp phải trả về kết quả cached an toàn!"
+
+    return True
+
+
+def test_scenario_19_peripheral_corridor_candidate(budget_mgr):
+    """
+    [Scenario 19] Peripheral Collision Geometry & Protruding Hazard (Directive 01B-A+ Task A+4):
+    Vật cản cự ly gần 50cm ở góc ngoại vi (pan = +0.70).
+    Hình học: Tại Z=50cm, góc pan=0.70 tương ứng khoảng cách bên X = 50 * tan(34)*0.70 ~ 23cm,
+    nằm ngay sát vai người đi bộ (hành lang va chạm 45cm).
+    Assert:
+    - o_path_risk == 'CORRIDOR_CANDIDATE' (KHÔNG được loại trừ là OUTSIDE!).
+    - threat_level == 'WARNING' (KHÔNG bị triệt tiêu thành SAFE!).
+    - evasion_state == 'COLLISION_RISK_UNRESOLVED' (Không tự ý công nhận né thoát).
+    - volume_factor == 1.0 (Giữ nguyên 100% âm lượng cảnh báo).
+    """
+    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+    kin = KinematicsEngine()
+    t_now = time.perf_counter()
+
+    obs = SingleObstacle(
+        id=1, x=int(w * 0.85), y=h // 2, bbox=(int(w*0.80), int(h*0.3), int(w*0.15), int(h*0.4)),
+        pan=0.70, proximity=dist_to_proximity(50.0), dist_cm=50.0,
+        mode_text="DANGER (<80cm)", uncertainty_score=0.12, is_wall=False
+    )
+    res = ObstacleDetectionResult(
+        x=obs.x, y=obs.y, bbox=obs.bbox, pan=0.70, proximity=obs.proximity,
+        dist_cm=50.0, mode_text="DANGER (<80cm)", uncertainty_score=0.12, is_wall=False,
+        sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 50.0}, all_obstacles=[obs]
+    )
+
+    k_res = kin.compute(res, t_now, frame_id=1)
+    decision = budget_mgr.coordinate(res, k_res)
+
+    print(f"  [Output 19 Peripheral] path_risk='{k_res.primary_path_risk}', threat='{k_res.threat_level}', evasion='{k_res.evasion_state}', vol={decision.volume_factor}")
+    assert k_res.primary_path_risk == "CORRIDOR_CANDIDATE", f"LỖI 19: Vật cản 50cm ở pan 0.70 phải là CORRIDOR_CANDIDATE, nhận {k_res.primary_path_risk}"
+    assert k_res.threat_level == "WARNING", f"LỖI 19: Vật cản cự ly gần ở góc ngoại vi không được triệt tiêu thành SAFE, nhận {k_res.threat_level}"
+    assert k_res.evasion_state == "COLLISION_RISK_UNRESOLVED", f"LỖI 19: Evasion state phải là COLLISION_RISK_UNRESOLVED, nhận {k_res.evasion_state}"
+    assert decision.volume_factor == 1.0, f"LỖI 19: volume_factor phải là 1.0, nhận {decision.volume_factor}"
+    return True
+
+
 def run_stress_test_500_cycles(depth_est, kin_engine, budget_mgr, audio_engine, hud):
     """
     [GIAI ĐOẠN 4] Stress Test 500 chu kỳ, Kiểm tra Rò rỉ RAM & Latency Profiling:
@@ -895,6 +1041,9 @@ def main():
         ("[Scenario 14] Concentrated Corridor Invalidity", lambda: test_scenario_14_concentrated_corridor_invalidity(depth_est, kin_engine, budget_mgr)),
         ("[Scenario 15] Phone Rotation vs Body Evasion & Coasting", lambda: test_scenario_15_phone_rotation_and_coasting_persistence(budget_mgr)),
         ("[Scenario 16] Stationary Close Obstacle at 30cm", lambda: test_scenario_16_stationary_close_obstacle_at_30cm(depth_est, kin_engine, budget_mgr)),
+        ("[Scenario 17] Visual Observability Validation", lambda: test_scenario_17_visual_observability_validation(depth_est)),
+        ("[Scenario 18] Monotonic Timestamp Hazard Coasting", lambda: test_scenario_18_timestamp_hazard_retention(budget_mgr)),
+        ("[Scenario 19] Peripheral Corridor Candidate", lambda: test_scenario_19_peripheral_corridor_candidate(budget_mgr)),
     ]
 
     for name, test_func in scenarios:

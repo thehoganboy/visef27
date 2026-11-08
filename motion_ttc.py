@@ -55,9 +55,11 @@ class KinematicsResult:
     motion_state: str = "UNKNOWN"          # Trạng thái chuyển động: "APPROACHING", "RECEDING", "STATIONARY", "UNKNOWN"
     primary_static_risk: str = "SAFE"      # Rủi ro cự ly tĩnh của mối nguy chính (Directive 01B Task A4)
     primary_dynamic_risk: str = "NONE"     # Rủi ro đóng góc động học của mối nguy chính (Directive 01B Task A4)
-    primary_path_risk: str = "DIRECT"      # Phân vùng giao cắt hành lang: "DIRECT", "PERIPHERAL", "OUTSIDE"
+    primary_path_risk: str = "CORRIDOR_CANDIDATE" # Phân vùng hành lang: "CORRIDOR_CANDIDATE", "PERIPHERAL_UNVERIFIED", "TRAJECTORY_INTERSECTION_POSSIBLE", "COLLISION_GEOMETRY_UNKNOWN"
     hazard_persistence_active: bool = False # Cờ lưu vết / trễ an toàn khi vật cản biến mất đột ngột (Directive 01B Task A2)
     measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # Chuẩn đo lường monocular (Directive 01B Principle B)
+    evasion_state: str = "COLLISION_RISK_UNRESOLVED" # Directive 01B-A+ Task A+1: CAMERA_ROTATION, POSSIBLE_RISK_REDUCTION, OBSERVED_RELATIVE_RECESSION, COLLISION_RISK_UNRESOLVED, EVASION_CONFIRMED
+    coasting_time_remaining: float = 0.0 # Directive 01B-A+ Task A+2: Thời gian lưu vết còn lại (giây)
 
 
 def compute_sector_safety_score(
@@ -381,12 +383,12 @@ class KinematicsEngine:
         self.consecutive_evasion_frames = 0
         self.last_evasion_dir = "NONE"
 
-        # Trạng thái Hazard Persistence / Coasting khi vật cản biến mất đột ngột (Directive 01B Task A2)
-        self.coasting_frames = 0
+        # Trạng thái Hazard Persistence / Coasting theo thời gian thực (Directive 01B-A+ Task A+2)
+        self.last_seen_timestamp = 0.0
         self.last_hazard_dist = 250.0
         self.last_hazard_dir = "NONE"
         self.last_threat_level = "SAFE"
-        self.MAX_COASTING_FRAMES = 5
+        self.COASTING_DURATION_SEC = 0.60
 
     def compute(
         self,
@@ -501,6 +503,10 @@ class KinematicsEngine:
             self.guidance_state = init_guidance
             self.hazard_direction = init_hazard_dir
             self.sector_scores = init_sec_scores
+            self.last_threat_level = init_threat
+            self.last_hazard_dist = curr_dist
+            self.last_hazard_dir = init_hazard_dir
+            self.last_seen_timestamp = now
 
             res = self._create_result(
                 curr_dist, 0.0, init_ttc, sec_dists, init_threat, init_safe_dir, False,
@@ -603,27 +609,35 @@ class KinematicsEngine:
             else:
                 o_dynamic_risk = "NONE"
 
-            # 3. Phân vùng giao cắt hành lang (Path Intersection Risk):
-            if abs(o.pan) <= 0.33:
-                o_path_risk = "DIRECT"
-            elif abs(o.pan) <= 0.60:
-                o_path_risk = "PERIPHERAL"
+            # 3. Phân vùng giao cắt hành lang (Directive 01B-A+ Task A+4):
+            # Không dùng ngưỡng pan đơn lẻ để kết luận an toàn.
+            # Vật cản ở cự ly gần (dist <= 80cm) tại góc ngoại vi (|pan| <= 0.75) vẫn nằm trong bao hình người đi bộ.
+            o_pan_abs = abs(o.pan)
+            if o_pan_abs <= 0.35:
+                o_path_risk = "CORRIDOR_CANDIDATE"
+            elif o.dist_cm <= 80.0 and o_pan_abs <= 0.75:
+                o_path_risk = "CORRIDOR_CANDIDATE"
+            elif o_motion_state == "APPROACHING" and o_pan_abs > 0.35:
+                o_path_risk = "TRAJECTORY_INTERSECTION_POSSIBLE"
+            elif o_pan_abs <= 0.75:
+                o_path_risk = "PERIPHERAL_UNVERIFIED"
             else:
-                o_path_risk = "OUTSIDE"
+                o_path_risk = "COLLISION_GEOMETRY_UNKNOWN"
 
-            # 4. Hợp nhất Cấp độ Đe dọa (Unified Threat Level - Directive 01B Task A4):
-            # Quy tắc vàng:
-            # - Vật cản tĩnh ở cự ly nguy cấp (<= 40cm, ví dụ 30cm) LUÔN LUÔN là CRITICAL dù TTC = inf!
-            # - Vật cản đang lao tới nhanh (TTC <= 1.0s) trong hành lang LUÔN LUÔN là CRITICAL dù camera đứng yên!
-            # - Vật cản cắt ngang ngoài hành lang (|pan| > 0.60) và không lao tới được hạ cấp rủi ro
+            # 4. Hợp nhất Cấp độ Đe dọa (Unified Threat Level - Directive 01B-A+ Task A+4 & Task A+5):
+            # - Vật cản tĩnh cự ly nguy cấp (<= 40cm, ví dụ 30cm) LUÔN LUÔN là CRITICAL dù TTC = inf!
+            # - Vật cản đang lao tới nhanh (TTC <= 1.0s) trong hành lang hoặc hướng vào hành lang LUÔN LUÔN là CRITICAL!
+            # - Vật cản cự ly gần (DANGER <= 80cm) ở góc ngoại vi vẫn được giữ ở mức WARNING (không bị loại trừ)
             if o_static_risk == "CRITICAL":
                 o_level = "CRITICAL"
-            elif o_dynamic_risk == "CRITICAL" and o_path_risk in ["DIRECT", "PERIPHERAL"]:
+            elif o_dynamic_risk == "CRITICAL" and o_path_risk in ["CORRIDOR_CANDIDATE", "TRAJECTORY_INTERSECTION_POSSIBLE"]:
                 o_level = "CRITICAL"
-            elif o_path_risk == "OUTSIDE" and o_motion_state != "APPROACHING":
-                o_level = "SAFE"
-            elif o_static_risk in ["DANGER", "WARNING"] or o_dynamic_risk == "WARNING":
+            elif o_path_risk in ["CORRIDOR_CANDIDATE", "TRAJECTORY_INTERSECTION_POSSIBLE"] and (o_static_risk in ["DANGER", "WARNING"] or o_dynamic_risk == "WARNING"):
                 o_level = "WARNING"
+            elif o_static_risk == "DANGER" and o_path_risk == "PERIPHERAL_UNVERIFIED":
+                o_level = "WARNING"
+            elif o_path_risk == "COLLISION_GEOMETRY_UNKNOWN" and o_motion_state != "APPROACHING" and o.dist_cm > 120.0:
+                o_level = "SAFE"
             elif o_static_risk == "UNKNOWN":
                 o_level = "UNKNOWN"
             else:
@@ -843,49 +857,66 @@ class KinematicsEngine:
         else:
             threat_level = "SAFE"
 
-        # ── TASK A2: Cơ chế Lưu vết / Trễ an toàn khi Vật cản biến mất đột ngột (Coasting) ──
+        # ── TASK A+2: Thay thế Coasting đếm frame bằng Coasting theo thời gian thực (Monotonic Timestamp) ──
+        # Đảm bảo độc lập với FPS (30 FPS hay 10 FPS đều giữ đúng 0.60 giây)
+        # và TUYỆT ĐỐI KHÔNG tự động hạ cấp CRITICAL xuống WARNING khi mất dấu!
+        COASTING_DURATION_SEC = self.COASTING_DURATION_SEC
         hazard_persistence_active = False
+        coasting_time_remaining = 0.0
+
         if threat_level == "SAFE" or len(all_obs) == 0:
             if self.last_threat_level in ["CRITICAL", "WARNING"] and self.last_hazard_dist <= 80.0:
-                if self.coasting_frames < self.MAX_COASTING_FRAMES:
-                    self.coasting_frames += 1
-                    threat_level = "WARNING"
+                elapsed_since_loss = now - self.last_seen_timestamp if self.last_seen_timestamp > 0.0 else 999.0
+                if 0.0 <= elapsed_since_loss <= COASTING_DURATION_SEC:
+                    hazard_persistence_active = True
+                    coasting_time_remaining = max(0.0, COASTING_DURATION_SEC - elapsed_since_loss)
+                    # Giữ nguyên mức đe dọa đã xác nhận: CRITICAL giữ nguyên CRITICAL!
+                    threat_level = self.last_threat_level
                     hazard_dir = self.last_hazard_dir
                     guidance_state = "HAZARD_DETECTED"
-                    hazard_persistence_active = True
                 else:
-                    self.coasting_frames = 0
                     self.last_threat_level = "SAFE"
+                    self.last_seen_timestamp = 0.0
             else:
-                self.coasting_frames = 0
                 self.last_threat_level = "SAFE"
+                self.last_seen_timestamp = 0.0
         else:
-            self.coasting_frames = 0
+            # Hazard is currently observed
             self.last_threat_level = threat_level
             self.last_hazard_dist = curr_dist
             self.last_hazard_dir = hazard_dir
+            self.last_seen_timestamp = now
 
-        # ── TASK A2: Loại bỏ triệt tiêu cảnh báo do xoay camera (Fix Unsafe Evasion) ──
-        # Chỉ công nhận người dùng đã né thoát khi:
-        # 1. Khoảng cách vật lý Z đo được TĂNG RÕ RỆT (d_dist >= 15.0cm)
-        # 2. VÀ Vật thể đang di chuyển ra xa (receding, vz <= -20.0cm/s)
-        # 3. VÀ Tâm góc dời hẳn ra ngoài biên an toàn (|pan| > 0.65)
-        # TUYỆT ĐỐI KHÔNG coi việc quay camera (d_pan đơn thuần) là né thoát an toàn!
+        # ── TASK A+1: Tách bạch rõ ràng các trạng thái né tránh (Directive 01B-A+) ──
+        # Concepts to separate:
+        # - CAMERA_ROTATION
+        # - POSSIBLE_RISK_REDUCTION
+        # - OBSERVED_RELATIVE_RECESSION
+        # - COLLISION_RISK_UNRESOLVED
+        # - EVASION_CONFIRMED
         d_pan = curr_pan - self.prev_pan
         d_dist = curr_dist - self.prev_dist_cm if self.prev_dist_cm is not None else 0.0
 
-        is_evading = False
-        if threat_level != "SAFE":
-            verified_dist_inc = (d_dist >= 15.0)
-            verified_receding = (primary_vz <= -20.0)
-            verified_peripheral = (abs(curr_pan) > 0.65)
-            if verified_dist_inc and verified_receding and verified_peripheral:
-                self.consecutive_evasion_frames += 1
-            else:
-                self.consecutive_evasion_frames = 0
-            is_evading = (self.consecutive_evasion_frames >= 4)
+        is_camera_rotating = abs(d_pan) > 0.15 and abs(d_dist) < 10.0
+        is_receding = (primary_vz <= -20.0)
+        is_peripheral = (abs(curr_pan) > 0.65)
+
+        if is_camera_rotating:
+            evasion_state = "CAMERA_ROTATION"
+        elif is_peripheral and not is_receding:
+            evasion_state = "POSSIBLE_RISK_REDUCTION"
+        elif is_receding and not is_peripheral:
+            evasion_state = "OBSERVED_RELATIVE_RECESSION"
         else:
-            self.consecutive_evasion_frames = 0
+            evasion_state = "COLLISION_RISK_UNRESOLVED"
+
+        # Mandated by Directive 01B-A+ Task A+1:
+        # "In the current camera-only implementation, if the necessary evidence is unavailable,
+        # use an unresolved or tentative state instead.
+        # Disable safety-critical warning suppression based solely on the existing distance/pan thresholds."
+        # Do not emit EVASION_CONFIRMED unless sufficient spatial and temporal evidence exists under a validated method.
+        # is_evading is kept False in camera-only mode to prevent any unsafe audio attenuation!
+        is_evading = False
 
         # Cập nhật cache
         self.prev_dist_cm = curr_dist
@@ -913,7 +944,7 @@ class KinematicsEngine:
         primary_motion_state = "UNKNOWN"
         p_static_risk = "SAFE"
         p_dynamic_risk = "NONE"
-        p_path_risk = "DIRECT"
+        p_path_risk = "CORRIDOR_CANDIDATE"
 
         if all_obs:
             if primary_vz >= min_approach_vz:
@@ -949,12 +980,17 @@ class KinematicsEngine:
             else:
                 p_dynamic_risk = "NONE"
 
-            if abs(primary_obs.pan) <= 0.33:
-                p_path_risk = "DIRECT"
-            elif abs(primary_obs.pan) <= 0.60:
-                p_path_risk = "PERIPHERAL"
+            p_pan_abs = abs(primary_obs.pan)
+            if p_pan_abs <= 0.35:
+                p_path_risk = "CORRIDOR_CANDIDATE"
+            elif primary_obs.dist_cm <= 80.0 and p_pan_abs <= 0.75:
+                p_path_risk = "CORRIDOR_CANDIDATE"
+            elif primary_motion_state == "APPROACHING" and p_pan_abs > 0.35:
+                p_path_risk = "TRAJECTORY_INTERSECTION_POSSIBLE"
+            elif p_pan_abs <= 0.75:
+                p_path_risk = "PERIPHERAL_UNVERIFIED"
             else:
-                p_path_risk = "OUTSIDE"
+                p_path_risk = "COLLISION_GEOMETRY_UNKNOWN"
 
         res = self._create_result(
             curr_dist, primary_vz, primary_ttc, threats,
@@ -962,7 +998,8 @@ class KinematicsEngine:
             sector_scores=sector_scores, guidance_state=guidance_state,
             effective_ego_vz=0.0, hazard_direction=hazard_dir, motion_state=primary_motion_state,
             primary_static_risk=p_static_risk, primary_dynamic_risk=p_dynamic_risk,
-            primary_path_risk=p_path_risk, hazard_persistence_active=hazard_persistence_active
+            primary_path_risk=p_path_risk, hazard_persistence_active=hazard_persistence_active,
+            evasion_state=evasion_state, coasting_time_remaining=coasting_time_remaining
         )
         self.last_result = res
         return res
@@ -973,7 +1010,8 @@ class KinematicsEngine:
         sector_scores=None, guidance_state="PATH_UNVERIFIED",
         effective_ego_vz=0.0, hazard_direction="NONE", motion_state="UNKNOWN",
         primary_static_risk="SAFE", primary_dynamic_risk="NONE",
-        primary_path_risk="DIRECT", hazard_persistence_active=False
+        primary_path_risk="CORRIDOR_CANDIDATE", hazard_persistence_active=False,
+        evasion_state="COLLISION_RISK_UNRESOLVED", coasting_time_remaining=0.0
     ) -> KinematicsResult:
         if not isinstance(threats, dict):
             threats_dict = {
@@ -1003,5 +1041,7 @@ class KinematicsEngine:
             primary_dynamic_risk=primary_dynamic_risk,
             primary_path_risk=primary_path_risk,
             hazard_persistence_active=hazard_persistence_active,
-            measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
+            measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
+            evasion_state=evasion_state,
+            coasting_time_remaining=coasting_time_remaining
         )

@@ -23,8 +23,8 @@ if hasattr(sys.stdout, 'reconfigure'):
         pass
 
 import math
-from dataclasses import dataclass
-from typing import Tuple, Optional
+from dataclasses import dataclass, field
+from typing import Tuple, Optional, List
 import cv2
 import numpy as np
 
@@ -233,6 +233,8 @@ class SingleObstacle:
     is_wall: bool                   # Cờ nhận diện là vách tường
     validity: str = "VALID"         # "VALID", "DEGRADED", "UNKNOWN" (Directive 01B Task A3)
     measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # "METRIC_CALIBRATED", "METRIC_ESTIMATED_UNVERIFIED", "RELATIVE_ONLY", "UNKNOWN"
+    quality_state: str = "OBSERVABLE" # "OBSERVABLE", "DEGRADED", "UNOBSERVABLE", "UNKNOWN" (Directive 01B-A+ Task A+3)
+    quality_reasons: List[str] = field(default_factory=list) # Danh sách lý do chẩn đoán thị giác
 
 
 @dataclass
@@ -256,6 +258,105 @@ class ObstacleDetectionResult:
     validity_state: str = "VALID"   # "VALID", "DEGRADED", "SENSOR_FAULT", "UNKNOWN" (Directive 01B Task A3)
     spatial_validity: dict = None   # {"GLOBAL": ..., "LEFT": ..., "CENTER": ..., "RIGHT": ..., "CORRIDOR": ...}
     measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # Directive 01B Principle B
+    quality_state: str = "OBSERVABLE" # "OBSERVABLE", "DEGRADED", "UNOBSERVABLE", "UNKNOWN" (Directive 01B-A+ Task A+3)
+    quality_reasons: List[str] = field(default_factory=list)
+
+
+def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, List[str], dict]:
+    """
+    Directive 01B-A+ Task A+3: Đánh giá độ quan sát thị giác (Visual Observability).
+    Tách bạch rõ ràng giữa:
+      A. Tính hợp lệ số học (Numerical Validity: NaN, Inf, tensor dimensions, corruption)
+      B. Độ quan sát thị giác (Visual Observability: Underexposure, Overexposure, Blur, Defocus, Obstruction).
+
+    Quality-State Taxonomy:
+      - OBSERVABLE: Chất lượng hình ảnh bình thường, cấu trúc/ánh sáng hợp lệ.
+      - DEGRADED: Suy giảm một phần (quá tối cần đèn, lóa nhẹ, mờ nhòe vừa, hoặc invalid corridor >20%).
+      - UNOBSERVABLE: Khung hình hoàn toàn không thể quan sát (mù tối 0-Lux, ống kính bị che kín, lóa trắng lóa).
+      - UNKNOWN: Thiếu frame RGB đầu vào hoặc không thể tính toán.
+
+    Negative Control Guard:
+      Vách tường phẳng không hoa văn (Textureless white wall) vẫn là OBSERVABLE nếu ánh sáng
+      nằm trong dải bình thường [30.0, 225.0], tuyệt đối không coi là UNOBSERVABLE vì lý do ít cạnh.
+    """
+    if frame_bgr is None or not isinstance(frame_bgr, np.ndarray) or frame_bgr.size == 0:
+        return "UNKNOWN", ["NO_FRAME_INPUT"], {"luminance_mean": 0.0, "laplacian_var": 0.0, "entropy": 0.0}
+
+    if frame_bgr.ndim == 2:
+        gray = frame_bgr
+    elif frame_bgr.ndim == 3:
+        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+    else:
+        return "UNKNOWN", ["INVALID_FRAME_NDIM"], {}
+
+    h, w = gray.shape[:2]
+    total_pixels = float(h * w)
+
+    # 1. Thống kê độ sáng & phơi sáng (Luminance & Exposure statistics)
+    lum_mean = float(np.mean(gray))
+    lum_std  = float(np.std(gray))
+    under_ratio = float(np.sum(gray < 10)) / total_pixels
+    over_ratio  = float(np.sum(gray > 248)) / total_pixels
+
+    # 2. Độ sắc nét & vi sai Laplacian (Laplacian variance)
+    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    lap_var = float(np.var(lap))
+
+    # 3. Mật độ thông tin hình ảnh (Shannon Entropy)
+    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+    hist = hist / (total_pixels + 1e-7)
+    non_zero = hist[hist > 0]
+    entropy = float(-np.sum(non_zero * np.log2(non_zero)))
+
+    reasons = []
+
+    # Điều kiện cực hạn -> UNOBSERVABLE
+    if lum_mean < 6.0 or under_ratio > 0.90:
+        reasons.append("SEVERE_UNDEREXPOSURE_ZERO_LUX")
+        return "UNOBSERVABLE", reasons, {"luminance_mean": lum_mean, "laplacian_var": lap_var, "entropy": entropy}
+
+    if lum_mean > 250.0 or over_ratio > 0.75:
+        reasons.append("SEVERE_BLINDING_OVEREXPOSURE")
+        return "UNOBSERVABLE", reasons, {"luminance_mean": lum_mean, "laplacian_var": lap_var, "entropy": entropy}
+
+    # Ống kính bị che kín / Băng dính tối màu che camera
+    if lum_std < 2.0 and (lum_mean < 15.0 or lum_mean > 240.0):
+        reasons.append("CAMERA_LENS_COVERED_OR_BLOCKED")
+        return "UNOBSERVABLE", reasons, {"luminance_mean": lum_mean, "laplacian_var": lap_var, "entropy": entropy}
+
+    # Điều kiện suy giảm -> DEGRADED
+    if lum_mean < 20.0 or under_ratio > 0.50:
+        reasons.append("LOW_LIGHT_ENVIRONMENT")
+    if over_ratio > 0.35:
+        reasons.append("HIGH_BACKLIGHT_OR_PARTIAL_GLARE")
+
+    # Kiểm tra Negative Control: Vách tường trắng/phẳng không hoa văn
+    is_textureless_wall = (30.0 <= lum_mean <= 225.0 and lum_std >= 2.0 and lum_std <= 25.0 and lap_var < 20.0)
+    if is_textureless_wall:
+        reasons.append("TEXTURELESS_SURFACE")
+    elif lap_var < 15.0 and lum_std > 25.0:
+        reasons.append("SEVERE_MOTION_BLUR_OR_DEFOCUS")
+
+    if entropy < 0.5 and lap_var < 15.0 and lum_std < 8.0 and not is_textureless_wall:
+        reasons.append("INSUFFICIENT_SCENE_TEXTURE")
+
+    if reasons:
+        if reasons == ["TEXTURELESS_SURFACE"]:
+            quality_state = "OBSERVABLE"
+        else:
+            quality_state = "DEGRADED"
+    else:
+        quality_state = "OBSERVABLE"
+
+    stats = {
+        "luminance_mean": round(lum_mean, 1),
+        "luminance_std": round(lum_std, 1),
+        "laplacian_var": round(lap_var, 1),
+        "entropy": round(entropy, 2),
+        "under_ratio": round(under_ratio, 3),
+        "over_ratio": round(over_ratio, 3),
+    }
+    return quality_state, reasons, stats
 
 
 class DepthEstimator:
@@ -385,10 +486,14 @@ class DepthEstimator:
     def _create_sensor_fault_result(
         self, h: int, w: int, reason: str = "SENSOR_FAULT",
         validity_state: str = "SENSOR_FAULT",
-        spatial_validity: Optional[dict] = None
+        spatial_validity: Optional[dict] = None,
+        quality_state: str = "UNOBSERVABLE",
+        quality_reasons: Optional[List[str]] = None
     ) -> ObstacleDetectionResult:
         if spatial_validity is None:
             spatial_validity = {"GLOBAL": 0.0, "LEFT": 0.0, "CENTER": 0.0, "RIGHT": 0.0, "CORRIDOR": 0.0}
+        if quality_reasons is None:
+            quality_reasons = [reason]
         fault_obs = SingleObstacle(
             id=1, x=w // 2, y=h // 2,
             bbox=(0, 0, w, h),
@@ -396,7 +501,9 @@ class DepthEstimator:
             mode_text=reason,
             uncertainty_score=1.0, is_wall=False,
             validity=validity_state,
-            measurement_basis="UNKNOWN"
+            measurement_basis="UNKNOWN",
+            quality_state=quality_state,
+            quality_reasons=quality_reasons
         )
         return ObstacleDetectionResult(
             x=w // 2, y=h // 2, bbox=fault_obs.bbox, pan=0.0,
@@ -409,7 +516,9 @@ class DepthEstimator:
             is_scale_uncalibrated=True,
             validity_state=validity_state,
             spatial_validity=spatial_validity,
-            measurement_basis="UNKNOWN"
+            measurement_basis="UNKNOWN",
+            quality_state=quality_state,
+            quality_reasons=quality_reasons
         )
 
     def detect_obstacle(
@@ -491,6 +600,17 @@ class DepthEstimator:
 
         if frame_bgr is None and hasattr(self, "_last_frame"):
             frame_bgr = self._last_frame
+
+        # Directive 01B-A+ Task A+3: Visual Observability Validation
+        vis_quality_state, vis_reasons, vis_stats = assess_visual_observability(frame_bgr)
+        if vis_quality_state == "UNOBSERVABLE":
+            return self._create_sensor_fault_result(
+                h, w, f"SENSOR_UNOBSERVABLE: {', '.join(vis_reasons)}",
+                validity_state="UNOBSERVABLE",
+                spatial_validity=spatial_validity,
+                quality_state="UNOBSERVABLE",
+                quality_reasons=vis_reasons
+            )
 
         if not is_zero_lux and lighting_status and lighting_status.get("is_zero_lux_blind", False):
             is_zero_lux = True
@@ -953,7 +1073,11 @@ class DepthEstimator:
                     bbox=(w // 4, h // 4, w // 2, h // 2),
                     pan=0.0, proximity=0.0, dist_cm=clear_dist,
                     mode_text="NO_OBSTACLE_DETECTED (Unverified Path)", uncertainty_score=0.05,
-                    is_wall=False
+                    is_wall=False,
+                    validity="VALID",
+                    measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
+                    quality_state=vis_quality_state,
+                    quality_reasons=vis_reasons
                 )
                 return ObstacleDetectionResult(
                     x=safe_dummy.x, y=safe_dummy.y, bbox=safe_dummy.bbox,
@@ -965,7 +1089,9 @@ class DepthEstimator:
                     is_scale_uncalibrated=True,
                     validity_state="VALID",
                     spatial_validity=spatial_validity,
-                    measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
+                    measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
+                    quality_state=vis_quality_state,
+                    quality_reasons=vis_reasons
                 )
 
             # Nếu vẫn không có gì nhưng không đủ điều kiện CLEAR → trả về trạng thái mặc định
@@ -977,7 +1103,9 @@ class DepthEstimator:
                 mode_text="NO_OBSTACLE_DETECTED (Unverified Path)", uncertainty_score=safe_uncert,
                 is_wall=False,
                 validity="VALID",
-                measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
+                measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
+                quality_state=vis_quality_state,
+                quality_reasons=vis_reasons
             )
             return ObstacleDetectionResult(
                 x=safe_dummy.x, y=safe_dummy.y, bbox=safe_dummy.bbox,
@@ -990,12 +1118,16 @@ class DepthEstimator:
                 is_scale_uncalibrated=True,
                 validity_state="VALID",
                 spatial_validity=spatial_validity,
-                measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
+                measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
+                quality_state=vis_quality_state,
+                quality_reasons=vis_reasons
             )
 
         # Đánh số ID thứ tự 1, 2, 3...
         for i, o in enumerate(detected_list):
             o.id = i + 1
+            o.quality_state = vis_quality_state
+            o.quality_reasons = vis_reasons
 
         primary = detected_list[0]
         return ObstacleDetectionResult(
@@ -1009,5 +1141,7 @@ class DepthEstimator:
             is_scale_uncalibrated=True,
             validity_state="VALID",
             spatial_validity=spatial_validity,
-            measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
+            measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
+            quality_state=vis_quality_state,
+            quality_reasons=vis_reasons
         )

@@ -547,24 +547,9 @@ class KinematicsEngine {
             else -> "SAFE"
         }
 
-        // Phát hiện chuyển động né tránh (Thắt chặt: >= 4 frame liên tiếp)
-        val dPan = currPan - prevPan
-        var instantDir = "NONE"
-        if (threatLevel != "SAFE") {
-            if (safeDir == "RIGHT" && dPan < -0.03f) instantDir = "RIGHT"
-            else if (safeDir == "LEFT" && dPan > 0.03f) instantDir = "LEFT"
-        }
-
-        if (instantDir != "NONE" && instantDir == safeDir) {
-            if (instantDir == lastEvasionDir) consecutiveEvasionFrames++ else {
-                lastEvasionDir = instantDir
-                consecutiveEvasionFrames = 1
-            }
-        } else {
-            consecutiveEvasionFrames = max(0, consecutiveEvasionFrames - 1)
-            if (consecutiveEvasionFrames == 0) lastEvasionDir = "NONE"
-        }
-        val isEvading = (consecutiveEvasionFrames >= 4 && threatLevel != "SAFE")
+        // Directive 01B-A+ Task A+1: Không triệt tiêu cảnh báo chỉ vì quay điện thoại (pan).
+        // isEvading giữ nguyên false trong camera-only để bảo toàn 100% cảnh báo.
+        val isEvading = false
 
         prevDistCm = currDist
         prevPan = currPan
