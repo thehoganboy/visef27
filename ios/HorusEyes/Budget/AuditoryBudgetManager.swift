@@ -86,10 +86,13 @@ final class AuditoryBudgetManager {
             )
         }
 
-        // ── 0B. Directive 01B-A++ Task P0-01: Bounded Reminder Policy for LOST_UNRESOLVED ──
+        // ── 0B. Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if kinematicsResult.hazardState == "LOST_UNRESOLVED" || threatLevel == "UNRESOLVED_HAZARD" {
-            unresolvedReminderCount += 1
-            if unresolvedReminderCount <= 20 {
+            let lostTs = kinematicsResult.lostUnresolvedTimestamp
+            let nowTs = kinematicsResult.timestamp
+            let elapsedUnresolved = (lostTs > 0.0 && nowTs >= lostTs) ? (nowTs - lostTs) : 0.0
+
+            if elapsedUnresolved <= 1.5 {
                 return BudgetDecision(
                     isActive: true,
                     pan: 0.0,
@@ -118,8 +121,6 @@ final class AuditoryBudgetManager {
                     suppressedCount: 0
                 )
             }
-        } else {
-            unresolvedReminderCount = 0
         }
 
         // ── 1. Total Auditory Suppression Rule ────────────────────────────────

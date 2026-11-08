@@ -60,8 +60,9 @@ class KinematicsResult:
     measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # Chuẩn đo lường monocular (Directive 01B Principle B)
     evasion_state: str = "COLLISION_RISK_UNRESOLVED" # Directive 01B-A+ Task A+1: CAMERA_ROTATION, POSSIBLE_RISK_REDUCTION, OBSERVED_RELATIVE_RECESSION, COLLISION_RISK_UNRESOLVED, EVASION_CONFIRMED
     coasting_time_remaining: float = 0.0 # Directive 01B-A+ Task A+2: Thời gian lưu vết còn lại (giây)
-    hazard_state: str = "CONFIRMED_LOW_RISK" # Directive 01B-A++ Task P0-01: OBSERVED_HAZARD, COASTING_HAZARD, LOST_UNRESOLVED, OBSERVATION_RECOVERED, CONFIRMED_LOW_RISK, SENSOR_FAULT
+    hazard_state: str = "INITIALIZING" # Directive 01B-A++ Task P0-F01: INITIALIZING, OBSERVED_HAZARD, COASTING_HAZARD, LOST_UNRESOLVED, OBSERVATION_RECOVERED, OBSERVED_LOW_RISK, SENSOR_FAULT
     lost_unresolved_timestamp: float = 0.0 # Directive 01B-A++ Task P0-01: Thời điểm chuyển sang LOST_UNRESOLVED (s)
+    timestamp: float = 0.0 # Monotonic timestamp của frame hiện tại (s)
 
 
 def compute_sector_safety_score(
@@ -389,11 +390,39 @@ class KinematicsEngine:
         self.last_seen_timestamp = 0.0
         self.last_hazard_dist = 250.0
         self.last_hazard_dir = "NONE"
-        self.last_threat_level = "SAFE"
+        self.last_threat_level = "UNKNOWN"
         self.COASTING_DURATION_SEC = 0.60
-        self.hazard_state = "CONFIRMED_LOW_RISK"
+        self.hazard_state = "INITIALIZING"
         self.clear_corridor_frames = 0
         self.lost_unresolved_timestamp = 0.0
+
+    def check_watchdog(self, current_timestamp: float, timeout_sec: float = 1.0) -> Optional[KinematicsResult]:
+        """
+        Kiểm tra Watchdog độc lập với luồng suy luận (Directive 01B-A++ Task P1-F02).
+        Được gọi độc lập bởi timer/event loop mà không cần chờ inference callback.
+        Nếu quá timeout_sec mà không có frame mới:
+        - Xóa sổ mọi trạng thái low-risk cũ.
+        - Chuyển sang SENSOR_FAULT / CAMERA_STALLED.
+        """
+        if self.prev_timestamp > 0.0 and (current_timestamp - self.prev_timestamp) > timeout_sec:
+            self.hazard_state = "SENSOR_FAULT"
+            self.last_threat_level = "SENSOR_FAULT"
+            self.last_seen_timestamp = 0.0
+            self.lost_unresolved_timestamp = 0.0
+            self.clear_corridor_frames = 0
+            fault_res = self._create_result(
+                dist_cm=float("nan"), vz=0.0, ttc=float("inf"),
+                threats={}, threat_level="SENSOR_FAULT", safe_dir="STOP", is_evading=False,
+                guidance_state="CAMERA_STALLED", hazard_direction="NONE", motion_state="UNKNOWN",
+                primary_static_risk="UNKNOWN", primary_dynamic_risk="NONE",
+                primary_path_risk="COLLISION_GEOMETRY_UNKNOWN", hazard_persistence_active=False,
+                evasion_state="COLLISION_RISK_UNRESOLVED", coasting_time_remaining=0.0,
+                hazard_state="SENSOR_FAULT", lost_unresolved_timestamp=0.0,
+                timestamp=current_timestamp
+            )
+            self.last_result = fault_res
+            return fault_res
+        return None
 
     def compute(
         self,
@@ -413,6 +442,12 @@ class KinematicsEngine:
             return self.last_result
 
         now = timestamp
+        # Directive 01B-A++ Task P1-F02: Camera freeze watchdog (> 1.0s gap between frames)
+        if self.prev_timestamp > 0.0 and (now - self.prev_timestamp) > 1.0:
+            self.last_seen_timestamp = 0.0
+            self.lost_unresolved_timestamp = 0.0
+            self.clear_corridor_frames = 0
+
         if self.prev_timestamp > 0.0 and now > self.prev_timestamp:
             dt = max(0.010, min(0.20, now - self.prev_timestamp))
         else:
@@ -451,8 +486,10 @@ class KinematicsEngine:
                 init_threat = "CRITICAL"
             elif curr_dist < dist_warning:
                 init_threat = "WARNING"
-            else:
+            elif all_obs:
                 init_threat = "SAFE"
+            else:
+                init_threat = "UNKNOWN"
             init_ttc = float("inf")
 
             obs_ttcs = {o.id: init_ttc for o in all_obs}
@@ -512,17 +549,21 @@ class KinematicsEngine:
             self.last_hazard_dist = curr_dist
             self.last_hazard_dir = init_hazard_dir
             self.last_seen_timestamp = now
-            if all_obs and init_threat != "SAFE":
+            if all_obs and init_threat in ["CRITICAL", "WARNING"]:
                 self.hazard_state = "OBSERVED_HAZARD"
             else:
-                self.hazard_state = "CONFIRMED_LOW_RISK"
+                # Directive 01B-A++ Task P0-F01: Startup initialized to INITIALIZING, guidance = PATH_UNVERIFIED
+                self.hazard_state = "INITIALIZING"
+                init_threat = "UNKNOWN"
+                init_guidance = "PATH_UNVERIFIED"
+                self.clear_corridor_frames = 1
 
             res = self._create_result(
                 curr_dist, 0.0, init_ttc, sec_dists, init_threat, init_safe_dir, False,
                 obs_ttcs=obs_ttcs, obs_vzs=obs_vzs, track_details=track_details,
                 sector_scores=init_sec_scores, guidance_state=init_guidance,
                 hazard_direction=init_hazard_dir, motion_state="UNKNOWN",
-                hazard_state=self.hazard_state
+                hazard_state=self.hazard_state, timestamp=now
             )
             self.last_result = res
             return res
@@ -867,13 +908,39 @@ class KinematicsEngine:
         else:
             threat_level = "SAFE"
 
-        # ── Directive 01B-A++ Task P0-01: 6-State Hazard Tracking & Coasting Expiration State Machine ──
-        # Đảm bảo độc lập với FPS (30 FPS hay 10 FPS đều giữ đúng 0.60 giây coasting)
-        # và TUYỆT ĐỐI KHÔNG tự động chuyển sang SAFE chỉ vì hết hạn bộ đếm!
+        # ── TASK A+1: Tách bạch rõ ràng các trạng thái né tránh (Directive 01B-A+) ──
+        # Concepts to separate:
+        # - CAMERA_ROTATION
+        # - POSSIBLE_RISK_REDUCTION
+        # - OBSERVED_RELATIVE_RECESSION
+        # - COLLISION_RISK_UNRESOLVED
+        # - EVASION_CONFIRMED
+        d_pan = curr_pan - self.prev_pan
+        d_dist = curr_dist - self.prev_dist_cm if self.prev_dist_cm is not None else 0.0
+
+        is_camera_rotating = abs(d_pan) > 0.15 and abs(d_dist) < 10.0
+        is_receding = (primary_vz <= -20.0)
+        is_peripheral = (abs(curr_pan) > 0.65)
+
+        if is_camera_rotating:
+            evasion_state = "CAMERA_ROTATION"
+        elif is_peripheral and not is_receding:
+            evasion_state = "POSSIBLE_RISK_REDUCTION"
+        elif is_receding and not is_peripheral:
+            evasion_state = "OBSERVED_RELATIVE_RECESSION"
+        else:
+            evasion_state = "COLLISION_RISK_UNRESOLVED"
+
+        # Mandated by Directive 01B-A+ Task A+1:
+        # is_evading is kept False in camera-only mode to prevent any unsafe audio attenuation!
+        is_evading = False
+
+        # ── Directive 01B-A++ Task P0-F01 & P1-F02: 6-State Hazard Tracking & Safe-State Semantics ──
+        # Taxonomy: OBSERVED_HAZARD, COASTING_HAZARD, LOST_UNRESOLVED, OBSERVATION_RECOVERED, OBSERVED_LOW_RISK, SENSOR_FAULT
         COASTING_DURATION_SEC = self.COASTING_DURATION_SEC
         hazard_persistence_active = False
         coasting_time_remaining = 0.0
-        hazard_state = "CONFIRMED_LOW_RISK"
+        hazard_state = "OBSERVED_LOW_RISK"
 
         is_currently_observed = (len(all_obs) > 0 and threat_level != "SAFE")
 
@@ -904,31 +971,35 @@ class KinematicsEngine:
                     hazard_dir = self.last_hazard_dir
                     guidance_state = "HAZARD_DETECTED"
                 else:
-                    # Giai đoạn 2: Coasting Expiration (Task P0-01 Correction)
+                    # Giai đoạn 2: Coasting Expiration (Task P0-F01 & P0-01 Correction)
                     # TUYỆT ĐỐI KHÔNG tự động chuyển sang SAFE chỉ vì hết hạn bộ đếm!
-                    # Bắt buộc phải có đủ bằng chứng xác nhận hành lang thông thoáng:
+                    # Bắt buộc phải có đủ bằng chứng xác nhận hành lang quan sát thông thoáng:
                     sec_center_clear = sec_dists.get("CENTER", 0.0) >= 200.0
                     sec_left_clear = sec_dists.get("LEFT", 0.0) >= 150.0
                     sec_right_clear = sec_dists.get("RIGHT", 0.0) >= 150.0
                     is_observable = getattr(obs_res, "quality_state", "OBSERVABLE") == "OBSERVABLE"
                     is_valid_depth = getattr(obs_res, "is_valid", True)
 
-                    if sec_center_clear and sec_left_clear and sec_right_clear and is_observable and is_valid_depth:
+                    # Directive 01B-A++ Task P0-F01 Point 7 & 8:
+                    # Ngăn chặn xóa sổ mối nguy cũ chỉ vì camera quay sang hướng khác (Camera Rotation)!
+                    is_rotating_away = is_camera_rotating or (abs(d_pan) > 0.15)
+
+                    if sec_center_clear and sec_left_clear and sec_right_clear and is_observable and is_valid_depth and not is_rotating_away:
                         self.clear_corridor_frames += 1
                     else:
                         self.clear_corridor_frames = 0
 
                     if self.clear_corridor_frames >= 3:
-                        # Đã có đủ ít nhất 3 frame quan sát liên tiếp xác nhận hành lang thông thoáng
-                        hazard_state = "CONFIRMED_LOW_RISK"
+                        # Đã có đủ ít nhất 3 frame quan sát liên tiếp ổn định xác nhận không phát hiện mối nguy trong vùng quan sát
+                        hazard_state = "OBSERVED_LOW_RISK"
                         threat_level = "SAFE"
-                        guidance_state = "PATH_CLEAR_CONFIRMED"
+                        guidance_state = "NO_HAZARD_DETECTED_IN_OBSERVED_REGION"
                         hazard_dir = "NONE"
                         self.last_threat_level = "SAFE"
                         self.last_seen_timestamp = 0.0
                         self.lost_unresolved_timestamp = 0.0
                     else:
-                        # Mất dấu nhưng chưa kiểm chứng an toàn -> LOST_UNRESOLVED
+                        # Mất dấu nhưng chưa kiểm chứng ổn định hoặc đang quay máy -> LOST_UNRESOLVED
                         hazard_state = "LOST_UNRESOLVED"
                         hazard_persistence_active = False
                         coasting_time_remaining = 0.0
@@ -945,51 +1016,29 @@ class KinematicsEngine:
                 is_observable = getattr(obs_res, "quality_state", "OBSERVABLE") == "OBSERVABLE"
                 is_valid_depth = getattr(obs_res, "is_valid", True)
 
-                if sec_center_clear and sec_left_clear and sec_right_clear and is_observable and is_valid_depth:
+                # Directive 01B-A++ Task P0-F01: Không tăng frame xác nhận khi đang quay máy
+                is_rotating_away = is_camera_rotating or (abs(d_pan) > 0.15)
+
+                if sec_center_clear and sec_left_clear and sec_right_clear and is_observable and is_valid_depth and not is_rotating_away:
                     self.clear_corridor_frames = min(100, self.clear_corridor_frames + 1)
                 else:
                     self.clear_corridor_frames = 0
 
-                hazard_state = "CONFIRMED_LOW_RISK"
-                threat_level = "SAFE"
-                guidance_state = "PATH_CLEAR_CONFIRMED" if self.clear_corridor_frames >= 3 else "PATH_UNVERIFIED"
+                if self.clear_corridor_frames >= 3:
+                    hazard_state = "OBSERVED_LOW_RISK"
+                    threat_level = "SAFE"
+                    guidance_state = "NO_HAZARD_DETECTED_IN_OBSERVED_REGION"
+                else:
+                    hazard_state = "INITIALIZING" if self.prev_dist_cm is None else "OBSERVED_LOW_RISK"
+                    threat_level = "UNKNOWN" if (self.clear_corridor_frames < 3 and self.hazard_state == "INITIALIZING") else "SAFE"
+                    guidance_state = "PATH_UNVERIFIED"
+
                 hazard_dir = "NONE"
-                self.last_threat_level = "SAFE"
+                self.last_threat_level = threat_level
                 self.last_seen_timestamp = 0.0
                 self.lost_unresolved_timestamp = 0.0
 
         self.hazard_state = hazard_state
-
-        # ── TASK A+1: Tách bạch rõ ràng các trạng thái né tránh (Directive 01B-A+) ──
-        # Concepts to separate:
-        # - CAMERA_ROTATION
-        # - POSSIBLE_RISK_REDUCTION
-        # - OBSERVED_RELATIVE_RECESSION
-        # - COLLISION_RISK_UNRESOLVED
-        # - EVASION_CONFIRMED
-        d_pan = curr_pan - self.prev_pan
-        d_dist = curr_dist - self.prev_dist_cm if self.prev_dist_cm is not None else 0.0
-
-        is_camera_rotating = abs(d_pan) > 0.15 and abs(d_dist) < 10.0
-        is_receding = (primary_vz <= -20.0)
-        is_peripheral = (abs(curr_pan) > 0.65)
-
-        if is_camera_rotating:
-            evasion_state = "CAMERA_ROTATION"
-        elif is_peripheral and not is_receding:
-            evasion_state = "POSSIBLE_RISK_REDUCTION"
-        elif is_receding and not is_peripheral:
-            evasion_state = "OBSERVED_RELATIVE_RECESSION"
-        else:
-            evasion_state = "COLLISION_RISK_UNRESOLVED"
-
-        # Mandated by Directive 01B-A+ Task A+1:
-        # "In the current camera-only implementation, if the necessary evidence is unavailable,
-        # use an unresolved or tentative state instead.
-        # Disable safety-critical warning suppression based solely on the existing distance/pan thresholds."
-        # Do not emit EVASION_CONFIRMED unless sufficient spatial and temporal evidence exists under a validated method.
-        # is_evading is kept False in camera-only mode to prevent any unsafe audio attenuation!
-        is_evading = False
 
         # Cập nhật cache
         self.prev_dist_cm = curr_dist
@@ -1073,7 +1122,8 @@ class KinematicsEngine:
             primary_static_risk=p_static_risk, primary_dynamic_risk=p_dynamic_risk,
             primary_path_risk=p_path_risk, hazard_persistence_active=hazard_persistence_active,
             evasion_state=evasion_state, coasting_time_remaining=coasting_time_remaining,
-            hazard_state=self.hazard_state, lost_unresolved_timestamp=self.lost_unresolved_timestamp
+            hazard_state=self.hazard_state, lost_unresolved_timestamp=self.lost_unresolved_timestamp,
+            timestamp=now
         )
         self.last_result = res
         return res
@@ -1086,7 +1136,8 @@ class KinematicsEngine:
         primary_static_risk="SAFE", primary_dynamic_risk="NONE",
         primary_path_risk="CORRIDOR_CANDIDATE", hazard_persistence_active=False,
         evasion_state="COLLISION_RISK_UNRESOLVED", coasting_time_remaining=0.0,
-        hazard_state="CONFIRMED_LOW_RISK", lost_unresolved_timestamp=0.0
+        hazard_state="OBSERVED_LOW_RISK", lost_unresolved_timestamp=0.0,
+        timestamp=0.0
     ) -> KinematicsResult:
         if not isinstance(threats, dict):
             threats_dict = {
@@ -1120,5 +1171,6 @@ class KinematicsEngine:
             evasion_state=evasion_state,
             coasting_time_remaining=coasting_time_remaining,
             hazard_state=hazard_state,
-            lost_unresolved_timestamp=lost_unresolved_timestamp
+            lost_unresolved_timestamp=lost_unresolved_timestamp,
+            timestamp=timestamp
         )

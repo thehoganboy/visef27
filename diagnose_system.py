@@ -867,14 +867,14 @@ def test_scenario_18_timestamp_hazard_retention(budget_mgr):
     k5 = kin.compute(empty_res, t_start + 0.75, frame_id=4)
     assert k5 == k4, "LỖI 18.5: Trùng timestamp phải trả về kết quả cached an toàn!"
 
-    # Frame 6 & 7: Hành lang được quan sát thông thoáng liên tiếp 3 frame -> CONFIRMED_LOW_RISK (SAFE)
+    # Frame 6 & 7: Hành lang được quan sát thông thoáng liên tiếp 3 frame -> OBSERVED_LOW_RISK (SAFE)
     k6 = kin.compute(empty_res, t_start + 0.85, frame_id=6)
     k7 = kin.compute(empty_res, t_start + 0.95, frame_id=7)
     k8 = kin.compute(empty_res, t_start + 1.05, frame_id=8)
     print(f"  [Output 18 Cleared 3-frames] state={k8.hazard_state}, threat={k8.threat_level}, guidance={k8.guidance_state}")
-    assert k8.hazard_state == "CONFIRMED_LOW_RISK", f"LỖI 18.6: Sau 3 frame xác nhận phải là CONFIRMED_LOW_RISK, nhận {k8.hazard_state}"
+    assert k8.hazard_state == "OBSERVED_LOW_RISK", f"LỖI 18.6: Sau 3 frame xác nhận phải là OBSERVED_LOW_RISK, nhận {k8.hazard_state}"
     assert k8.threat_level == "SAFE", f"LỖI 18.6: Sau 3 frame xác nhận threat phải là SAFE, nhận {k8.threat_level}"
-    assert k8.guidance_state == "PATH_CLEAR_CONFIRMED", f"LỖI 18.6: Guidance phải là PATH_CLEAR_CONFIRMED, nhận {k8.guidance_state}"
+    assert k8.guidance_state == "NO_HAZARD_DETECTED_IN_OBSERVED_REGION", f"LỖI 18.6: Guidance phải là NO_HAZARD_DETECTED_IN_OBSERVED_REGION, nhận {k8.guidance_state}"
     dec8 = budget_mgr.coordinate(empty_res, k8)
     assert dec8.is_active is False and dec8.cue_mode == "MUTED", "LỖI 18.6: Khi đã xác nhận an toàn âm thanh phải MUTED"
 

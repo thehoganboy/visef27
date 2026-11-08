@@ -41,8 +41,9 @@ data class KinematicsResult(
     val trackDetails: Map<Int, TrackDetail>,
     val sectorScores: Map<String, Float> = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
     val guidanceState: String = "ESCAPE_RIGHT",
-    val hazardState: String = "CONFIRMED_LOW_RISK",
-    val lostUnresolvedTimestamp: Double = 0.0
+    val hazardState: String = "INITIALIZING",
+    val lostUnresolvedTimestamp: Double = 0.0,
+    val timestamp: Float = 0f
 )
 
 /**
@@ -348,17 +349,57 @@ class KinematicsEngine {
     private var lastEvasionDir = "NONE"
     private var dirHysteresisFrames = 0
 
-    // Directive 01B-A++ Task P0-01: Cross-platform Hazard Coasting & Expiration State Machine
+    // Directive 01B-A++ Task P0-F01 & P1-F02: Cross-platform Hazard Coasting, Watchdog & Safe-State Semantics
     private var lastSeenTimestamp: Float = 0f
     private var lastHazardDist: Float = 250f
-    private var lastThreatLevel: String = "SAFE"
+    private var lastThreatLevel: String = "UNKNOWN"
     private var clearCorridorFrames: Int = 0
     private var lostUnresolvedTimestamp: Double = 0.0
     private val COASTING_DURATION_SEC: Float = 0.60f
-    private var hazardState: String = "CONFIRMED_LOW_RISK"
+    private var hazardState: String = "INITIALIZING"
+
+    fun checkWatchdog(currentTimestamp: Float, timeoutSec: Float = 1.0f): KinematicsResult? {
+        if (prevTimestamp > 0.0f && (currentTimestamp - prevTimestamp) > timeoutSec) {
+            hazardState = "SENSOR_FAULT"
+            lastThreatLevel = "SENSOR_FAULT"
+            lastSeenTimestamp = 0f
+            lostUnresolvedTimestamp = 0.0
+            clearCorridorFrames = 0
+            val threats = mapOf(
+                "LEFT" to SectorThreat("LEFT", 250f, 0f, Float.POSITIVE_INFINITY, "SENSOR_FAULT"),
+                "CENTER" to SectorThreat("CENTER", 250f, 0f, Float.POSITIVE_INFINITY, "SENSOR_FAULT"),
+                "RIGHT" to SectorThreat("RIGHT", 250f, 0f, Float.POSITIVE_INFINITY, "SENSOR_FAULT")
+            )
+            return KinematicsResult(
+                primaryTtc = Float.POSITIVE_INFINITY,
+                primaryVelocityZ = 0f,
+                threats = threats,
+                safeDirection = "STOP",
+                isEvading = false,
+                threatLevel = "SENSOR_FAULT",
+                obstacleTtcs = emptyMap(),
+                obstacleVzs = emptyMap(),
+                trackDetails = emptyMap(),
+                sectorScores = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
+                guidanceState = "CAMERA_STALLED",
+                hazardState = "SENSOR_FAULT",
+                lostUnresolvedTimestamp = 0.0,
+                timestamp = currentTimestamp
+            )
+        }
+        return null
+    }
 
     fun compute(depthRes: DepthResult, timestamp: Float): KinematicsResult {
         val now = timestamp
+
+        // Directive 01B-A++ Task P1-F02: Watchdog frame gap check
+        if (prevTimestamp > 0.0f && (now - prevTimestamp) > 1.0f) {
+            lastSeenTimestamp = 0f
+            lostUnresolvedTimestamp = 0.0
+            clearCorridorFrames = 0
+        }
+
         val dt = if (prevTimestamp > 0.0f && now > prevTimestamp) {
             (now - prevTimestamp).coerceIn(0.010f, 1.200f)
         } else {
@@ -374,8 +415,11 @@ class KinematicsEngine {
         val currDist = depthRes.distCm
         val currPan = depthRes.pan
 
-        // Directive 01B-A++ Task P0-01: State taxonomy when allObs is empty
+        // Directive 01B-A++ Task P0-F01: State taxonomy when allObs is empty
         if (allObs.isEmpty()) {
+            val dPan = currPan - prevPan
+            val isRotatingAway = Math.abs(dPan) > 0.15f
+
             prevDistCm = currDist
             prevPan = currPan
             prevSectorDists = secDists.toMap()
@@ -405,7 +449,8 @@ class KinematicsEngine {
                         sectorScores = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
                         guidanceState = "HAZARD_DETECTED",
                         hazardState = "COASTING_HAZARD",
-                        lostUnresolvedTimestamp = 0.0
+                        lostUnresolvedTimestamp = 0.0,
+                        timestamp = now
                     )
                 } else {
                     // Coasting expired: do NOT automatically report SAFE!
@@ -413,14 +458,14 @@ class KinematicsEngine {
                     val secLeftClear = (secDists["LEFT"] ?: 0f) >= 150f
                     val secRightClear = (secDists["RIGHT"] ?: 0f) >= 150f
 
-                    if (secCenterClear && secLeftClear && secRightClear) {
+                    if (secCenterClear && secLeftClear && secRightClear && !isRotatingAway) {
                         clearCorridorFrames++
                     } else {
                         clearCorridorFrames = 0
                     }
 
                     if (clearCorridorFrames >= 3) {
-                        hazardState = "CONFIRMED_LOW_RISK"
+                        hazardState = "OBSERVED_LOW_RISK"
                         lastThreatLevel = "SAFE"
                         lastSeenTimestamp = 0f
                         lostUnresolvedTimestamp = 0.0
@@ -447,13 +492,29 @@ class KinematicsEngine {
                             sectorScores = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
                             guidanceState = "PATH_UNRESOLVED",
                             hazardState = "LOST_UNRESOLVED",
-                            lostUnresolvedTimestamp = lostUnresolvedTimestamp
+                            lostUnresolvedTimestamp = lostUnresolvedTimestamp,
+                            timestamp = now
                         )
                     }
                 }
             } else {
-                hazardState = "CONFIRMED_LOW_RISK"
-                lastThreatLevel = "SAFE"
+                val secCenterClear = (secDists["CENTER"] ?: 0f) >= 200f
+                val secLeftClear = (secDists["LEFT"] ?: 0f) >= 150f
+                val secRightClear = (secDists["RIGHT"] ?: 0f) >= 150f
+
+                if (secCenterClear && secLeftClear && secRightClear && !isRotatingAway) {
+                    clearCorridorFrames = Math.min(100, clearCorridorFrames + 1)
+                } else {
+                    clearCorridorFrames = 0
+                }
+
+                if (clearCorridorFrames >= 3) {
+                    hazardState = "OBSERVED_LOW_RISK"
+                    lastThreatLevel = "SAFE"
+                } else {
+                    hazardState = "INITIALIZING"
+                    lastThreatLevel = "UNKNOWN"
+                }
                 lastSeenTimestamp = 0f
                 lostUnresolvedTimestamp = 0.0
             }
@@ -469,14 +530,15 @@ class KinematicsEngine {
                 threats = threats,
                 safeDirection = "NONE",
                 isEvading = false,
-                threatLevel = "SAFE",
+                threatLevel = if (clearCorridorFrames >= 3) "SAFE" else "UNKNOWN",
                 obstacleTtcs = emptyMap(),
                 obstacleVzs = emptyMap(),
                 trackDetails = emptyMap(),
                 sectorScores = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
-                guidanceState = if (clearCorridorFrames >= 3) "PATH_CLEAR_CONFIRMED" else "PATH_UNVERIFIED",
-                hazardState = "CONFIRMED_LOW_RISK",
-                lostUnresolvedTimestamp = 0.0
+                guidanceState = if (clearCorridorFrames >= 3) "NO_HAZARD_DETECTED_IN_OBSERVED_REGION" else "PATH_UNVERIFIED",
+                hazardState = hazardState,
+                lostUnresolvedTimestamp = 0.0,
+                timestamp = now
             )
         }
 
@@ -688,7 +750,8 @@ class KinematicsEngine {
             sectorScores = sectorScores,
             guidanceState = guidanceState,
             hazardState = hazardState,
-            lostUnresolvedTimestamp = lostUnresolvedTimestamp
+            lostUnresolvedTimestamp = lostUnresolvedTimestamp,
+            timestamp = now
         )
     }
 }

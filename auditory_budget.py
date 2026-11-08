@@ -62,7 +62,7 @@ class AuditoryBudgetManager:
 
         # Trạng thái Uncertainty Hysteresis
         self.current_cue_mode: str = "MUTED"
-        self.unresolved_reminder_count: int = 0  # Bounded reminder counter cho LOST_UNRESOLVED
+        self.UNRESOLVED_REMINDER_DURATION_SEC: float = 1.5  # Directive 01B-A++ Task P1-F02: Cấu hình thời lượng nhắc nhở độc lập với FPS (s)
 
         self.HYSTERESIS_BOOST = 1.15       # +15% ưu tiên giữ vật thể đang active
         self.MIN_HOLD_FRAMES = 5           # Giữ tối thiểu 5 frame trước khi nhường quyền
@@ -91,7 +91,8 @@ class AuditoryBudgetManager:
     def coordinate(
         self,
         obs_res: ObstacleDetectionResult,
-        kinematics_res: KinematicsResult
+        kinematics_res: KinematicsResult,
+        current_timestamp: Optional[float] = None
     ) -> BudgetDecision:
         """
         Quyết định cấp phát luồng âm thanh duy nhất dựa trên kết quả phát hiện và động học TTC.
@@ -133,17 +134,27 @@ class AuditoryBudgetManager:
             or not getattr(obs_res, "is_valid", True)
             or getattr(obs_res, "validity_state", "") in ["SENSOR_FAULT", "DEGRADED", "UNOBSERVABLE"]
             or getattr(obs_res, "quality_state", "") in ["DEGRADED", "UNOBSERVABLE"]
+            or getattr(kinematics_res, "threat_level", "") == "SENSOR_FAULT"
+            or getattr(kinematics_res, "guidance_state", "") == "CAMERA_STALLED"
         )
         is_coasting = getattr(kinematics_res, "hazard_persistence_active", False)
-        hazard_state = getattr(kinematics_res, "hazard_state", "CONFIRMED_LOW_RISK")
+        hazard_state = getattr(kinematics_res, "hazard_state", "OBSERVED_LOW_RISK")
 
-        # ── Directive 01B-A++ Task P0-01: Bounded Non-Continuous Reminder Policy for LOST_UNRESOLVED ──
+        # ── Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if hazard_state == "LOST_UNRESOLVED" or threat_level == "UNRESOLVED_HAZARD":
-            self.unresolved_reminder_count += 1
+            lost_ts = getattr(kinematics_res, "lost_unresolved_timestamp", 0.0)
+            now_ts = getattr(kinematics_res, "timestamp", 0.0)
+            if now_ts <= 0.0:
+                now_ts = current_timestamp if current_timestamp is not None else time.perf_counter()
 
-            # Bounded reminder window: phát âm nhắc nhở ngắt quãng trong tối đa 20 frames (~1.0 - 2.0s tùy FPS)
+            if lost_ts > 0.0 and now_ts >= lost_ts:
+                elapsed_unresolved = now_ts - lost_ts
+            else:
+                elapsed_unresolved = 0.0
+
+            # Bounded reminder window: phát âm nhắc nhở trong thời lượng thực cố định (1.5s), độc lập hoàn toàn với FPS
             # Tránh âm CRITICAL kéo dài vô tận, nhưng TUYỆT ĐỐI KHÔNG chuyển thành MUTED / SAFE!
-            if self.unresolved_reminder_count <= 20:
+            if elapsed_unresolved <= self.UNRESOLVED_REMINDER_DURATION_SEC:
                 self.current_cue_mode = "CAUTION_REMINDER"
                 return BudgetDecision(
                     is_active=True,
@@ -161,7 +172,7 @@ class AuditoryBudgetManager:
                     suppressed_obstacles=[]
                 )
             else:
-                # Sau giới hạn reminder, chuyển sang standby im lặng, nhưng GIỮ NGUYÊN guidance_state là PATH_UNRESOLVED
+                # Sau thời hạn 1.5s, chuyển sang standby im lặng, nhưng TUYỆT ĐỐI GIỮ NGUYÊN guidance_state là PATH_UNRESOLVED
                 self.current_cue_mode = "STANDBY_UNRESOLVED"
                 return BudgetDecision(
                     is_active=False,
@@ -178,8 +189,6 @@ class AuditoryBudgetManager:
                     active_obstacle_id=0,
                     suppressed_obstacles=[]
                 )
-        else:
-            self.unresolved_reminder_count = 0
 
         if not is_sensor_fault and not is_coasting and (
             threat_level == "SAFE"

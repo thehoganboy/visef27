@@ -1,6 +1,6 @@
 {
-  "schema_version": "1.1",
-  "directive": "ENGINEERING DIRECTIVE 01B-A+ & 01B-B0",
+  "schema_version": "1.2",
+  "directive": "FINAL ENGINEERING DIRECTIVE 01B-A++",
   "description": "Standardized Golden Test Cases for Cross-Platform Evaluation (Python, Android Kotlin, iOS Swift)",
   "test_cases": [
     {
@@ -164,6 +164,53 @@
         "hazard_state": "OBSERVATION_RECOVERED",
         "threat_level": "CRITICAL",
         "audio_active": true
+      }
+    },
+    {
+      "id": "GOLDEN-11-STARTUP-INITIALIZING-UNKNOWN",
+      "description": "App starts up on frame 1 without accumulated temporal evidence. Must default to INITIALIZING and UNKNOWN, never asserting verified safety.",
+      "inputs": {
+        "frame_id": 1,
+        "prior_frame": null,
+        "all_obs_empty": true
+      },
+      "expected_outputs": {
+        "hazard_state": "INITIALIZING",
+        "threat_level": "UNKNOWN",
+        "guidance_state": "PATH_UNVERIFIED",
+        "audio_active": false
+      }
+    },
+    {
+      "id": "GOLDEN-12-CORRIDOR-CLEAR-OBSERVED-LOW-RISK",
+      "description": "Corridor free of detected obstacles for >= 3 stabilized frames. Must transition to OBSERVED_LOW_RISK with NO_HAZARD_DETECTED_IN_OBSERVED_REGION, never claiming verified physical clearance.",
+      "inputs": {
+        "consecutive_clear_frames": 3,
+        "is_camera_rotating": false,
+        "center_dist_cm": 250.0
+      },
+      "expected_outputs": {
+        "hazard_state": "OBSERVED_LOW_RISK",
+        "threat_level": "SAFE",
+        "guidance_state": "NO_HAZARD_DETECTED_IN_OBSERVED_REGION",
+        "audio_active": false
+      }
+    },
+    {
+      "id": "GOLDEN-13-FPS-INDEPENDENT-REMINDER-STANDBY",
+      "description": "Lost hazard caution reminder active for 1.5s real time, then silences to STANDBY_UNRESOLVED to preserve auditory budget while keeping unverified visual state.",
+      "inputs": {
+        "hazard_state": "LOST_UNRESOLVED",
+        "elapsed_unresolved_sec": 1.6,
+        "reminder_timeout_sec": 1.5
+      },
+      "expected_outputs": {
+        "hazard_state": "LOST_UNRESOLVED",
+        "threat_level": "UNRESOLVED_HAZARD",
+        "guidance_state": "PATH_UNRESOLVED",
+        "cue_mode": "STANDBY_UNRESOLVED",
+        "volume_factor": 0.0,
+        "audio_active": false
       }
     }
   ]

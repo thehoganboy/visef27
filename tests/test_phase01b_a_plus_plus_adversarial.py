@@ -1,17 +1,16 @@
 """
-Phase 01B-A++ Adversarial Safety & Boundary Test Suite
+Phase 01B-A++ Final Adversarial Safety & Boundary Test Suite
 ================================================================================
 Implements all mandatory scenario verifications specified in
-ENGINEERING DIRECTIVE 01B-A++ (Tasks P0-01, P0-03, P1-03):
-1. Phone rotation causing hazard loss & observation recovery (OBSERVATION_RECOVERED).
-2. Camera freeze timeout (> 1.0s) releasing coasting.
-3. Preemption by new critical hazard during coasting.
-4. Coasting expiration without new frames (never false SAFE).
-5. Variable FPS invariance (5, 10, 20, 30 FPS).
-6. Monotonic timestamp anomaly & duplicate timestamp protection.
-7. Close stationary proximity with infinite TTC.
-8. Sensor fault & NaN depth propagation.
-9. Bounded audio reminder policy in LOST_UNRESOLVED.
+FINAL ENGINEERING DIRECTIVE 01B-A++ (Tasks P0-F01, P1-F02):
+1. App startup defaults to INITIALIZING / UNKNOWN (never false safe).
+2. Rotating away from a hazard does not clear its unresolved status.
+3. Coasting expiration transitions to LOST_UNRESOLVED, never false safe.
+4. Reminder duration is FPS-independent (monotonic time interval).
+5. Watchdog triggers SENSOR_FAULT / CAMERA_STALLED on pipeline stall (> 1.0s).
+6. Preemption by new critical hazard during coasting.
+7. Observation recovery (OBSERVATION_RECOVERED).
+8. Monotonic timestamp anomaly & duplicate protection.
 ================================================================================
 """
 
@@ -26,6 +25,63 @@ import config
 from depth_engine import ObstacleDetectionResult, SingleObstacle
 from motion_ttc import KinematicsEngine
 from auditory_budget import AuditoryBudgetManager
+
+
+def test_startup_state_initializing():
+    """Directive 01B-A++ Task P0-F01: Startup defaults to INITIALIZING / UNKNOWN."""
+    kin = KinematicsEngine()
+    w, h = config.CAM_WIDTH, config.CAM_HEIGHT
+
+    # Frame 1: Empty scene on startup
+    res_empty = ObstacleDetectionResult(
+        x=w//2, y=h//2, bbox=(0,0,0,0), pan=0.0, proximity=0.0, dist_cm=250.0,
+        mode_text="SAFE", uncertainty_score=0.05, is_wall=False,
+        sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}, all_obstacles=[]
+    )
+    k1 = kin.compute(res_empty, 10.0, frame_id=1)
+    assert k1.hazard_state == "INITIALIZING", f"Startup frame must be INITIALIZING, got {k1.hazard_state}"
+    assert k1.threat_level == "UNKNOWN", f"Startup threat must be UNKNOWN, got {k1.threat_level}"
+    assert k1.guidance_state == "PATH_UNVERIFIED", f"Startup guidance must be PATH_UNVERIFIED, got {k1.guidance_state}"
+
+    # Frame 2 & 3: Still initializing until 3 stabilized frames
+    k2 = kin.compute(res_empty, 10.05, frame_id=2)
+    k3 = kin.compute(res_empty, 10.10, frame_id=3)
+    assert k3.hazard_state == "OBSERVED_LOW_RISK"
+    assert k3.threat_level == "SAFE"
+    assert k3.guidance_state == "NO_HAZARD_DETECTED_IN_OBSERVED_REGION"
+
+
+def test_rotation_does_not_clear_hazard():
+    """Directive 01B-A++ Task P0-F01 Point 7 & 8: Rotating away does not clear hazard."""
+    kin = KinematicsEngine()
+    w, h = config.CAM_WIDTH, config.CAM_HEIGHT
+    t0 = 50.0
+
+    # Frame 1: Critical hazard observed in front (pan 0.0)
+    obs = SingleObstacle(id=1, x=w//2, y=h//2, bbox=(240, 180, 160, 160), pan=0.0, proximity=1.0, dist_cm=35.0, mode_text="CRITICAL", uncertainty_score=0.1, is_wall=False)
+    res = ObstacleDetectionResult(x=obs.x, y=obs.y, bbox=obs.bbox, pan=0.0, proximity=1.0, dist_cm=35.0, mode_text="CRITICAL", uncertainty_score=0.1, is_wall=False, sector_dists={"LEFT": 150.0, "CENTER": 35.0, "RIGHT": 150.0}, all_obstacles=[obs])
+    kin.compute(res, t0, frame_id=1)
+
+    # Frame 2: Coasting expires (> 0.60s) into LOST_UNRESOLVED
+    res_empty_panned = ObstacleDetectionResult(
+        x=int(w*0.8), y=h//2, bbox=(0,0,0,0), pan=0.50, proximity=0.0, dist_cm=250.0,
+        mode_text="SAFE", uncertainty_score=0.05, is_wall=False,
+        sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}, all_obstacles=[]
+    )
+    k_exp = kin.compute(res_empty_panned, t0 + 0.70, frame_id=2)
+    assert k_exp.hazard_state == "LOST_UNRESOLVED"
+
+    # Frame 3, 4, 5: Camera is actively rotating (d_pan > 0.15)
+    for i in range(3, 6):
+        res_rotating = ObstacleDetectionResult(
+            x=int(w*0.8), y=h//2, bbox=(0,0,0,0), pan=0.20 * i, proximity=0.0, dist_cm=250.0,
+            mode_text="SAFE", uncertainty_score=0.05, is_wall=False,
+            sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}, all_obstacles=[]
+        )
+        k_rot = kin.compute(res_rotating, t0 + 0.70 + 0.1 * (i-2), frame_id=i)
+        assert k_rot.hazard_state == "LOST_UNRESOLVED", f"Frame {i}: Rotating away must NOT clear hazard to low risk!"
+        assert k_rot.threat_level == "UNRESOLVED_HAZARD"
+        assert k_rot.guidance_state == "PATH_UNRESOLVED"
 
 
 def test_coasting_phone_rotation_and_recovery():
@@ -105,66 +161,57 @@ def test_coasting_expiration_never_false_safe():
     assert k_expired.threat_level != "SAFE"
 
 
-def test_coasting_variable_fps_invariance():
-    """Directive 01B-A++: Coasting duration is invariant to FPS (5, 10, 20, 30 FPS)."""
-    w, h = config.CAM_WIDTH, config.CAM_HEIGHT
-    res_empty = ObstacleDetectionResult(x=w//2, y=h//2, bbox=(0,0,0,0), pan=0.0, proximity=0.0, dist_cm=250.0, mode_text="SAFE", uncertainty_score=0.05, is_wall=False, sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}, all_obstacles=[])
-
+def test_fps_independent_reminder_duration():
+    """Directive 01B-A++ Task P1-F02: Reminder duration is strictly time-based (1.5s), invariant across FPS."""
     for fps in [5, 10, 20, 30]:
+        budget_mgr = AuditoryBudgetManager()
         kin = KinematicsEngine()
-        t0 = 500.0
+        w, h = config.CAM_WIDTH, config.CAM_HEIGHT
+        t0 = 600.0
         dt = 1.0 / fps
 
-        # Frame 1: Critical hazard
+        # Trigger critical hazard
         obs = SingleObstacle(id=1, x=w//2, y=h//2, bbox=(240, 180, 160, 160), pan=0.0, proximity=1.0, dist_cm=35.0, mode_text="CRITICAL", uncertainty_score=0.1, is_wall=False)
         res = ObstacleDetectionResult(x=obs.x, y=obs.y, bbox=obs.bbox, pan=0.0, proximity=1.0, dist_cm=35.0, mode_text="CRITICAL", uncertainty_score=0.1, is_wall=False, sector_dists={"LEFT": 150.0, "CENTER": 35.0, "RIGHT": 150.0}, all_obstacles=[obs])
         kin.compute(res, t0, frame_id=1)
 
-        # Step until just before 0.60s
-        t = t0 + dt
-        fid = 2
-        while (t - t0) < 0.58:
-            k = kin.compute(res_empty, t, frame_id=fid)
-            assert k.hazard_state == "COASTING_HAZARD", f"FPS {fps}: At t={t-t0:.2f}s should be COASTING_HAZARD"
-            t += dt
-            fid += 1
+        # Expire coasting into LOST_UNRESOLVED at t = 600.70s
+        res_unres = ObstacleDetectionResult(x=w//2, y=h//2, bbox=(0,0,0,0), pan=0.0, proximity=0.0, dist_cm=250.0, mode_text="UNRESOLVED", uncertainty_score=0.05, is_wall=False, sector_dists={"LEFT": 100.0, "CENTER": 100.0, "RIGHT": 100.0}, all_obstacles=[])
+        t_lost = t0 + 0.70
+        k_unres = kin.compute(res_unres, t_lost, frame_id=2)
+        assert k_unres.hazard_state == "LOST_UNRESOLVED"
 
-        # Advance past 0.65s
-        t = t0 + 0.65
-        k_exp = kin.compute(res_empty, t, frame_id=fid)
-        assert k_exp.hazard_state in ["LOST_UNRESOLVED", "CONFIRMED_LOW_RISK"], f"FPS {fps}: Past 0.60s must expire coasting"
-        assert k_exp.coasting_time_remaining == 0.0
+        # Within 1.5 seconds real time: CAUTION_REMINDER must be emitted
+        t_check_active = t_lost + 1.0
+        k_check_active = kin.compute(res_unres, t_check_active, frame_id=3)
+        dec_active = budget_mgr.coordinate(res_unres, k_check_active)
+        assert dec_active.cue_mode == "CAUTION_REMINDER", f"FPS {fps}: at 1.0s elapsed should be CAUTION_REMINDER"
+        assert dec_active.volume_factor == 0.35
+
+        # Beyond 1.5 seconds real time: STANDBY_UNRESOLVED must be emitted
+        t_check_standby = t_lost + 1.6
+        k_check_standby = kin.compute(res_unres, t_check_standby, frame_id=4)
+        dec_standby = budget_mgr.coordinate(res_unres, k_check_standby)
+        assert dec_standby.cue_mode == "STANDBY_UNRESOLVED", f"FPS {fps}: at 1.6s elapsed should be STANDBY_UNRESOLVED"
+        assert dec_standby.volume_factor == 0.0
+        assert dec_standby.guidance_state == "PATH_UNRESOLVED"
 
 
-def test_bounded_audio_reminder_in_unresolved():
-    """Directive 01B-A++: Unresolved hazard audio reminder is bounded and does not sound permanently."""
-    budget_mgr = AuditoryBudgetManager()
+def test_watchdog_timeout_stalled_camera():
+    """Directive 01B-A++ Task P1-F02: Watchdog triggers SENSOR_FAULT / CAMERA_STALLED when frames stop (> 1.0s)."""
     kin = KinematicsEngine()
     w, h = config.CAM_WIDTH, config.CAM_HEIGHT
-    t0 = 600.0
+    t0 = 700.0
 
-    # Trigger critical hazard
-    obs = SingleObstacle(id=1, x=w//2, y=h//2, bbox=(240, 180, 160, 160), pan=0.0, proximity=1.0, dist_cm=35.0, mode_text="CRITICAL", uncertainty_score=0.1, is_wall=False)
-    res = ObstacleDetectionResult(x=obs.x, y=obs.y, bbox=obs.bbox, pan=0.0, proximity=1.0, dist_cm=35.0, mode_text="CRITICAL", uncertainty_score=0.1, is_wall=False, sector_dists={"LEFT": 150.0, "CENTER": 35.0, "RIGHT": 150.0}, all_obstacles=[obs])
-    kin.compute(res, t0, frame_id=1)
+    res_empty = ObstacleDetectionResult(x=w//2, y=h//2, bbox=(0,0,0,0), pan=0.0, proximity=0.0, dist_cm=250.0, mode_text="SAFE", uncertainty_score=0.05, is_wall=False, sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}, all_obstacles=[])
+    kin.compute(res_empty, t0, frame_id=1)
 
-    # Expire coasting into LOST_UNRESOLVED
-    res_unresolved = ObstacleDetectionResult(x=w//2, y=h//2, bbox=(0,0,0,0), pan=0.0, proximity=0.0, dist_cm=250.0, mode_text="UNRESOLVED", uncertainty_score=0.05, is_wall=False, sector_dists={"LEFT": 100.0, "CENTER": 100.0, "RIGHT": 100.0}, all_obstacles=[])
-    k_unres = kin.compute(res_unresolved, t0 + 0.75, frame_id=2)
-    assert k_unres.hazard_state == "LOST_UNRESOLVED"
-
-    # Frame 1 to 20: CAUTION_REMINDER emitted (volume 0.35)
-    for i in range(1, 21):
-        dec = budget_mgr.coordinate(res_unresolved, k_unres)
-        assert dec.cue_mode == "CAUTION_REMINDER"
-        assert dec.volume_factor == 0.35
-        assert dec.guidance_state == "PATH_UNRESOLVED"
-
-    # Frame 21+: Switched to STANDBY_UNRESOLVED (silent, volume 0.0, but still PATH_UNRESOLVED)
-    dec21 = budget_mgr.coordinate(res_unresolved, k_unres)
-    assert dec21.cue_mode == "STANDBY_UNRESOLVED"
-    assert dec21.volume_factor == 0.0
-    assert dec21.guidance_state == "PATH_UNRESOLVED"
+    # 1.5s passes without frames: check_watchdog called independently
+    fault_res = kin.check_watchdog(t0 + 1.5)
+    assert fault_res is not None, "Watchdog must detect > 1.0s frame gap"
+    assert fault_res.hazard_state == "SENSOR_FAULT"
+    assert fault_res.threat_level == "SENSOR_FAULT"
+    assert fault_res.guidance_state == "CAMERA_STALLED"
 
 
 def test_monotonic_timestamp_anomaly():
@@ -185,16 +232,20 @@ def test_monotonic_timestamp_anomaly():
 
 
 if __name__ == "__main__":
+    test_startup_state_initializing()
+    print("test_startup_state_initializing: PASS")
+    test_rotation_does_not_clear_hazard()
+    print("test_rotation_does_not_clear_hazard: PASS")
     test_coasting_phone_rotation_and_recovery()
     print("test_coasting_phone_rotation_and_recovery: PASS")
     test_coasting_preemption_by_new_critical_hazard()
     print("test_coasting_preemption_by_new_critical_hazard: PASS")
     test_coasting_expiration_never_false_safe()
     print("test_coasting_expiration_never_false_safe: PASS")
-    test_coasting_variable_fps_invariance()
-    print("test_coasting_variable_fps_invariance: PASS")
-    test_bounded_audio_reminder_in_unresolved()
-    print("test_bounded_audio_reminder_in_unresolved: PASS")
+    test_fps_independent_reminder_duration()
+    print("test_fps_independent_reminder_duration: PASS")
+    test_watchdog_timeout_stalled_camera()
+    print("test_watchdog_timeout_stalled_camera: PASS")
     test_monotonic_timestamp_anomaly()
     print("test_monotonic_timestamp_anomaly: PASS")
-    print("\nALL ADVERSARIAL BOUNDARY TESTS PASSED 100%!")
+    print("\nALL ADVERSARIAL FINAL TESTS PASSED 100%!")

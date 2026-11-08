@@ -60,10 +60,13 @@ class AuditoryBudgetManager {
         val allObs = depthRes.allObstacles
         val isEvading = kinRes.isEvading
 
-        // ── Directive 01B-A++ Task P0-01: Bounded Reminder Policy for LOST_UNRESOLVED ──
+        // ── Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if (kinRes.hazardState == "LOST_UNRESOLVED" || threatLevel == "UNRESOLVED_HAZARD") {
-            unresolvedReminderCount++
-            if (unresolvedReminderCount <= 20) {
+            val lostTs = kinRes.lostUnresolvedTimestamp.toFloat()
+            val nowTs = kinRes.timestamp
+            val elapsedUnresolved = if (lostTs > 0f && nowTs >= lostTs) nowTs - lostTs else 0f
+
+            if (elapsedUnresolved <= 1.5f) {
                 return BudgetDecision(
                     isActive = true,
                     pan = 0f,
@@ -100,8 +103,6 @@ class AuditoryBudgetManager {
                     suppressedObstacles = emptyList()
                 )
             }
-        } else {
-            unresolvedReminderCount = 0
         }
 
         // ── 1. Quy tắc Triệt tiêu thính giác (Suppression Filter - Im lặng tuyệt đối) ──

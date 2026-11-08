@@ -120,3 +120,4 @@ Evaluating the PCHIP interpolator across standard query points yields the exact,
 >   `measurement_basis = "METRIC_ESTIMATED_UNVERIFIED"`
 > - The system does **NOT** claim certified metric distance without external ground truth (e.g., stereo baseline, LiDAR, or ultrasonic ranging).
 > - High-confidence collision avoidance is driven primarily by **relative proximity trends and observable trajectory rates**, not absolute metric distance.
+

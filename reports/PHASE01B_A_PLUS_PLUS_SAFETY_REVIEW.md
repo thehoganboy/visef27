@@ -106,3 +106,4 @@ When environmental conditions deteriorate, the system enforces multi-level valid
 1. **Unsupervised Mobility Prohibited:** HorusEyes 2.0 is an assistive awareness system. It does not certify safe independent navigation without a white cane or guide dog.
 2. **Monocular Scale Ambiguity:** Depth distances represent unverified pseudo-metric estimates. Absolute physical distances require external ground-truth validation.
 3. **Non-Intrusive Audio Design:** Bounded reminders in `LOST_UNRESOLVED` prevent auditory saturation, ensuring the user can remain aware of environmental sounds (traffic, voices).
+

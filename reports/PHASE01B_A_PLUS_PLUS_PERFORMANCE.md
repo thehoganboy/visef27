@@ -94,3 +94,4 @@ Measurements taken over 500 consecutive frames under full pipeline load (Stage 1
 > - **iOS (iPhone with CoreML Neural Engine / ANE):**
 >   Estimated CoreML ANE inference: 15–25 ms. Swift kinematics & budget overhead: < 0.5 ms. Total expected mobile FPS: 25–30 FPS.
 > - These estimates are preliminary; physical-device hardware tests must be run on physical devices before stating final mobile production numbers (Gate D).
+

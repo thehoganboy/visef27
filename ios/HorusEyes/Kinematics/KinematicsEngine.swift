@@ -21,8 +21,9 @@ struct KinematicsResult {
     let isEvading: Bool
     let threatLevel: String     // "CRITICAL", "WARNING", "SAFE", "UNRESOLVED_HAZARD"
     let guidanceState: String
-    let hazardState: String     // "OBSERVED_HAZARD", "COASTING_HAZARD", "LOST_UNRESOLVED", "CONFIRMED_LOW_RISK"
+    let hazardState: String     // "INITIALIZING", "OBSERVED_HAZARD", "COASTING_HAZARD", "LOST_UNRESOLVED", "OBSERVED_LOW_RISK"
     let lostUnresolvedTimestamp: Double
+    let timestamp: Double
 }
 
 final class KinematicsEngine {
@@ -38,14 +39,14 @@ final class KinematicsEngine {
     private var lastSafeDirection: String = "RIGHT"
     private var cachedResult: KinematicsResult?
 
-    // Directive 01B-A++ Task P0-01: Cross-platform Hazard Coasting & Expiration State Machine
+    // Directive 01B-A++ Task P0-F01 & P1-F02: Cross-platform Hazard Coasting, Watchdog & Safe-State Semantics
     private var lastSeenTimestamp: Double = 0.0
     private var lastHazardDist: Float = 250.0
-    private var lastThreatLevel: String = "SAFE"
+    private var lastThreatLevel: String = "UNKNOWN"
     private var clearCorridorFrames: Int = 0
     private var lostUnresolvedTimestamp: Double = 0.0
     private let coastingDurationSec: Double = 0.60
-    private var hazardState: String = "CONFIRMED_LOW_RISK"
+    private var hazardState: String = "INITIALIZING"
 
     init() {}
 
@@ -226,9 +227,9 @@ final class KinematicsEngine {
                     }
 
                     if clearCorridorFrames >= 3 {
-                        hazardState = "CONFIRMED_LOW_RISK"
+                        hazardState = "OBSERVED_LOW_RISK"
                         activeThreatLevel = "SAFE"
-                        activeGuidanceState = "PATH_CLEAR_CONFIRMED"
+                        activeGuidanceState = "NO_HAZARD_DETECTED_IN_OBSERVED_REGION"
                         lastThreatLevel = "SAFE"
                         lastSeenTimestamp = 0.0
                         lostUnresolvedTimestamp = 0.0
@@ -242,10 +243,26 @@ final class KinematicsEngine {
                     }
                 }
             } else {
-                hazardState = "CONFIRMED_LOW_RISK"
-                activeThreatLevel = "SAFE"
-                activeGuidanceState = "PATH_UNVERIFIED"
-                lastThreatLevel = "SAFE"
+                let secCenterClear = distC >= 200.0
+                let secLeftClear = distL >= 150.0
+                let secRightClear = distR >= 150.0
+
+                if secCenterClear && secLeftClear && secRightClear {
+                    clearCorridorFrames = min(100, clearCorridorFrames + 1)
+                } else {
+                    clearCorridorFrames = 0
+                }
+
+                if clearCorridorFrames >= 3 {
+                    hazardState = "OBSERVED_LOW_RISK"
+                    activeThreatLevel = "SAFE"
+                    activeGuidanceState = "NO_HAZARD_DETECTED_IN_OBSERVED_REGION"
+                } else {
+                    hazardState = "INITIALIZING"
+                    activeThreatLevel = "UNKNOWN"
+                    activeGuidanceState = "PATH_UNVERIFIED"
+                }
+                lastThreatLevel = activeThreatLevel
                 lastSeenTimestamp = 0.0
                 lostUnresolvedTimestamp = 0.0
             }
@@ -260,7 +277,8 @@ final class KinematicsEngine {
             threatLevel: activeThreatLevel,
             guidanceState: activeGuidanceState,
             hazardState: hazardState,
-            lostUnresolvedTimestamp: lostUnresolvedTimestamp
+            lostUnresolvedTimestamp: lostUnresolvedTimestamp,
+            timestamp: timestamp
         )
 
         cachedResult = result

@@ -114,3 +114,4 @@
    - Mitigated: When user points camera to a clear corridor, 3 frames at 15–20 FPS takes only 0.15–0.20 seconds to confirm and clear `LOST_UNRESOLVED`.
 3. **Cross-Platform State Divergence:**
    - Mitigated: The same 6-state names and 3-frame threshold implemented in Kotlin and Swift.
+
