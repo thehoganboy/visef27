@@ -104,3 +104,4 @@ The primary improvements implemented across the Python reference pipeline, Andro
   - Added **Scenario 16:** Stationary Close Obstacle at $30\text{ cm}$ (verifies `static_risk = "CRITICAL"`, `dynamic_risk = "NONE"`, and immediate warning emission despite $TTC = \infty$).
 - **`tests/golden_test_cases.json`:**
   - Created JSON test specification defining 7 golden test cases for cross-platform validation.
+

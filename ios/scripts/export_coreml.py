@@ -10,6 +10,7 @@ Output: 'depth' / 'var_...' (MultiArray Float32 [1, 256, 256])
 
 import os
 import sys
+import time
 import shutil
 import traceback
 import urllib.request
@@ -18,6 +19,40 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
 if hasattr(sys.stderr, "reconfigure"):
     sys.stderr.reconfigure(line_buffering=True, encoding="utf-8")
+
+def download_file_with_retry(url, dest_path, retries=4, timeout=45):
+    """Download a file with user-agent, streaming, and retries."""
+    tmp_path = dest_path + ".tmp"
+    for attempt in range(retries):
+        try:
+            print(f"[*] Downloading {url} (attempt {attempt+1}/{retries})...", flush=True)
+            req = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+            )
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                with open(tmp_path, "wb") as f:
+                    while True:
+                        chunk = resp.read(1024 * 1024)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+            sz = os.path.getsize(tmp_path)
+            if sz > 50_000_000:
+                os.replace(tmp_path, dest_path)
+                print(f"[+] Download complete: {sz} bytes saved to {dest_path}", flush=True)
+                return True
+            else:
+                print(f"[!] Warning: downloaded file too small ({sz} bytes). Retrying...", flush=True)
+        except Exception as e:
+            print(f"[!] Attempt {attempt+1} error: {e}", flush=True)
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+            time.sleep(3 * (attempt + 1))
+    return False
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -46,17 +81,60 @@ def main():
 
     in_h, in_w = 256, 256
 
-    print("[*] Loading PyTorch MiDaS_small model...", flush=True)
+    print("[*] Locating or downloading MiDaS_small weights...", flush=True)
+    candidate_weights = [
+        os.path.join(script_dir, "midas_v21_small_256.pt"),
+        os.path.expanduser("~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt"),
+        os.path.join(torch.hub.get_dir(), "checkpoints", "midas_v21_small_256.pt"),
+    ]
+    weights_path = None
+    for p in candidate_weights:
+        if os.path.exists(p) and os.path.getsize(p) > 50_000_000:
+            weights_path = p
+            print(f"[+] Found valid cached weights: {weights_path} ({os.path.getsize(p)} bytes)", flush=True)
+            break
+
+    if weights_path is None:
+        target_weights = os.path.join(script_dir, "midas_v21_small_256.pt")
+        weights_url = "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
+        if download_file_with_retry(weights_url, target_weights):
+            weights_path = target_weights
+        else:
+            print("[!] Warning: Could not download direct weights file, will rely on torch.hub.", flush=True)
+
+    print("[*] Loading PyTorch MiDaS_small model architecture...", flush=True)
     model = None
 
+    # Source 0: Local git clone of MiDaS (completely offline)
+    local_midas_candidates = [
+        os.path.join(script_dir, "MiDaS"),
+        os.path.expanduser("~/.cache/torch/hub/isl-org_MiDaS_master"),
+        os.path.expanduser("~/.cache/torch/hub/intel-isl_MiDaS_master"),
+    ]
+    for local_dir in local_midas_candidates:
+        if os.path.isdir(local_dir) and os.path.exists(os.path.join(local_dir, "hubconf.py")):
+            try:
+                print(f"[*] Trying local torch.hub.load from {local_dir} (source='local')...", flush=True)
+                model = torch.hub.load(local_dir, "MiDaS_small", source="local", pretrained=False)
+                if weights_path and os.path.exists(weights_path):
+                    state_dict = torch.load(weights_path, map_location="cpu")
+                    model.load_state_dict(state_dict)
+                    print(f"[+] Loaded weights into local MiDaS model from {weights_path}.", flush=True)
+                print("[+] Loaded MiDaS_small from local repository successfully.", flush=True)
+                break
+            except Exception as ex0:
+                print(f"[!] Local hub load failed: {ex0}", flush=True)
+                traceback.print_exc()
+
     # Source 1: intel-isl/MiDaS
-    try:
-        print("[*] Trying torch.hub.load('intel-isl/MiDaS', 'MiDaS_small')...", flush=True)
-        model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-        print("[+] Loaded MiDaS_small from intel-isl/MiDaS successfully.", flush=True)
-    except Exception as ex1:
-        print(f"[!] intel-isl attempt failed: {ex1}", flush=True)
-        traceback.print_exc()
+    if model is None:
+        try:
+            print("[*] Trying torch.hub.load('intel-isl/MiDaS', 'MiDaS_small')...", flush=True)
+            model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
+            print("[+] Loaded MiDaS_small from intel-isl/MiDaS successfully.", flush=True)
+        except Exception as ex1:
+            print(f"[!] intel-isl attempt failed: {ex1}", flush=True)
+            traceback.print_exc()
 
     # Source 2: isl-org/MiDaS
     if model is None:
@@ -68,16 +146,10 @@ def main():
             print(f"[!] isl-org attempt failed: {ex2}", flush=True)
             traceback.print_exc()
 
-    # Source 3: Direct Download checkpoint & manual instantiate
-    if model is None:
+    # Source 3: Walk hub directory for midas_net_custom.py
+    if model is None and weights_path and os.path.exists(weights_path):
         try:
-            weights_url = "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
-            weights_path = os.path.join(script_dir, "midas_v21_small_256.pt")
-            if not os.path.exists(weights_path):
-                print(f"[*] Downloading weights directly from {weights_url}...", flush=True)
-                urllib.request.urlretrieve(weights_url, weights_path)
-                print(f"[+] Downloaded {os.path.getsize(weights_path)} bytes to {weights_path}", flush=True)
-
+            print("[*] Trying manual instantiation of MidasNet_small...", flush=True)
             hub_dir = torch.hub.get_dir()
             for root, dirs, files in os.walk(hub_dir):
                 if "midas_net_custom.py" in files:

@@ -34,12 +34,24 @@ jobs:
           python -m pip install --upgrade pip
           pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools>=7.0" "numpy<2.0.0"
 
-      - name: Pre-cache MiDaS PyTorch Weights
+      - name: Pre-cache MiDaS PyTorch Weights and Architecture
         run: |
           mkdir -p ~/.cache/torch/hub/checkpoints
-          echo "=== Pre-downloading MiDaS small weights via curl ==="
-          curl -L -s -o ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
-          ls -la ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt
+          mkdir -p ios/scripts
+          echo "=== Pre-downloading MiDaS small weights via curl with retry ==="
+          curl -fL --retry 5 --retry-delay 3 -H "User-Agent: Mozilla/5.0" \
+            -o ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt \
+            "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
+          cp ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt ios/scripts/midas_v21_small_256.pt
+          ls -la ~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt ios/scripts/midas_v21_small_256.pt
+          SIZE=$(wc -c < ios/scripts/midas_v21_small_256.pt | tr -d ' ')
+          echo "Downloaded weights size: $SIZE bytes"
+          [ "$SIZE" -gt 50000000 ] || { echo "FATAL: Weights file too small ($SIZE bytes)"; exit 1; }
+
+          echo "=== Pre-cloning MiDaS repository to local cache ==="
+          git clone --depth 1 https://github.com/isl-org/MiDaS.git ios/scripts/MiDaS || true
+          git clone --depth 1 https://github.com/isl-org/MiDaS.git ~/.cache/torch/hub/isl-org_MiDaS_master || true
+          git clone --depth 1 https://github.com/isl-org/MiDaS.git ~/.cache/torch/hub/intel-isl_MiDaS_master || true
 
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)
         env:

@@ -85,3 +85,4 @@ Monocular relative disparity is transformed to pseudo-metric centimeters using P
 - Active Tracks at Frame 50: `1`
 - Active Tracks at Frame 500: `1`
 - Net Memory Drift over 500 cycles: **0.00 MB** (bounded circular buffer size $\le 10$).
+

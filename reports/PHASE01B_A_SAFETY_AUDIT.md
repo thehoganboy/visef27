@@ -140,3 +140,4 @@ While Phase 01B-A resolves critical algorithmic and safety vulnerabilities, the 
 3. **Thin Wires and Hanging Cords:**
    - Low-resolution ($160 \times 160$) downsampling suppresses high-frequency spatial features thinner than $2\%$ frame area.
    - *Phase 01B-B Mitigation:* The proposed design integrates edge-preserving Laplacian pyramid filtering and directional Sobel edge enhancement.
+
