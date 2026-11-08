@@ -129,3 +129,4 @@ if dist_cm <= 80.0 and abs(pan) <= 0.75:
 #### Changes:
 - Removed `maxim-lobanov/setup-xcode@v1` dependency, which caused build failures due to external GitHub API HTTP 504 timeouts.
 - Used direct `xcodebuild -version` check on GitHub `macos-latest` runners, ensuring deterministic local toolchain execution.
+

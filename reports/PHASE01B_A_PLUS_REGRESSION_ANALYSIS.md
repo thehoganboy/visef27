@@ -89,3 +89,4 @@ The PM and CI monitoring logs recorded failures on the following 4 runs on `main
 4. **Run #27 Flake (`maxim-lobanov/setup-xcode@v1`)**:
    - **Root Cause**: The external GitHub Action `maxim-lobanov/setup-xcode@v1` timed out connecting to the GitHub API.
    - **Resolution in WP-01B-A+**: Removed this third-party action from `.github/workflows/build_ios_ipa.yml` and directly invoked the runner's native `xcodebuild -version`.
+

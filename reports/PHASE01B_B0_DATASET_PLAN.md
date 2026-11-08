@@ -85,3 +85,4 @@ Every benchmark clip is accompanied by an immutable JSON annotation sidecar:
 }
 ```
 Zero synthetic extrapolation. Laser ground truth is interpolated solely between physical measurements recorded at fixed spatial markers.
+

@@ -109,3 +109,4 @@ Validation is formally partitioned into two independent tiers:
 | Covered lens yields `UNOBSERVABLE` & `SYSTEM_FAULT` | Scenario 17 (`diagnose_system.py`) | PASS | 100% Compliant |
 | Zero unverified steering directions | Scenario 09 & Pipeline Audit 1.1 | PASS | 100% Compliant |
 | Mobile kinematics parity (Android & iOS) | Audit 1.3, 1.4 & Code Review | PASS | 100% Compliant |
+

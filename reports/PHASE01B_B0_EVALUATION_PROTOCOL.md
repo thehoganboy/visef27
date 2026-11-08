@@ -75,3 +75,4 @@ python -m eval.harness \
   --output reports/eval_results_midas.json
 ```
 The harness outputs machine-readable JSON results and per-stage diagnostic attributions.
+

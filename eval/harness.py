@@ -291,3 +291,4 @@ class ObstacleEvaluationHarness:
             "stage_latency_mean_ms": {k: round(float(np.mean(v)), 2) if v else 0.0 for k, v in self.stage_latencies.items()}
         }
         return summary
+

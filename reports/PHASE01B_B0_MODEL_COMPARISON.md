@@ -67,3 +67,4 @@ The production pipeline (`depth_engine.py`) remains untouched and dedicated to M
 1. Benchmark MiDaS and Depth Anything V2 Small on the identical 14 categories in `eval/dataset_manifest.json` using `eval/harness.py`.
 2. Measure Zone 1 Recall and Boundary Precision.
 3. If Depth Anything V2 demonstrates $>20\%$ relative recall improvement on thin poles and drop-offs while meeting $\le 30$ ms latency on Apple Neural Engine / Android NNAPI, prepare a formal recommendation report for CTO review prior to any production deployment.
+

@@ -104,3 +104,4 @@ PCHIP Calibration Knots (Raw Disparity -> Distance cm):
   Kotlin Monotonicity: STRICT (d_dist/d_raw < 0)
   Swift Monotonicity:  STRICT (d_dist/d_raw < 0)
 ```
+

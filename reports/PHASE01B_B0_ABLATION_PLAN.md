@@ -75,3 +75,4 @@ We formulate a 5-Condition Component Ablation Study to rigorously isolate the co
   - Post-hoc pairwise comparisons using Tukey's Honestly Significant Difference (HSD) and two-tailed Wilcoxon signed-rank tests for non-parametric metrics.
   - Significance threshold set at $\alpha = 0.01$ with Bonferroni correction for multi-hypothesis testing.
 - **Zero Fabrication**: All trials to be logged via automated timestamped telemetry JSON for review.
+
