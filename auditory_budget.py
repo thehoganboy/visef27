@@ -125,9 +125,11 @@ class AuditoryBudgetManager:
         # - Hoặc khoảng cách >= DIST_SAFE_CM (250cm)
         # - Hoặc nhãn SAFE (Clear Path)
         # - Hoặc TTC > TTC_WARNING (2.5s) và khoảng cách >= DIST_ALERT_CM (200cm)
-        # Ngoại lệ: Không triệt tiêu nếu là lỗi cảm biến (SENSOR_BLIND)
-        is_sensor_fault = (obs_res.mode_text == "SENSOR_BLIND (0-Lux)")
-        if not is_sensor_fault and (
+        # Ngoại lệ: Không triệt tiêu nếu là lỗi cảm biến (SENSOR_BLIND / DEGRADED) hoặc đang lưu vết trễ (Coasting)
+        is_sensor_fault = (obs_res.mode_text == "SENSOR_BLIND (0-Lux)" or not getattr(obs_res, "is_valid", True))
+        is_coasting = getattr(kinematics_res, "hazard_persistence_active", False)
+
+        if not is_sensor_fault and not is_coasting and (
             threat_level == "SAFE"
             or dist_cm >= config.DIST_SAFE_CM
             or obs_res.mode_text.startswith("SAFE")
@@ -275,8 +277,10 @@ class AuditoryBudgetManager:
         else:
             pan = float(np.clip(active_pan, -1.0, 1.0))
 
-        # ── 4. Cơ chế trễ vòng lặp kín (Closed-Loop Hysteresis) ──
-        volume_factor = config.HYSTERESIS_DECAY if is_evading else 1.0
+        # ── 4. Bảo toàn Âm lượng Cảnh báo Toàn phần (Directive 01B Task A2) ──
+        # KHÔNG tự động giảm âm lượng cảnh báo (-6dB) chỉ vì xoay đầu / xoay camera.
+        # Cảnh báo mối nguy trong hành lang bắt buộc giữ nguyên 100% âm lượng (1.0).
+        volume_factor = 1.0
 
         # ── 5. Mã hóa âm học theo độ bất định AI có Hysteresis ──
         blur_thresh = getattr(config, "UNCERTAINTY_BLUR_THRESHOLD", 0.48)

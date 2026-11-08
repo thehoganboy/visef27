@@ -635,6 +635,125 @@ def test_scenario_13_sensor_fault_and_invalid_depth(depth_est, kin_engine, budge
     return True
 
 
+def test_scenario_14_concentrated_corridor_invalidity(depth_est, kin_engine, budget_mgr):
+    """
+    [Scenario 14] Concentrated Corridor Invalidity (Directive 01B Task A3):
+    Tỷ lệ lỗi toàn cục thấp (~8%, < 15%), nhưng toàn bộ Sector Giữa (hành lang trung tâm)
+    bị lỗi dữ liệu (NaN / glare).
+    Assert:
+    - is_valid == False
+    - validity_state == 'DEGRADED'
+    - mode_text chứa VISUAL_EVIDENCE_DEGRADED
+    - sector_dists['CENTER'] là NaN (không được âm thầm tính ra số cm giả định)
+    """
+    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+    mock_raw = np.full((h, w), 250.0, dtype=np.float32)  # 250 raw ~ 237cm
+    mock_norm = np.full((h, w), 50, dtype=np.uint8)
+
+    # Độc hóa riêng Sector Giữa: ~10% diện tích toàn khung hình (< 15%), nhưng làm hỏng >50% Sector Giữa
+    y_start, y_end = int(0.30 * h), int(0.65 * h)
+    cx1, cx2 = int(0.04 * w), int(0.96 * w)
+    sec_w = (cx2 - cx1) // 3
+    mock_raw[y_start:y_end, cx1 + sec_w : cx1 + 2 * sec_w] = float("nan")
+
+    res = depth_est.detect_obstacle(mock_norm, mock_raw)
+    print(f"  [Output 14] is_valid={res.is_valid}, validity_state='{res.validity_state}', mode='{res.mode_text}'")
+    assert res.is_valid is False, "LỖI 14: Hành lang trung tâm bị hỏng dữ liệu phải trả về is_valid=False!"
+    assert res.validity_state == "DEGRADED", f"LỖI 14: validity_state phải là DEGRADED, nhận {res.validity_state}"
+    assert "VISUAL_EVIDENCE_DEGRADED" in res.mode_text, f"LỖI 14: Mode text phải là VISUAL_EVIDENCE_DEGRADED, nhận {res.mode_text}"
+    assert math.isnan(res.sector_dists["CENTER"]), f"LỖI 14: sector_dists['CENTER'] phải là NaN, nhận {res.sector_dists['CENTER']}"
+    return True
+
+
+def test_scenario_15_phone_rotation_and_coasting_persistence(budget_mgr):
+    """
+    [Scenario 15] Phone Rotation vs Body Evasion & Hazard Persistence (Directive 01B Task A2):
+    Người dùng cầm máy quay ngang (pan dịch chuyển 0.0 -> +0.80 và ra khỏi khung hình ở frame 5).
+    Khoảng cách vật thể giữ nguyên ~50cm.
+    Assert:
+    - Frame 1-4: volume_factor == 1.0 (KHÔNG được giảm 50% âm lượng chỉ vì xoay camera).
+    - Frame 5 (vật cản vừa ra khỏi camera): hazard_persistence_active == True,
+      âm thanh cảnh báo KHÔNG bị tắt phụt mà duy trì cảnh báo lưu vết (Coasting).
+    """
+    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+    kin = KinematicsEngine()
+    t_base = time.perf_counter()
+
+    for i in range(4):
+        t_i = t_base + i * 0.033
+        pan_i = float(i * 0.20)  # 0.0, 0.2, 0.4, 0.6
+        d_i = 50.0  # Khoảng cách không đổi (người chưa hề bước né tránh)
+
+        obs_i = SingleObstacle(
+            id=1, x=int(w * (0.5 + pan_i / 2.0)), y=h // 2, bbox=(280, 200, 80, 80),
+            pan=pan_i, proximity=dist_to_proximity(d_i), dist_cm=d_i,
+            mode_text="WARNING", uncertainty_score=0.10, is_wall=False
+        )
+        res_i = ObstacleDetectionResult(
+            x=obs_i.x, y=obs_i.y, bbox=obs_i.bbox, pan=pan_i, proximity=obs_i.proximity,
+            dist_cm=d_i, mode_text="WARNING", uncertainty_score=0.10, is_wall=False,
+            sector_dists={"LEFT": 180.0, "CENTER": d_i, "RIGHT": 180.0}, all_obstacles=[obs_i]
+        )
+        kin_out = kin.compute(res_i, t_i, frame_id=i + 1)
+        dec_out = budget_mgr.coordinate(res_i, kin_out)
+        assert dec_out.volume_factor == 1.0, f"LỖI 15 (Frame {i+1}): volume_factor bị hạ ({dec_out.volume_factor}) khi chỉ xoay camera!"
+
+    # Frame 5: Vật cản vừa trượt ra khỏi góc nhìn của camera (all_obstacles = [])
+    t_5 = t_base + 4 * 0.033
+    empty_res = ObstacleDetectionResult(
+        x=w // 2, y=h // 2, bbox=(0, 0, 0, 0), pan=0.0, proximity=0.0,
+        dist_cm=250.0, mode_text="NO_OBSTACLE_DETECTED (Unverified Path)", uncertainty_score=0.05,
+        is_wall=False, sector_dists={"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}, all_obstacles=[]
+    )
+    kin_out_5 = kin.compute(empty_res, t_5, frame_id=5)
+    dec_out_5 = budget_mgr.coordinate(empty_res, kin_out_5)
+
+    print(f"  [Output Frame 5 Coasting] persistence={kin_out_5.hazard_persistence_active}, active={dec_out_5.is_active}, threat={dec_out_5.threat_level}")
+    assert kin_out_5.hazard_persistence_active is True, "LỖI 15: Vật cản nguy hiểm ở 50cm vừa ra khỏi khung hình phải kích hoạt coasting!"
+    assert dec_out_5.is_active is True, "LỖI 15: Cảnh báo âm thanh bị tắt phụt khi vật cản vừa ra khỏi camera!"
+    assert dec_out_5.threat_level == "WARNING", f"LỖI 15: Trạng thái đe dọa phải được duy trì ở WARNING, nhận {dec_out_5.threat_level}"
+    return True
+
+
+def test_scenario_16_stationary_close_obstacle_at_30cm(depth_est, kin_engine, budget_mgr):
+    """
+    [Scenario 16] Stationary Close Obstacle at 30cm (Directive 01B Task A4):
+    Vật cản tĩnh cự ly 30cm (vz = 0.0 cm/s -> TTC = inf).
+    Assert:
+    - primary_static_risk == 'CRITICAL'
+    - primary_dynamic_risk == 'NONE'
+    - Tổng quan threat_level == 'CRITICAL' (TTC vô cùng KHÔNG ĐƯỢC biến vật cản 30cm thành an toàn!)
+    - Âm thanh cảnh báo PHẢI hoạt động (decision.is_active == True) với 100% âm lượng (volume_factor == 1.0).
+    """
+    h, w = config.CAM_HEIGHT, config.CAM_WIDTH
+    kin = KinematicsEngine()
+    t_now = time.perf_counter()
+
+    obs = SingleObstacle(
+        id=1, x=w // 2, y=h // 2, bbox=(int(w*0.3), int(h*0.3), int(w*0.4), int(h*0.4)),
+        pan=0.0, proximity=1.0, dist_cm=30.0,
+        mode_text="CRITICAL (30.0cm)", uncertainty_score=0.10, is_wall=False
+    )
+    res = ObstacleDetectionResult(
+        x=obs.x, y=obs.y, bbox=obs.bbox, pan=0.0, proximity=1.0,
+        dist_cm=30.0, mode_text="CRITICAL (30.0cm)", uncertainty_score=0.10, is_wall=False,
+        sector_dists={"LEFT": 100.0, "CENTER": 30.0, "RIGHT": 100.0}, all_obstacles=[obs]
+    )
+
+    # Frame 1 & Frame 2 đứng yên hoàn toàn (vz = 0)
+    kin.compute(res, t_now, frame_id=1)
+    kin_out = kin.compute(res, t_now + 0.05, frame_id=2)
+    decision = budget_mgr.coordinate(res, kin_out)
+
+    print(f"  [Output 16] static_risk='{kin_out.primary_static_risk}', dynamic_risk='{kin_out.primary_dynamic_risk}', threat='{kin_out.threat_level}', ttc={kin_out.primary_ttc}")
+    assert kin_out.primary_static_risk == "CRITICAL", f"LỖI 16: Rủi ro cự ly tĩnh ở 30cm phải là CRITICAL, nhận {kin_out.primary_static_risk}"
+    assert kin_out.primary_dynamic_risk == "NONE", f"LỖI 16: Rủi ro động học của vật tĩnh phải là NONE, nhận {kin_out.primary_dynamic_risk}"
+    assert kin_out.threat_level == "CRITICAL", f"LỖI 16: Tổng quan threat_level ở 30cm phải là CRITICAL, nhận {kin_out.threat_level}"
+    assert decision.is_active is True, "LỖI 16: Vật cản 30cm phải kích hoạt cảnh báo âm thanh!"
+    assert decision.volume_factor == 1.0, f"LỖI 16: Âm lượng phải giữ nguyên 1.0, nhận {decision.volume_factor}"
+    return True
+
+
 def run_stress_test_500_cycles(depth_est, kin_engine, budget_mgr, audio_engine, hud):
     """
     [GIAI ĐOẠN 4] Stress Test 500 chu kỳ, Kiểm tra Rò rỉ RAM & Latency Profiling:
@@ -773,6 +892,9 @@ def main():
         ("[Scenario 11] Zero-Lux Flash & AE Blanking", lambda: test_scenario_11_zero_lux_auto_flash(audio_engine)),
         ("[Scenario 12] Camera Freeze Watchdog", lambda: test_scenario_12_camera_watchdog_hang(audio_engine)),
         ("[Scenario 13] Sensor Fault & Invalid Depth", lambda: test_scenario_13_sensor_fault_and_invalid_depth(depth_est, kin_engine, budget_mgr)),
+        ("[Scenario 14] Concentrated Corridor Invalidity", lambda: test_scenario_14_concentrated_corridor_invalidity(depth_est, kin_engine, budget_mgr)),
+        ("[Scenario 15] Phone Rotation vs Body Evasion & Coasting", lambda: test_scenario_15_phone_rotation_and_coasting_persistence(budget_mgr)),
+        ("[Scenario 16] Stationary Close Obstacle at 30cm", lambda: test_scenario_16_stationary_close_obstacle_at_30cm(depth_est, kin_engine, budget_mgr)),
     ]
 
     for name, test_func in scenarios:

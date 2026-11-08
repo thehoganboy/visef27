@@ -1,0 +1,121 @@
+{
+  "schema_version": "1.0",
+  "directive": "ENGINEERING DIRECTIVE 01B-A",
+  "description": "Standardized Golden Test Cases for Cross-Platform Evaluation (Python, Android Kotlin, iOS Swift)",
+  "test_cases": [
+    {
+      "id": "GOLDEN-01-STATIONARY-CLOSE-30CM",
+      "description": "Stationary close obstacle at 30cm (vz = 0 cm/s, TTC = inf). Must trigger CRITICAL proximity alert without suppression.",
+      "inputs": {
+        "dist_cm": 30.0,
+        "velocity_z": 0.0,
+        "pan": 0.0,
+        "ttc": null,
+        "sector_dists": {"LEFT": 100.0, "CENTER": 30.0, "RIGHT": 100.0}
+      },
+      "expected_outputs": {
+        "static_risk": "CRITICAL",
+        "dynamic_risk": "NONE",
+        "threat_level": "CRITICAL",
+        "volume_factor": 1.0,
+        "audio_active": true,
+        "safe_direction": "NONE"
+      }
+    },
+    {
+      "id": "GOLDEN-02-RAPID-APPROACHING-120CM",
+      "description": "Rapidly approaching object at 120cm with closing speed 150cm/s (TTC = 0.8s). Must trigger CRITICAL dynamic alert.",
+      "inputs": {
+        "dist_cm": 120.0,
+        "velocity_z": 150.0,
+        "pan": 0.0,
+        "ttc": 0.80,
+        "sector_dists": {"LEFT": 250.0, "CENTER": 120.0, "RIGHT": 250.0}
+      },
+      "expected_outputs": {
+        "static_risk": "WARNING",
+        "dynamic_risk": "CRITICAL",
+        "threat_level": "CRITICAL",
+        "volume_factor": 1.0,
+        "audio_active": true,
+        "safe_direction": "NONE"
+      }
+    },
+    {
+      "id": "GOLDEN-03-CLEAR-PATH-UNVERIFIED",
+      "description": "Clear corridor at raw disparity 250 (PCHIP maps to 237.2cm). Must report unverified path and mute audio.",
+      "inputs": {
+        "dist_cm": 237.2,
+        "velocity_z": 0.0,
+        "pan": 0.0,
+        "ttc": null,
+        "sector_dists": {"LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0}
+      },
+      "expected_outputs": {
+        "static_risk": "SAFE",
+        "dynamic_risk": "NONE",
+        "threat_level": "SAFE",
+        "audio_active": false,
+        "mode_text": "NO_OBSTACLE_DETECTED (Unverified Path)",
+        "measurement_basis": "METRIC_ESTIMATED_UNVERIFIED"
+      }
+    },
+    {
+      "id": "GOLDEN-04-CONCENTRATED-CORRIDOR-INVALIDITY",
+      "description": "Center traversal corridor corrupted with NaN (>20% invalid in center, <10% global). Must report DEGRADED.",
+      "inputs": {
+        "global_invalid_ratio": 0.08,
+        "center_invalid_ratio": 0.60
+      },
+      "expected_outputs": {
+        "is_valid": false,
+        "validity_state": "DEGRADED",
+        "mode_text_prefix": "VISUAL_EVIDENCE_DEGRADED",
+        "center_dist_nan": true
+      }
+    },
+    {
+      "id": "GOLDEN-05-PHONE-ROTATION-IMMUNITY",
+      "description": "User rotates phone creating pan shift without distance increase. Must NOT attenuate warning volume.",
+      "inputs": {
+        "dist_cm": 50.0,
+        "delta_pan": 0.60,
+        "delta_dist": 0.0,
+        "velocity_z": 0.0
+      },
+      "expected_outputs": {
+        "is_evading": false,
+        "volume_factor": 1.0,
+        "audio_active": true
+      }
+    },
+    {
+      "id": "GOLDEN-06-HAZARD-PERSISTENCE-COASTING",
+      "description": "Critical obstacle at 50cm exits camera FOV due to camera turn. Must persist warning for up to 5 coasting frames.",
+      "inputs": {
+        "prior_dist_cm": 50.0,
+        "prior_threat_level": "WARNING",
+        "current_all_obs_empty": true
+      },
+      "expected_outputs": {
+        "hazard_persistence_active": true,
+        "threat_level": "WARNING",
+        "audio_active": true
+      }
+    },
+    {
+      "id": "GOLDEN-07-CROSSING-OUTSIDE-CORRIDOR",
+      "description": "Lateral moving object outside collision corridor (pan = 0.85). Must not trigger frontal preemption.",
+      "inputs": {
+        "dist_cm": 90.0,
+        "pan": 0.85,
+        "velocity_z": 0.0
+      },
+      "expected_outputs": {
+        "path_risk": "OUTSIDE",
+        "threat_level": "SAFE",
+        "safe_direction": "NONE"
+      }
+    }
+  ]
+}

@@ -231,6 +231,8 @@ class SingleObstacle:
     mode_text: str                  # Nhãn trạng thái không gian
     uncertainty_score: float        # Độ bất định AI [0.0, 1.0]
     is_wall: bool                   # Cờ nhận diện là vách tường
+    validity: str = "VALID"         # "VALID", "DEGRADED", "UNKNOWN" (Directive 01B Task A3)
+    measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # "METRIC_CALIBRATED", "METRIC_ESTIMATED_UNVERIFIED", "RELATIVE_ONLY", "UNKNOWN"
 
 
 @dataclass
@@ -251,6 +253,9 @@ class ObstacleDetectionResult:
     drop_off_hazard: bool = False   # Cờ bậc thềm / hố sâu
     is_valid: bool = True           # Cờ dữ liệu hợp lệ (False nếu lỗi cảm biến/NaN)
     is_scale_uncalibrated: bool = True # Cờ cảnh báo tỷ lệ metric chưa qua cảm biến cứng (LiDAR)
+    validity_state: str = "VALID"   # "VALID", "DEGRADED", "SENSOR_FAULT", "UNKNOWN" (Directive 01B Task A3)
+    spatial_validity: dict = None   # {"GLOBAL": ..., "LEFT": ..., "CENTER": ..., "RIGHT": ..., "CORRIDOR": ...}
+    measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # Directive 01B Principle B
 
 
 class DepthEstimator:
@@ -377,13 +382,21 @@ class DepthEstimator:
         self._last_frame = frame_bgr
         return depth_norm.astype(np.uint8), depth_raw
 
-    def _create_sensor_fault_result(self, h: int, w: int, reason: str = "SENSOR_FAULT") -> ObstacleDetectionResult:
+    def _create_sensor_fault_result(
+        self, h: int, w: int, reason: str = "SENSOR_FAULT",
+        validity_state: str = "SENSOR_FAULT",
+        spatial_validity: Optional[dict] = None
+    ) -> ObstacleDetectionResult:
+        if spatial_validity is None:
+            spatial_validity = {"GLOBAL": 0.0, "LEFT": 0.0, "CENTER": 0.0, "RIGHT": 0.0, "CORRIDOR": 0.0}
         fault_obs = SingleObstacle(
             id=1, x=w // 2, y=h // 2,
             bbox=(0, 0, w, h),
             pan=0.0, proximity=1.0, dist_cm=float("nan"),
             mode_text=reason,
-            uncertainty_score=1.0, is_wall=False
+            uncertainty_score=1.0, is_wall=False,
+            validity=validity_state,
+            measurement_basis="UNKNOWN"
         )
         return ObstacleDetectionResult(
             x=w // 2, y=h // 2, bbox=fault_obs.bbox, pan=0.0,
@@ -393,7 +406,10 @@ class DepthEstimator:
             sector_dists={"LEFT": float("nan"), "CENTER": float("nan"), "RIGHT": float("nan")},
             all_obstacles=[fault_obs],
             is_valid=False,
-            is_scale_uncalibrated=True
+            is_scale_uncalibrated=True,
+            validity_state=validity_state,
+            spatial_validity=spatial_validity,
+            measurement_basis="UNKNOWN"
         )
 
     def detect_obstacle(
@@ -406,13 +422,13 @@ class DepthEstimator:
         is_zero_lux: bool = False,
     ) -> ObstacleDetectionResult:
         """
-        Phát hiện vật cản không gian 3D — Thứ tự ưu tiên cứng hóa:
-        Bước 0: Kiểm tra tính hợp lệ dữ liệu (NaN, Inf, Dimension, Empty) -> SENSOR_FAULT
+        Phát hiện vật cản không gian 3D — Thứ tự ưu tiên cứng hóa (Directive 01B Task A3):
+        Bước 0: Đánh giá tính hợp lệ không gian đa tầng (Spatial Validity: Global, Sectors, Corridor)
         Bước 1: Kiểm tra Bão hòa thấu kính (A) + 0-Lux Blind
         Bước 2: Phân đoạn Sobel/Discontinuity (C) + Vách tường (D) + Overhead/DropOff
-        Bước 3: Chỉ kết luận Clear Path (B) khi Bước 1+2 không phát hiện gì VÀ P95 < 375
+        Bước 3: Kết luận Clear Path (B) có kiểm soát (Unverified Path)
         """
-        # ── Bước 0: Input Validation & Sensor Fault Guard ──
+        # ── Bước 0: Input Validation & Spatial Validity Guard ──
         if depth_raw is None or depth_norm is None:
             return self._create_sensor_fault_result(480, 640, "SENSOR_FAULT (Null Input)")
 
@@ -426,15 +442,51 @@ class DepthEstimator:
         if h < 10 or w < 10:
             return self._create_sensor_fault_result(h, w, "SENSOR_FAULT (Empty/Tiny Frame)")
 
-        # Kiểm tra tỷ lệ NaN / Inf
-        nan_inf_count = int(np.sum(np.isnan(depth_raw) | np.isinf(depth_raw)))
-        if nan_inf_count > 0:
-            invalid_ratio = nan_inf_count / float(depth_raw.size)
-            if invalid_ratio > 0.15:
-                return self._create_sensor_fault_result(
-                    h, w, f"SENSOR_FAULT ({int(invalid_ratio * 100)}% NaN/Inf Values)"
-                )
-            # Khử cục bộ cho các pixel lỗi nhẹ (<15%) để không làm sập pipeline
+        # Phân tích mặt nạ hợp lệ không gian đa tầng (Directive 01B Task A3)
+        raw_invalid_mask = np.isnan(depth_raw) | np.isinf(depth_raw) | (depth_raw <= 0.0)
+        global_invalid_ratio = float(np.mean(raw_invalid_mask))
+
+        # Tọa độ phân vùng không gian 3 sector và hành lang trung tâm
+        cy1, cy2 = int(0.20 * h), int(0.75 * h)
+        c_mid_x1, c_mid_x2 = int(0.25 * w), int(0.75 * w)
+        cx1, cx2 = int(0.04 * w), int(0.96 * w)
+        cw = cx2 - cx1
+        sec_w = cw // 3
+
+        sec_l_mask = raw_invalid_mask[cy1:cy2, cx1 : cx1 + sec_w]
+        sec_c_mask = raw_invalid_mask[cy1:cy2, cx1 + sec_w : cx1 + 2 * sec_w]
+        sec_r_mask = raw_invalid_mask[cy1:cy2, cx1 + 2 * sec_w : cx2]
+        corr_mask = raw_invalid_mask[cy1:cy2, c_mid_x1:c_mid_x2]
+
+        l_inv = float(np.mean(sec_l_mask)) if sec_l_mask.size > 0 else 1.0
+        c_inv = float(np.mean(sec_c_mask)) if sec_c_mask.size > 0 else 1.0
+        r_inv = float(np.mean(sec_r_mask)) if sec_r_mask.size > 0 else 1.0
+        corr_inv = float(np.mean(corr_mask)) if corr_mask.size > 0 else 1.0
+
+        spatial_validity = {
+            "GLOBAL": round(1.0 - global_invalid_ratio, 3),
+            "LEFT": round(1.0 - l_inv, 3),
+            "CENTER": round(1.0 - c_inv, 3),
+            "RIGHT": round(1.0 - r_inv, 3),
+            "CORRIDOR": round(1.0 - corr_inv, 3),
+        }
+
+        # Kiểm tra ngưỡng lỗi toàn cục (>15%)
+        if global_invalid_ratio > 0.15:
+            return self._create_sensor_fault_result(
+                h, w, f"SENSOR_FAULT ({int(global_invalid_ratio * 100)}% Global Invalid Data)",
+                "SENSOR_FAULT", spatial_validity
+            )
+
+        # Kiểm tra bất thường cục bộ tập trung ở hành lang trung tâm (Task A3: Concentrated Invalidity)
+        if c_inv > 0.20 or corr_inv > 0.20:
+            return self._create_sensor_fault_result(
+                h, w, f"VISUAL_EVIDENCE_DEGRADED ({int(max(c_inv, corr_inv) * 100)}% Center/Corridor Invalid)",
+                "DEGRADED", spatial_validity
+            )
+
+        # Khử cục bộ an toàn cho các pixel lỗi rải rác (<15% toàn cục, <=20% sector)
+        if global_invalid_ratio > 0:
             depth_raw = np.nan_to_num(depth_raw, nan=175.0, posinf=1200.0, neginf=135.0)
 
         if frame_bgr is None and hasattr(self, "_last_frame"):
@@ -451,27 +503,36 @@ class DepthEstimator:
         aspect_ratio_y = h / max(w, 1)
 
         # Đo đạc 3 sector hành lang di chuyển
-        cy1, cy2 = int(0.20 * h), int(0.75 * h)
-        c_mid_x1, c_mid_x2 = int(0.25 * w), int(0.75 * w)
         corr_raw = depth_raw[cy1:cy2, c_mid_x1:c_mid_x2]
-
-        cx1, cx2 = int(0.04 * w), int(0.96 * w)
-        cw = cx2 - cx1
-        sec_w = cw // 3
-
         sec_l = depth_raw[cy1:cy2, cx1 : cx1 + sec_w]
         sec_c = depth_raw[cy1:cy2, cx1 + sec_w : cx1 + 2 * sec_w]
         sec_r = depth_raw[cy1:cy2, cx1 + 2 * sec_w : cx2]
 
-        # Sử dụng phân vị thứ 20 của KHOẢNG CÁCH (tương ứng với phân vị thứ 80 của RAW DISPARITY)
-        # để vật cản mảnh hẹp chiếm >= 20% sector vẫn được ghi nhận cự ly gần nhất!
-        raw_l = float(np.percentile(sec_l, 80)) if sec_l.size > 0 else 0.0
-        raw_c = float(np.percentile(sec_c, 80)) if sec_c.size > 0 else 0.0
-        raw_r = float(np.percentile(sec_r, 80)) if sec_r.size > 0 else 0.0
+        # Chỉ tính phân vị trên các pixel hợp lệ nếu tỷ lệ lỗi sector <= 20%
+        if l_inv <= 0.20 and sec_l.size > 0:
+            valid_l = sec_l[~sec_l_mask] if np.any(sec_l_mask) else sec_l
+            raw_l = float(np.percentile(valid_l, 80)) if valid_l.size > 0 else 0.0
+            dist_l = compute_metric_distance_cm(raw_l, scale_factor)
+        else:
+            raw_l = float("nan")
+            dist_l = float("nan")
 
-        dist_l = compute_metric_distance_cm(raw_l, scale_factor)
-        dist_c = compute_metric_distance_cm(raw_c, scale_factor)
-        dist_r = compute_metric_distance_cm(raw_r, scale_factor)
+        if c_inv <= 0.20 and sec_c.size > 0:
+            valid_c = sec_c[~sec_c_mask] if np.any(sec_c_mask) else sec_c
+            raw_c = float(np.percentile(valid_c, 80)) if valid_c.size > 0 else 0.0
+            dist_c = compute_metric_distance_cm(raw_c, scale_factor)
+        else:
+            raw_c = float("nan")
+            dist_c = float("nan")
+
+        if r_inv <= 0.20 and sec_r.size > 0:
+            valid_r = sec_r[~sec_r_mask] if np.any(sec_r_mask) else sec_r
+            raw_r = float(np.percentile(valid_r, 80)) if valid_r.size > 0 else 0.0
+            dist_r = compute_metric_distance_cm(raw_r, scale_factor)
+        else:
+            raw_r = float("nan")
+            dist_r = float("nan")
+
         sector_dists = {"LEFT": dist_l, "CENTER": dist_c, "RIGHT": dist_r}
 
         # ════════════════════════════════════════════════════════════════════════
@@ -495,7 +556,9 @@ class DepthEstimator:
                 sector_dists=sector_dists, all_obstacles=[blind_obs],
                 is_zero_lux_blind=True,
                 is_valid=False,
-                is_scale_uncalibrated=True
+                is_scale_uncalibrated=True,
+                validity_state="DEGRADED",
+                spatial_validity=spatial_validity
             )
 
         # ── Lens Saturation Check ──
@@ -520,7 +583,8 @@ class DepthEstimator:
             single_sat = SingleObstacle(
                 id=1, x=w // 2, y=h // 2, bbox=sat_bbox, pan=0.0,
                 proximity=sat_prox, dist_cm=sat_dist, mode_text=sat_mode,
-                uncertainty_score=sat_uncert, is_wall=False
+                uncertainty_score=sat_uncert, is_wall=False,
+                validity="VALID", measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
             )
             return ObstacleDetectionResult(
                 x=w // 2, y=h // 2, bbox=sat_bbox, pan=0.0, proximity=sat_prox,
@@ -528,7 +592,9 @@ class DepthEstimator:
                 is_wall=False, sector_dists={"LEFT": sat_dist, "CENTER": sat_dist, "RIGHT": sat_dist},
                 all_obstacles=[single_sat],
                 is_valid=True,
-                is_scale_uncalibrated=True
+                is_scale_uncalibrated=True,
+                validity_state="VALID",
+                spatial_validity=spatial_validity
             )
 
         # ════════════════════════════════════════════════════════════════════════
@@ -896,7 +962,10 @@ class DepthEstimator:
                     is_wall=False, sector_dists=sector_dists, all_obstacles=[safe_dummy],
                     overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard,
                     is_valid=True,
-                    is_scale_uncalibrated=True
+                    is_scale_uncalibrated=True,
+                    validity_state="VALID",
+                    spatial_validity=spatial_validity,
+                    measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
                 )
 
             # Nếu vẫn không có gì nhưng không đủ điều kiện CLEAR → trả về trạng thái mặc định
@@ -906,7 +975,9 @@ class DepthEstimator:
                 bbox=(w // 4, h // 4, w // 2, h // 2),
                 pan=0.0, proximity=0.0, dist_cm=config.DIST_SAFE_CM,
                 mode_text="NO_OBSTACLE_DETECTED (Unverified Path)", uncertainty_score=safe_uncert,
-                is_wall=False
+                is_wall=False,
+                validity="VALID",
+                measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
             )
             return ObstacleDetectionResult(
                 x=safe_dummy.x, y=safe_dummy.y, bbox=safe_dummy.bbox,
@@ -916,7 +987,10 @@ class DepthEstimator:
                 sector_dists=sector_dists, all_obstacles=[safe_dummy],
                 overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard,
                 is_valid=True,
-                is_scale_uncalibrated=True
+                is_scale_uncalibrated=True,
+                validity_state="VALID",
+                spatial_validity=spatial_validity,
+                measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
             )
 
         # Đánh số ID thứ tự 1, 2, 3...
@@ -932,5 +1006,8 @@ class DepthEstimator:
             all_obstacles=detected_list,
             overhead_hazard=overhead_hazard, drop_off_hazard=drop_off_hazard,
             is_valid=True,
-            is_scale_uncalibrated=True
+            is_scale_uncalibrated=True,
+            validity_state="VALID",
+            spatial_validity=spatial_validity,
+            measurement_basis="METRIC_ESTIMATED_UNVERIFIED"
         )

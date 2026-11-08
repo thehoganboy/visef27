@@ -161,7 +161,8 @@ class AuditoryBudgetManager {
             "SHARP_PING"
         }
 
-        val volumeFactor = if (isEvading) Config.HYSTERESIS_DECAY else 1.0f
+        // Directive 01B Task A2: Bảo toàn 100% âm lượng cảnh báo, không giảm âm lượng khi xoay điện thoại
+        val volumeFactor = 1.0f
         val activeVz = kinRes.obstacleVzs[winnerObs.id] ?: kinRes.primaryVelocityZ
         val suppressedList = allObs.filter { it.id != winnerObs.id }
 

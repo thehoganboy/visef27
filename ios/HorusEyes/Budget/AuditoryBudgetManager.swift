@@ -195,8 +195,9 @@ final class AuditoryBudgetManager {
             outputPan = max(Float(-1.0), min(Float(1.0), winnerObs.pan))
         }
 
-        // ── 4. Closed-Loop Evasion Volume Hysteresis ──────────────────────────
-        let volumeFactor: Float = isEvading ? Config.hysteresisDecay : 1.0
+        // ── 4. Full Warning Volume Preservation (Directive 01B Task A2) ──────
+        // Do not attenuate warning volume solely based on camera rotation
+        let volumeFactor: Float = 1.0
 
         // ── 5. Uncertainty Hysteresis [0.38, 0.48] ───────────────────────────
         let cueMode: String
