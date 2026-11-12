@@ -406,7 +406,7 @@ class DepthEstimator:
         resized = cv2.resize(rgb, self.input_size, interpolation=cv2.INTER_LINEAR)
         norm = np.ascontiguousarray(((resized.astype(np.float32) / 255.0 - self.mean) / self.std).transpose(2, 0, 1)[None])
         output = self.ort_session.run(None, {self.ort_input_name: norm})[0]
-        if output.shape != (1, 256, 192) or not np.isfinite(output).all() or np.any(output <= 0):
+        if output.shape != (1, 256, 192) or not np.isfinite(output).all() or np.all(output <= 0):
             raise RuntimeError("Invalid MiDaS output tensor")
         depth_raw = cv2.resize(output[0], (w, h), interpolation=cv2.INTER_LINEAR)
 

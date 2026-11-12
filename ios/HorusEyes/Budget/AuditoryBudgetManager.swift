@@ -86,6 +86,12 @@ final class AuditoryBudgetManager {
             )
         }
 
+        if kinematicsResult.hazardState == "COASTING_HAZARD" {
+            return BudgetDecision(isActive: true, pan: 0, proximity: threatLevel == "CRITICAL" ? 1 : 0.7,
+                distCM: .nan, ttc: .infinity, priorityScore: 99, volumeFactor: 1, safeDirection: "NONE",
+                cueMode: "SHARP_PING", threatLevel: threatLevel, suppressedCount: 0)
+        }
+
         // ── 0B. Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if kinematicsResult.hazardState == "LOST_UNRESOLVED" || threatLevel == "UNRESOLVED_HAZARD" {
             let lostTs = kinematicsResult.lostUnresolvedTimestamp

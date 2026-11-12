@@ -43,7 +43,15 @@ def main():
         def forward(self, rgb):
             return self.network((rgb-self.mean)/self.std)
     wrapped = ImageNormalized(model).eval()
-    traced = torch.jit.trace(wrapped, torch.rand(1,3,256,192), check_trace=True)
+    # EfficientNet caches fixed-shape padding during its first invocation. Graph
+    # text can change on retrace; validate numeric behavior explicitly instead.
+    with torch.no_grad():
+        wrapped(torch.rand(1,3,256,192))
+    traced = torch.jit.trace(wrapped, torch.rand(1,3,256,192), check_trace=False)
+    for _ in range(3):
+        sample = torch.rand(1,3,256,192)
+        with torch.no_grad():
+            torch.testing.assert_close(traced(sample), wrapped(sample), rtol=1e-4, atol=1e-4)
     converted = ct.convert(traced,
         inputs=[ct.ImageType(name='x',shape=(1,3,256,192),color_layout=ct.colorlayout.RGB,scale=1/255.0)],
         outputs=[ct.TensorType(name='depth')], minimum_deployment_target=ct.target.iOS16,

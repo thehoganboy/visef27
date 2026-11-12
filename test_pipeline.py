@@ -81,7 +81,7 @@ def test_stage_1_static_security_parity_audit():
     mock_norm = (mock_raw / 1200.0 * 255.0).astype(np.uint8)
 
     depth_est = DepthEstimator(device="cpu")
-    obs_right = depth_est.detect_obstacle(mock_norm, mock_raw)
+    obs_right = depth_est.detect_obstacle(mock_norm, mock_raw, frame_bgr=np.full((h,w,3),180,np.uint8))
 
     print(f"  [Audit 1.1] Toán học Không gian: Obstacle x={obs_right.x}, pan={obs_right.pan:+.2f}")
     assert obs_right.pan > 0.30, f"Vật cản ở bên phải ảnh (x={obs_right.x}) phải có pan > +0.30, nhận {obs_right.pan:+.2f}!"
@@ -327,7 +327,7 @@ def test_remaining_pipeline_modules():
     overhead_raw = np.full((480, 640), 300.0, dtype=np.float32)
     overhead_raw[10:60, 200:440] = 750.0
     overhead_norm = (overhead_raw / 1200.0 * 255).astype(np.uint8)
-    res_oh = depth_est.detect_obstacle(overhead_norm, overhead_raw)
+    res_oh = depth_est.detect_obstacle(overhead_norm, overhead_raw, frame_bgr=np.full((*overhead_raw.shape,3),180,np.uint8))
     assert res_oh.overhead_hazard or any("OVERHEAD" in o.mode_text for o in res_oh.all_obstacles)
     print("  Overhead Hazard Detection: PASS!")
 
