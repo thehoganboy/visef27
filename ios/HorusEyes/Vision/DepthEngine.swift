@@ -5,6 +5,7 @@
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
+import Combine
 import CoreML
 import Vision
 import Accelerate
@@ -42,6 +43,7 @@ struct ObstacleDetectionResult {
     let isDropOffHazard: Bool
     let camWidth: Int
     let camHeight: Int
+    var isValid: Bool = true
 }
 
 // ── Depth Engine ───────────────────────────────────────────────────────────────
@@ -54,8 +56,8 @@ final class DepthEngine: ObservableObject {
     private let pchip: PchipInterpolator
 
     // Grid Dimensions for Processing (4:3 Landscape aspect ratio)
-    private let gridW = 64
-    private let gridH = 48
+    private let gridW = 48
+    private let gridH = 64
 
     init() {
         self.pchip = PchipInterpolator(nodes: Config.calibrationNodes)
@@ -72,16 +74,12 @@ final class DepthEngine: ObservableObject {
         if let modelUrl = Bundle.main.url(forResource: "DepthModel", withExtension: "mlmodelc") {
             loadModel(at: modelUrl, configuration: configuration)
         } else if let pkgUrl = Bundle.main.url(forResource: "DepthModel", withExtension: "mlpackage") {
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                do {
-                    let compiledUrl = try MLModel.compileModel(at: pkgUrl)
-                    self?.loadModel(at: compiledUrl, configuration: configuration)
-                } catch {
-                    print("[HorusEyes] Error compiling DepthModel.mlpackage: \(error)")
-                }
-            }
+            do {
+                let compiledUrl = try MLModel.compileModel(at: pkgUrl)
+                loadModel(at: compiledUrl, configuration: configuration)
+            } catch { print("[HorusEyes] Model compile failed: \(error)") }
         } else {
-            print("[HorusEyes] Notice: DepthModel not bundled yet; using native high-precision spatial fallback.")
+            print("[HorusEyes] DepthModel absent; perception unavailable.")
         }
     }
 
@@ -90,7 +88,7 @@ final class DepthEngine: ObservableObject {
             let model = try MLModel(contentsOf: url, configuration: configuration)
             self.mlModel = model
             self.vnModel = try VNCoreMLModel(for: model)
-            print("[HorusEyes] Core ML DepthModel loaded successfully on Apple Neural Engine.")
+            print("[HorusEyes] Core ML DepthModel loaded; computeUnits all (actual device placement unverified).")
         } catch {
             print("[HorusEyes] Failed to load Core ML model: \(error)")
         }
@@ -109,11 +107,11 @@ final class DepthEngine: ObservableObject {
         let height = CVPixelBufferGetHeight(pixelBuffer)
 
         // Step 0: Immediate Zero-Lux Blind check (Sensor Fault Mode)
-        if isZeroLuxBlind {
+        if isZeroLuxBlind || meanLuma < 12 || meanLuma > 245 {
             let blindResult = ObstacleDetectionResult(
                 x: width / 2, y: height / 2,
                 bbox: (x: width / 4, y: height / 4, w: width / 2, h: height / 2),
-                pan: 0.0, proximity: 1.0, distCM: 0.0,
+                pan: 0.0, proximity: 0.4, distCM: .nan,
                 modeText: "SENSOR_BLIND (0-Lux)",
                 uncertaintyScore: 0.95, isWall: false,
                 sectorDists: ["LEFT": 0.0, "CENTER": 0.0, "RIGHT": 0.0],
@@ -122,14 +120,22 @@ final class DepthEngine: ObservableObject {
                 isOverheadHazard: false,
                 isDropOffHazard: false,
                 camWidth: width,
-                camHeight: height
+                camHeight: height, isValid: false
             )
             DispatchQueue.main.async { self.lastResult = blindResult }
             return blindResult
         }
 
         // Generate disparity map (via CoreML ANE Vision or Native Spatial Fallback)
-        let rawDisparity = inferDisparity(pixelBuffer: pixelBuffer)
+        guard let rawDisparity = inferDisparity(pixelBuffer: pixelBuffer),
+              rawDisparity.count == gridW * gridH,
+              rawDisparity.allSatisfy({ $0.isFinite && $0 > 0 }) else {
+            return ObstacleDetectionResult(x: 0, y: 0, bbox: (0,0,0,0), pan: 0,
+                proximity: 0.4, distCM: .nan, modeText: "MODEL_UNAVAILABLE", uncertaintyScore: 1,
+                isWall: false, sectorDists: [:], allObstacles: [], isZeroLuxBlind: false,
+                isOverheadHazard: false, isDropOffHazard: false, camWidth: width, camHeight: height,
+                isValid: false)
+        }
 
         // Execute Spatial Engine v8 Rules
         let result = evaluateSpatialEngineV8(
@@ -149,7 +155,7 @@ final class DepthEngine: ObservableObject {
     }
 
     // ── Disparity Inference ───────────────────────────────────────────────────
-    private func inferDisparity(pixelBuffer: CVPixelBuffer) -> [Float] {
+    private func inferDisparity(pixelBuffer: CVPixelBuffer) -> [Float]? {
         if let vn = self.vnModel {
             var extractedGrid: [Float]?
             let request = VNCoreMLRequest(model: vn) { [weak self] req, err in
@@ -170,108 +176,22 @@ final class DepthEngine: ObservableObject {
             }
         }
 
-        // Native Spatial Disparity Estimator from Plane 0 (Multi-frequency Sobel + Texture)
-        return computeNativeSpatialDisparityFallback(pixelBuffer: pixelBuffer)
+        return nil
     }
 
-    private func extractDisparityGrid(from multiArray: MLMultiArray) -> [Float] {
-        let shape = multiArray.shape.map { $0.intValue }
-        let mW: Int
-        let mH: Int
-        if shape.count >= 2 {
-            mW = shape[shape.count - 1]
-            mH = shape[shape.count - 2]
-        } else {
-            mW = 256
-            mH = 256
-        }
-
-        var disparity = [Float](repeating: 200.0, count: gridW * gridH)
-
-        if multiArray.dataType == .float16 {
-            let ptr = multiArray.dataPointer.bindMemory(to: Float16.self, capacity: multiArray.count)
-            for gy in 0..<gridH {
-                let my = min(mH - 1, max(0, (gy * mH) / gridH))
-                let rowOffset = my * mW
-                for gx in 0..<gridW {
-                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
-                    disparity[gy * gridW + gx] = Float(ptr[rowOffset + mx])
-                }
-            }
-        } else if multiArray.dataType == .double {
-            let ptr = multiArray.dataPointer.bindMemory(to: Double.self, capacity: multiArray.count)
-            for gy in 0..<gridH {
-                let my = min(mH - 1, max(0, (gy * mH) / gridH))
-                let rowOffset = my * mW
-                for gx in 0..<gridW {
-                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
-                    disparity[gy * gridW + gx] = Float(ptr[rowOffset + mx])
-                }
-            }
-        } else {
-            let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: multiArray.count)
-            for gy in 0..<gridH {
-                let my = min(mH - 1, max(0, (gy * mH) / gridH))
-                let rowOffset = my * mW
-                for gx in 0..<gridW {
-                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
-                    disparity[gy * gridW + gx] = ptr[rowOffset + mx]
-                }
+    private func extractDisparityGrid(from array: MLMultiArray) -> [Float]? {
+        let shape = array.shape.map { $0.intValue }
+        guard shape == [1, 256, 192] else { return nil }
+        // MLMultiArray indexing respects strides and data type, unlike pointer
+        // assumptions about a contiguous Float32 buffer.
+        var grid = [Float](repeating: 0, count: gridW * gridH)
+        for y in 0..<gridH {
+            for x in 0..<gridW {
+                grid[y * gridW + x] = array[[0, NSNumber(value: y * 256 / gridH),
+                    NSNumber(value: x * 192 / gridW)]].floatValue
             }
         }
-        return disparity
-    }
-
-    private func computeNativeSpatialDisparityFallback(pixelBuffer: CVPixelBuffer) -> [Float] {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        guard let yPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else {
-            return [Float](repeating: 200.0, count: gridW * gridH)
-        }
-
-        let origW = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
-        let origH = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
-        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-        let ptr = yPlane.assumingMemoryBound(to: UInt8.self)
-
-        var disparity = [Float](repeating: 200.0, count: gridW * gridH)
-
-        let stepX = max(1, origW / gridW)
-        let stepY = max(1, origH / gridH)
-
-        // Compute local horizontal and vertical gradient (Sobel-like difference)
-        for gy in 1..<(gridH - 1) {
-            let py = gy * stepY
-            let rowOffset = py * bytesPerRow
-            let rowAbove = (py - stepY) * bytesPerRow
-            let rowBelow = (py + stepY) * bytesPerRow
-
-            for gx in 1..<(gridW - 1) {
-                let px = gx * stepX
-                let left = Float(ptr[rowOffset + px - stepX])
-                let right = Float(ptr[rowOffset + px + stepX])
-                let up = Float(ptr[rowAbove + px])
-                let down = Float(ptr[rowBelow + px])
-                let center = Float(ptr[rowOffset + px])
-
-                let gradH = abs(right - left)
-                let gradV = abs(down - up)
-                let edgeMag = gradH + gradV
-
-                // Perspective ground slope & center corridor weighting
-                let normY = Float(gy) / Float(gridH)
-                let normX = (Float(gx) / Float(gridW)) - 0.5
-                let groundBase = normY * 180.0
-                let corridorBonus = max(0.0, 1.0 - abs(normX) * 2.0) * 40.0
-
-                // Edge and contrast response simulates object proximity
-                let rawVal = 160.0 + groundBase + (edgeMag * 4.5) + (center * 0.4) + corridorBonus
-                disparity[gy * gridW + gx] = max(135.0, min(1200.0, rawVal))
-            }
-        }
-
-        return disparity
+        return grid
     }
 
     // ── Non-Linear Proximity Mapping (100% Parity with Python dist_to_proximity) ──

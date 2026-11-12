@@ -4,6 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
+import Combine
 import AVFoundation
 import UIKit
 import CoreVideo
@@ -125,7 +126,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
             if let connection = videoOutput.connection(with: .video) {
                 if connection.isVideoOrientationSupported {
-                    connection.videoOrientation = .landscapeRight
+                    connection.videoOrientation = .portrait
                 }
                 if connection.isVideoMirroringSupported {
                     connection.isVideoMirrored = false
@@ -181,15 +182,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     func updateVideoOrientation(for interfaceOrientation: UIInterfaceOrientation) {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
-            let videoOrientation: AVCaptureVideoOrientation
-            switch interfaceOrientation {
-            case .landscapeLeft:
-                videoOrientation = .landscapeLeft
-            case .landscapeRight:
-                videoOrientation = .landscapeRight
-            default:
-                videoOrientation = .landscapeRight
-            }
+            let videoOrientation: AVCaptureVideoOrientation = .portrait
             if let output = self.captureSession.outputs.first as? AVCaptureVideoDataOutput,
                let conn = output.connection(with: .video),
                conn.isVideoOrientationSupported {

@@ -70,18 +70,18 @@ final class AuditoryBudgetManager {
         let isEvading = kinematicsResult.isEvading
 
         // ── 0. Sensor Fault / 0-Lux Blind Override ────────────────────────────
-        if obstacleResult.isZeroLuxBlind || obstacleResult.modeText.contains("SENSOR_BLIND") {
+        if !obstacleResult.isValid || obstacleResult.isZeroLuxBlind || threatLevel == "SENSOR_FAULT" || threatLevel == "UNKNOWN" {
             return BudgetDecision(
                 isActive: true,
                 pan: 0.0,
                 proximity: 1.0,
                 distCM: 0.0,
-                ttc: 0.0,
+                ttc: .infinity,
                 priorityScore: 99.0,
                 volumeFactor: 1.0,
                 safeDirection: "STOP",
                 cueMode: "SYSTEM_FAULT_TONE",
-                threatLevel: "CRITICAL",
+                threatLevel: "SENSOR_FAULT",
                 suppressedCount: 0
             )
         }
@@ -125,7 +125,7 @@ final class AuditoryBudgetManager {
 
         // ── 1. Total Auditory Suppression Rule ────────────────────────────────
         // Complete silence if in safe region to prevent cognitive fatigue
-        let isSuppressed = (threatLevel == "SAFE" || distCM >= Config.distSafeCM ||
+        let isSuppressed = threatLevel == "SAFE" && (distCM >= Config.distSafeCM ||
                             obstacleResult.modeText.hasPrefix("SAFE") ||
                             (distCM >= Config.distAlertCM && ttc > Config.ttcWarning))
 
@@ -165,7 +165,7 @@ final class AuditoryBudgetManager {
 
         var scored = [(score: Float, rawScore: Float, obs: SingleObstacle, ttc: Float)]()
         for obs in allObstacles {
-            let obsTtc = ttc
+            let obsTtc = (obs.pan == obstacleResult.pan && obs.distCM == obstacleResult.distCM) ? ttc : Float.infinity
             let rawScore = AuditoryBudgetManager.computeThreatScore(
                 ttc: obsTtc, proximity: obs.proximity, distCM: obs.distCM, uncertainty: obs.uncertaintyScore
             )
@@ -244,7 +244,7 @@ final class AuditoryBudgetManager {
         } else if winnerObs.uncertaintyScore <= Config.uncertaintyBlurOff {
             cueMode = "SHARP_PING"
         } else {
-            cueMode = currentCueMode
+            cueMode = ["SHARP_PING", "ACOUSTIC_BLUR"].contains(currentCueMode) ? currentCueMode : "ACOUSTIC_BLUR"
         }
         currentCueMode = cueMode
 

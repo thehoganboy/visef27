@@ -42,8 +42,7 @@ targets:
         CFBundleShortVersionString: "2.0"
         CFBundleVersion: "1"
         UISupportedInterfaceOrientations:
-          - "UIInterfaceOrientationLandscapeRight"
-          - "UIInterfaceOrientationLandscapeLeft"
+          - "UIInterfaceOrientationPortrait"
         NSCameraUsageDescription: "HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time."
         NSMicrophoneUsageDescription: "HorusEyes requires audio session access for spatial sound feedback."
         NSMotionUsageDescription: "HorusEyes uses motion sensors to distinguish head turns from obstacle approach."

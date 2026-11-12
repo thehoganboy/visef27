@@ -1,266 +1,76 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
-HorusEyes 2.0 — MiDaS to Core ML (DepthModel.mlpackage) Exporter
-Target: iPhone 14 / iPhone 14 Pro (Apple A15/A16 Bionic — 16-core Apple Neural Engine)
-Precision: Float16 / Float32 ML Program
-Input:  'x' (Color Image 256x256 RGB, ImageNet normalized)
-Output: 'depth' / 'var_...' (MultiArray Float32 [1, 256, 256])
-"""
+"""Export the pinned MiDaS small weights with exact RGB ImageNet normalization.
 
-import os
+Run on macOS after the workflow prepares pinned source repositories and weights.
+Real-frame PyTorch/ONNX/Core ML comparison is mandatory; build failure is explicit.
+"""
+from pathlib import Path
+import hashlib
+import json
 import sys
-import time
-import shutil
-import traceback
-import urllib.request
+import numpy as np
+import torch
+import coremltools as ct
+from PIL import Image
+import onnxruntime as ort
 
-if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(line_buffering=True, encoding="utf-8")
-if hasattr(sys.stderr, "reconfigure"):
-    sys.stderr.reconfigure(line_buffering=True, encoding="utf-8")
+ROOT = Path(__file__).resolve().parents[2]
+WEIGHT_SHA = '70d6b9c891758c67f974a6097fb0c608c7ee67fb81ac3e5588847d5596d56fca'
 
-def download_file_with_retry(url, dest_path, retries=4, timeout=45):
-    """Download a file with user-agent, streaming, and retries."""
-    tmp_path = dest_path + ".tmp"
-    for attempt in range(retries):
-        try:
-            print(f"[*] Downloading {url} (attempt {attempt+1}/{retries})...", flush=True)
-            req = urllib.request.Request(
-                url,
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
-            )
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                with open(tmp_path, "wb") as f:
-                    while True:
-                        chunk = resp.read(1024 * 1024)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-            sz = os.path.getsize(tmp_path)
-            if sz > 50_000_000:
-                os.replace(tmp_path, dest_path)
-                print(f"[+] Download complete: {sz} bytes saved to {dest_path}", flush=True)
-                return True
-            else:
-                print(f"[!] Warning: downloaded file too small ({sz} bytes). Retrying...", flush=True)
-        except Exception as e:
-            print(f"[!] Attempt {attempt+1} error: {e}", flush=True)
-            if os.path.exists(tmp_path):
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-            time.sleep(3 * (attempt + 1))
-    return False
 
 def main():
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    ios_dir = os.path.dirname(script_dir)
-    target_package = os.path.join(ios_dir, "HorusEyes", "DepthModel.mlpackage")
-    os.makedirs(os.path.dirname(target_package), exist_ok=True)
-
-    print("[*] HorusEyes CoreML Exporter initializing...", flush=True)
-    print(f"[*] Target destination: {target_package}", flush=True)
-
-    try:
-        import coremltools as ct
-        import torch
-        import torch.hub
-        print(f"[+] Loaded coremltools {ct.__version__}, PyTorch {torch.__version__}", flush=True)
-    except ImportError as e:
-        print(f"[!] FATAL: coremltools or torch not installed: {e}", flush=True)
-        sys.exit(1)
-
-    # Force PyTorch torch.hub to always trust repos in non-interactive CI environments
-    _orig_hub_load = torch.hub.load
-    def _always_trusted_hub_load(*args, **kwargs):
-        kwargs["trust_repo"] = True
-        return _orig_hub_load(*args, **kwargs)
-    torch.hub.load = _always_trusted_hub_load
-
-    in_h, in_w = 256, 256
-
-    print("[*] Locating or downloading MiDaS_small weights...", flush=True)
-    candidate_weights = [
-        os.path.join(script_dir, "midas_v21_small_256.pt"),
-        os.path.expanduser("~/.cache/torch/hub/checkpoints/midas_v21_small_256.pt"),
-        os.path.join(torch.hub.get_dir(), "checkpoints", "midas_v21_small_256.pt"),
-    ]
-    weights_path = None
-    for p in candidate_weights:
-        if os.path.exists(p) and os.path.getsize(p) > 50_000_000:
-            weights_path = p
-            print(f"[+] Found valid cached weights: {weights_path} ({os.path.getsize(p)} bytes)", flush=True)
-            break
-
-    if weights_path is None:
-        target_weights = os.path.join(script_dir, "midas_v21_small_256.pt")
-        weights_url = "https://github.com/isl-org/MiDaS/releases/download/v2_1/midas_v21_small_256.pt"
-        if download_file_with_retry(weights_url, target_weights):
-            weights_path = target_weights
-        else:
-            print("[!] Warning: Could not download direct weights file, will rely on torch.hub.", flush=True)
-
-    print("[*] Loading PyTorch MiDaS_small model architecture...", flush=True)
-    model = None
-
-    # Source 0: Local git clone of MiDaS (completely offline)
-    local_midas_candidates = [
-        os.path.join(script_dir, "MiDaS"),
-        os.path.expanduser("~/.cache/torch/hub/isl-org_MiDaS_master"),
-        os.path.expanduser("~/.cache/torch/hub/intel-isl_MiDaS_master"),
-    ]
-    for local_dir in local_midas_candidates:
-        if os.path.isdir(local_dir) and os.path.exists(os.path.join(local_dir, "hubconf.py")):
-            try:
-                print(f"[*] Trying local torch.hub.load from {local_dir} (source='local')...", flush=True)
-                model = torch.hub.load(local_dir, "MiDaS_small", source="local", pretrained=False)
-                if weights_path and os.path.exists(weights_path):
-                    state_dict = torch.load(weights_path, map_location="cpu")
-                    model.load_state_dict(state_dict)
-                    print(f"[+] Loaded weights into local MiDaS model from {weights_path}.", flush=True)
-                print("[+] Loaded MiDaS_small from local repository successfully.", flush=True)
-                break
-            except Exception as ex0:
-                print(f"[!] Local hub load failed: {ex0}", flush=True)
-                traceback.print_exc()
-
-    # Source 1: intel-isl/MiDaS
-    if model is None:
-        try:
-            print("[*] Trying torch.hub.load('intel-isl/MiDaS', 'MiDaS_small')...", flush=True)
-            model = torch.hub.load("intel-isl/MiDaS", "MiDaS_small", trust_repo=True)
-            print("[+] Loaded MiDaS_small from intel-isl/MiDaS successfully.", flush=True)
-        except Exception as ex1:
-            print(f"[!] intel-isl attempt failed: {ex1}", flush=True)
-            traceback.print_exc()
-
-    # Source 2: isl-org/MiDaS
-    if model is None:
-        try:
-            print("[*] Trying torch.hub.load('isl-org/MiDaS', 'MiDaS_small')...", flush=True)
-            model = torch.hub.load("isl-org/MiDaS", "MiDaS_small", trust_repo=True)
-            print("[+] Loaded MiDaS_small from isl-org/MiDaS successfully.", flush=True)
-        except Exception as ex2:
-            print(f"[!] isl-org attempt failed: {ex2}", flush=True)
-            traceback.print_exc()
-
-    # Source 3: Walk hub directory for midas_net_custom.py
-    if model is None and weights_path and os.path.exists(weights_path):
-        try:
-            print("[*] Trying manual instantiation of MidasNet_small...", flush=True)
-            hub_dir = torch.hub.get_dir()
-            for root, dirs, files in os.walk(hub_dir):
-                if "midas_net_custom.py" in files:
-                    parent_dir = os.path.dirname(root)
-                    if parent_dir not in sys.path:
-                        sys.path.insert(0, parent_dir)
-                    from midas.midas_net_custom import MidasNet_small
-                    model = MidasNet_small(None, features=64, backbone="efficientnet_lite3", exportable=True, non_negative=True, blocks={'expand': True})
-                    state_dict = torch.load(weights_path, map_location="cpu")
-                    model.load_state_dict(state_dict)
-                    print("[+] Loaded MidasNet_small from local files + downloaded weights.", flush=True)
-                    break
-        except Exception as ex3:
-            print(f"[!] Fallback attempt failed: {ex3}", flush=True)
-            traceback.print_exc()
-
-    if model is None:
-        print("[!] FATAL: All methods to load MiDaS_small model failed!", flush=True)
-        sys.exit(1)
-
+    folder = Path(__file__).resolve().parent
+    weights = folder / 'midas_v21_small_256.pt'
+    if hashlib.sha256(weights.read_bytes()).hexdigest() != WEIGHT_SHA:
+        raise RuntimeError('Weight integrity mismatch')
+    original_load = torch.hub.load
+    def local_load(repo, model, *args, **kwargs):
+        if repo == 'rwightman/gen-efficientnet-pytorch':
+            return original_load(str(folder / 'efficientnet'), model, *args, source='local', **kwargs)
+        raise RuntimeError(f'Unexpected network architecture dependency: {repo}')
+    torch.hub.load = local_load
+    sys.path.insert(0, str(folder / 'MiDaS'))
+    from midas.midas_net_custom import MidasNet_small
+    model = MidasNet_small(None, features=64, backbone='efficientnet_lite3', exportable=True,
+                          non_negative=True, blocks={'expand': True})
+    model.load_state_dict(torch.load(weights, map_location='cpu', weights_only=True), strict=True)
     model.eval()
+    class ImageNormalized(torch.nn.Module):
+        def __init__(self, network):
+            super().__init__()
+            self.network = network
+            self.register_buffer('mean', torch.tensor([.485,.456,.406]).view(1,3,1,1))
+            self.register_buffer('std', torch.tensor([.229,.224,.225]).view(1,3,1,1))
+        def forward(self, rgb):
+            return self.network((rgb-self.mean)/self.std)
+    wrapped = ImageNormalized(model).eval()
+    traced = torch.jit.trace(wrapped, torch.rand(1,3,256,192), check_trace=True)
+    converted = ct.convert(traced,
+        inputs=[ct.ImageType(name='x',shape=(1,3,256,192),color_layout=ct.colorlayout.RGB,scale=1/255.0)],
+        outputs=[ct.TensorType(name='depth')], minimum_deployment_target=ct.target.iOS16,
+        compute_units=ct.ComputeUnit.CPU_ONLY, convert_to='mlprogram', compute_precision=ct.precision.FLOAT32)
+    session = ort.InferenceSession(str(ROOT/'android/app/src/main/assets/midas_small.onnx'), providers=['CPUExecutionProvider'])
+    fixtures = sorted((ROOT/'tests/fixtures/demo').glob('*.png'))
+    if len(fixtures) < 3:
+        raise RuntimeError('Real-frame parity fixtures are required')
+    evidence = []
+    for path in fixtures:
+        image = Image.open(path).convert('RGB').resize((192,256), Image.Resampling.BILINEAR)
+        rgb = np.asarray(image,dtype=np.float32).transpose(2,0,1)[None]/255
+        with torch.no_grad():
+            reference = wrapped(torch.from_numpy(rgb)).numpy()
+        norm = (rgb-np.array([.485,.456,.406],np.float32)[None,:,None,None])/np.array([.229,.224,.225],np.float32)[None,:,None,None]
+        android = session.run(None,{session.get_inputs()[0].name: norm})[0]
+        ios = np.asarray(converted.predict({'x':image})['depth'])
+        error_android = float(np.max(np.abs(android-reference))/max(float(np.max(np.abs(reference))),1e-6))
+        error_ios = float(np.max(np.abs(ios-reference))/max(float(np.max(np.abs(reference))),1e-6))
+        evidence.append({'image':path.name,'onnx_max_relative_error':error_android,'coreml_max_relative_error':error_ios})
+        if not np.isfinite(ios).all() or error_android > .001 or error_ios > .01:
+            raise RuntimeError(f'Model parity failed: {evidence[-1]}')
+    converted.user_defined_metadata['weights_sha256'] = WEIGHT_SHA
+    converted.user_defined_metadata['input_contract'] = 'RGB 192x256, exact per-channel ImageNet normalization in graph'
+    converted.save(str(ROOT/'ios/HorusEyes/DepthModel.mlpackage'))
+    (ROOT/'ios/model_parity.json').write_text(json.dumps(evidence,indent=2))
+    print(json.dumps(evidence,indent=2))
 
-    print("[*] Tracing PyTorch model with check_trace=False, strict=False...", flush=True)
-    example_input = torch.rand(1, 3, in_h, in_w)
-    traced_model = torch.jit.trace(model, example_input, check_trace=False, strict=False)
-    print("[+] Tracing succeeded.", flush=True)
-
-    print("[*] Converting PyTorch traced model to Core ML MLProgram...", flush=True)
-    mlmodel = None
-
-    # Method 1: ct.ImageType with ImageNet normalization
-    try:
-        print("[*] Attempting conversion with ct.ImageType (RGB, normalized)...", flush=True)
-        image_input = ct.ImageType(
-            name="x",
-            shape=(1, 3, in_h, in_w),
-            color_layout=ct.colorlayout.RGB,
-            scale=0.01735207,
-            bias=[-2.1179, -2.0357, -1.8044]
-        )
-        mlmodel = ct.convert(
-            traced_model,
-            inputs=[image_input],
-            compute_units=ct.ComputeUnit.ALL,
-            minimum_deployment_target=ct.target.iOS16,
-            convert_to="mlprogram"
-        )
-        print("[+] Converted successfully with ct.ImageType.", flush=True)
-    except Exception as conv_err1:
-        print(f"[!] ImageType conversion failed: {conv_err1}", flush=True)
-        traceback.print_exc()
-
-    # Method 2: ct.TensorType fallback
-    if mlmodel is None:
-        try:
-            print("[*] Attempting conversion with ct.TensorType fallback...", flush=True)
-            tensor_input = ct.TensorType(name="x", shape=(1, 3, in_h, in_w))
-            mlmodel = ct.convert(
-                traced_model,
-                inputs=[tensor_input],
-                compute_units=ct.ComputeUnit.ALL,
-                minimum_deployment_target=ct.target.iOS16,
-                convert_to="mlprogram"
-            )
-            print("[+] Converted successfully with ct.TensorType.", flush=True)
-        except Exception as conv_err2:
-            print(f"[!] TensorType conversion failed: {conv_err2}", flush=True)
-            traceback.print_exc()
-
-    # Method 3: NeuralNetwork format fallback
-    if mlmodel is None:
-        try:
-            print("[*] Attempting conversion with convert_to='neuralnetwork' fallback...", flush=True)
-            mlmodel = ct.convert(
-                traced_model,
-                inputs=[ct.TensorType(name="x", shape=(1, 3, in_h, in_w))],
-                compute_units=ct.ComputeUnit.ALL,
-                minimum_deployment_target=ct.target.iOS16
-            )
-            print("[+] Converted successfully with neuralnetwork format.", flush=True)
-        except Exception as conv_err3:
-            print(f"[!] NeuralNetwork conversion failed: {conv_err3}", flush=True)
-            traceback.print_exc()
-
-    if mlmodel is None:
-        print("[!] FATAL: All Core ML conversion attempts failed!", flush=True)
-        sys.exit(1)
-
-    mlmodel.author = "HorusEyes Safety-Critical CV Team"
-    mlmodel.short_description = "MiDaS Small Monocular Depth Estimation for Vision Impaired Navigation"
-
-    if os.path.exists(target_package):
-        if os.path.isdir(target_package):
-            shutil.rmtree(target_package)
-        else:
-            os.remove(target_package)
-
-    mlmodel.save(target_package)
-    print(f"[+] Saved DepthModel.mlpackage successfully to {target_package}", flush=True)
-
-    # Double check package presence
-    if not os.path.exists(target_package):
-        print(f"[!] FATAL: Target package {target_package} does not exist after save!", flush=True)
-        sys.exit(1)
-
-    print("[+] Core ML export completed successfully and verified.", flush=True)
-
-if __name__ == "__main__":
-    try:
-        main()
-    except Exception as fatal_e:
-        print(f"[!] Top-level Unhandled Exception: {fatal_e}", flush=True)
-        traceback.print_exc()
-        sys.exit(1)
+if __name__ == '__main__':
+    main()

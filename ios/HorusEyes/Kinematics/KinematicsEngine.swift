@@ -36,7 +36,7 @@ final class KinematicsEngine {
     // Track State
     private var lastFrameId: UInt64 = 0
     private var smoothedVz: Float = 0.0
-    private var lastSafeDirection: String = "RIGHT"
+    private var lastSafeDirection: String = "NONE"
     private var cachedResult: KinematicsResult?
 
     // Directive 01B-A++ Task P0-F01 & P1-F02: Cross-platform Hazard Coasting, Watchdog & Safe-State Semantics
@@ -58,8 +58,22 @@ final class KinematicsEngine {
         userWalkSpeedCmS: Float = Config.userWalkSpeedCmS,
         imuYawRateRadS: Float = 0.0
     ) -> KinematicsResult {
+        guard obstacleResult.isValid && obstacleResult.distCM.isFinite else {
+            historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
+            return KinematicsResult(primaryTTC: .infinity, primaryVelocityZ: 0, threats: [:],
+                safeDirection: "STOP", isEvading: false, threatLevel: "SENSOR_FAULT",
+                guidanceState: "PERCEPTION_UNAVAILABLE", hazardState: "SENSOR_FAULT",
+                lostUnresolvedTimestamp: lostUnresolvedTimestamp, timestamp: timestamp)
+        }
+        // Do not fit approach across rotation, exposure changes, gaps or a primary
+        // region jump. This is still a single-region tracker, not identity proof.
+        if abs(imuYawRateRadS) > 0.15 || aeSettleRemaining > 0 ||
+           (historyT.last.map { timestamp - $0 > 1 || timestamp <= $0 } ?? false) ||
+           (historyPan.last.map { abs(obstacleResult.pan - $0) > 0.15 } ?? false) {
+            historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
+        }
         // Guard against duplicate frames or flash AE settling window
-        if frameId <= lastFrameId || aeSettleRemaining > 0 {
+        if frameId <= lastFrameId {
             if let cached = cachedResult {
                 return cached
             }
@@ -123,10 +137,8 @@ final class KinematicsEngine {
         let effectiveVz = smoothedVz
 
         // Calculate primary TTC
-        let primaryTTC: Float
-        if distZ <= Config.distCriticalCM {
-            primaryTTC = 0.5
-        } else if effectiveVz > Config.vzMinApproachCmS {
+        var primaryTTC: Float
+        if effectiveVz > Config.vzMinApproachCmS && historyT.count >= 3 && abs(imuYawRateRadS) <= 0.15 && aeSettleRemaining == 0 {
             primaryTTC = max(0.1, distZ / effectiveVz)
         } else {
             primaryTTC = Float.infinity
@@ -137,7 +149,7 @@ final class KinematicsEngine {
         if distZ <= Config.distCriticalCM || primaryTTC <= Config.ttcCritical {
             threatLevel = "CRITICAL"
         } else if distZ <= Config.distDangerCM || primaryTTC <= Config.ttcWarning {
-            threatLevel = "DANGER"
+            threatLevel = "WARNING"
         } else if distZ <= Config.distWarningCM {
             threatLevel = "WARNING"
         } else {
@@ -153,9 +165,9 @@ final class KinematicsEngine {
         let vzC = (abs(pan) <= 0.20) ? effectiveVz : 0.0
         let vzR = (pan > 0.20) ? smoothedVz : 0.0
 
-        let ttcL = (distL <= Config.distCriticalCM) ? 0.5 : (vzL > 20.0 ? distL / vzL : Float.infinity)
-        let ttcC = (distC <= Config.distCriticalCM) ? 0.5 : (vzC > 20.0 ? distC / vzC : Float.infinity)
-        let ttcR = (distR <= Config.distCriticalCM) ? 0.5 : (vzR > 20.0 ? distR / vzR : Float.infinity)
+        let ttcL = (vzL > Config.vzMinApproachCmS && primaryTTC.isFinite) ? distL / vzL : Float.infinity
+        let ttcC = (vzC > Config.vzMinApproachCmS && primaryTTC.isFinite) ? distC / vzC : Float.infinity
+        let ttcR = (vzR > Config.vzMinApproachCmS && primaryTTC.isFinite) ? distR / vzR : Float.infinity
 
         let threatL = SectorThreat(
             name: "LEFT", distCM: distL, velocityZ: vzL, ttc: ttcL,
@@ -220,7 +232,7 @@ final class KinematicsEngine {
                     let secLeftClear = distL >= 150.0
                     let secRightClear = distR >= 150.0
 
-                    if secCenterClear && secLeftClear && secRightClear {
+                    if secCenterClear && secLeftClear && secRightClear && abs(imuYawRateRadS) < 0.15 && aeSettleRemaining == 0 {
                         clearCorridorFrames += 1
                     } else {
                         clearCorridorFrames = 0
@@ -247,7 +259,7 @@ final class KinematicsEngine {
                 let secLeftClear = distL >= 150.0
                 let secRightClear = distR >= 150.0
 
-                if secCenterClear && secLeftClear && secRightClear {
+                if secCenterClear && secLeftClear && secRightClear && abs(imuYawRateRadS) < 0.15 && aeSettleRemaining == 0 {
                     clearCorridorFrames = min(100, clearCorridorFrames + 1)
                 } else {
                     clearCorridorFrames = 0
@@ -268,6 +280,7 @@ final class KinematicsEngine {
             }
         }
 
+        if hazardState == "COASTING_HAZARD" || hazardState == "LOST_UNRESOLVED" { primaryTTC = .infinity }
         let result = KinematicsResult(
             primaryTTC: primaryTTC,
             primaryVelocityZ: smoothedVz,
