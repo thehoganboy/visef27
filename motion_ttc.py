@@ -435,6 +435,15 @@ class KinematicsEngine:
         Tính toán TTC, vận tốc tiếp cận và hướng né an toàn từ kết quả depth.
         Hỗ trợ frame_id deduplication và ae_settle_counter passthrough.
         """
+        # Invalid observations take precedence even on the first/duplicate frame.
+        if (not getattr(obs_res, "is_valid", True) or
+                getattr(obs_res, "quality_state", "") in {"UNOBSERVABLE", "UNKNOWN"} or
+                not np.isfinite(obs_res.dist_cm)):
+            self.tracker = LightweightCentroidTracker()
+            return self._create_result(float("nan"), 0.0, float("inf"), {},
+                "SENSOR_FAULT", "STOP", False, guidance_state="PERCEPTION_UNAVAILABLE",
+                hazard_state="SENSOR_FAULT", timestamp=timestamp)
+
         # Bỏ qua frame trùng lặp (Frame-ID Deduplication hoặc Timestamp không đổi)
         is_dup_frame = (frame_id is not None and frame_id == self.prev_frame_id)
         is_dup_ts = (self.prev_timestamp > 0.0 and timestamp == self.prev_timestamp)

@@ -39,7 +39,7 @@ class BudgetDecision:
     guidance_state: str = "PATH_UNVERIFIED" # "HAZARD_BLOCKED (STOP)", "DROP_OFF_WARNING", "HAZARD_DETECTED", "PATH_UNVERIFIED"
     cue_mode: str = "MUTED"            # "SHARP_PING", "ACOUSTIC_BLUR", "MUTED"
     suppressed_count: int = 0          # Số lượng luồng tiềm năng bị triệt tiêu
-    threat_level: str = "SAFE"         # "SAFE", "WARNING", "CRITICAL"
+    threat_level: str = "UNKNOWN"         # "SAFE", "WARNING", "CRITICAL"
     velocity_z: float = 0.0            # Vận tốc tiếp cận của mối nguy active (cm/s)
     active_obstacle_id: int = 1       # ID của vật cản được cấp ngân sách âm thanh duy nhất
     suppressed_obstacles: list = None # Danh sách các vật cản phụ bị triệt tiêu âm thanh
@@ -140,6 +140,12 @@ class AuditoryBudgetManager:
         is_coasting = getattr(kinematics_res, "hazard_persistence_active", False)
         hazard_state = getattr(kinematics_res, "hazard_state", "OBSERVED_LOW_RISK")
 
+        if is_sensor_fault or threat_level in {"SENSOR_FAULT", "UNKNOWN", "INITIALIZING"}:
+            return BudgetDecision(is_active=True, proximity=0.4, volume_factor=0.35,
+                                  dist_cm=float("nan"), cue_mode="SYSTEM_FAULT_TONE",
+                                  threat_level="SENSOR_FAULT" if is_sensor_fault else "UNKNOWN",
+                                  guidance_state="PERCEPTION_UNAVAILABLE")
+
         # ── Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if hazard_state == "LOST_UNRESOLVED" or threat_level == "UNRESOLVED_HAZARD":
             lost_ts = getattr(kinematics_res, "lost_unresolved_timestamp", 0.0)
@@ -166,6 +172,7 @@ class AuditoryBudgetManager:
                     volume_factor=0.35, # Âm lượng nhắc nhở dịu nhẹ, không chói tai
                     safe_direction="NONE",
                     guidance_state="PATH_UNRESOLVED",
+                    threat_level="UNRESOLVED_HAZARD",
                     cue_mode="CAUTION_REMINDER",
                     suppressed_count=0,
                     active_obstacle_id=0,
@@ -184,13 +191,14 @@ class AuditoryBudgetManager:
                     volume_factor=0.0,
                     safe_direction="NONE",
                     guidance_state="PATH_UNRESOLVED",
+                    threat_level="UNRESOLVED_HAZARD",
                     cue_mode="STANDBY_UNRESOLVED",
                     suppressed_count=0,
                     active_obstacle_id=0,
                     suppressed_obstacles=[]
                 )
 
-        if not is_sensor_fault and not is_coasting and (
+        if threat_level == "SAFE" and not is_sensor_fault and not is_coasting and (
             threat_level == "SAFE"
             or dist_cm >= config.DIST_SAFE_CM
             or obs_res.mode_text.startswith("SAFE")

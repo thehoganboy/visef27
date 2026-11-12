@@ -167,3 +167,9 @@ SECTOR_RIGHT_SPLIT = 0.66                # 66% -> 100%: Vùng Phải
 # ── Visualization ─────────────────────────────────────────────────────────────
 COLORMAP           = 4                   # cv2.COLORMAP_MAGMA
 FPS_SMOOTHING      = 0.9                 # EMA cho FPS
+
+# DEMO-READY-01: content integrity of the existing self-contained MiDaS asset.
+# This pin identifies repository bytes; it is not proof of physical calibration.
+DEMO_MODEL_PATH = "android/app/src/main/assets/midas_small.onnx"
+ONNX_SHA256_HASHES["midas_small.onnx"] = "0f6727bda50b289a803b8146cdf531dae409927600f017778d07828ba6f1f82d"
+FRAME_TIMEOUT_SEC = 1.0

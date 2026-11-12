@@ -171,7 +171,12 @@ class SpatialAudioEngine:
         if not self.has_hardware:
             return
 
-        if not decision.is_active or decision.proximity <= 0.005:
+        known = {"SHARP_PING", "ACOUSTIC_BLUR", "CAUTION_REMINDER", "MUTED", "STANDBY_UNRESOLVED", "SYSTEM_FAULT_TONE"}
+        if decision.cue_mode == "SYSTEM_FAULT_TONE" or decision.cue_mode not in known:
+            self._state = _AudioState(active=False, fault_mode="SYSTEM_FAULT")
+            return
+        self.set_fault_mode("NONE")
+        if decision.cue_mode in {"MUTED", "STANDBY_UNRESOLVED"} or not decision.is_active or decision.proximity <= 0.005:
             self._state = _AudioState(active=False, fault_mode=self._state.fault_mode)
             return
 

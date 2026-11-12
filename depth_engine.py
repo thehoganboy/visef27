@@ -139,8 +139,7 @@ def _verify_onnx_sha256(filepath: str) -> bool:
     basename = os.path.basename(filepath)
     expected_hash = config.ONNX_SHA256_HASHES.get(basename)
     if expected_hash is None:
-        # Hash chưa được cấu hình → bỏ qua kiểm tra (chế độ dev)
-        return True
+        return False  # Unregistered assets are not accepted by the runtime.
     try:
         sha256 = hashlib.sha256()
         with open(filepath, 'rb') as f:
@@ -375,81 +374,24 @@ class DepthEstimator:
     """
 
     def __init__(self, device: str = None):
-        self.use_onnx = False
-        onnx_candidates = [
-            os.path.join(os.path.dirname(__file__), "midas_small_160.onnx"),
-            os.path.join(os.path.dirname(__file__), "midas_small_192.onnx"),
-            "midas_small_160.onnx",
-            "midas_small_192.onnx",
-        ]
-        chosen_onnx = None
-        for cand in onnx_candidates:
-            if os.path.exists(cand):
-                chosen_onnx = cand
-                break
-
-        if chosen_onnx:
-            # Xác thực SHA-256 trước khi nạp
-            if not _verify_onnx_sha256(chosen_onnx):
-                raise RuntimeError(
-                    f"[SECURITY] File ONNX '{chosen_onnx}' KHÔNG vượt qua kiểm tra SHA-256! "
-                    "Có thể đã bị giả mạo. Hủy nạp mô hình."
-                )
-            try:
-                import onnxruntime as ort
-                sess_opts = ort.SessionOptions()
-                sess_opts.intra_op_num_threads = min(6, max(4, os.cpu_count() or 4))
-                sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                self.ort_session = ort.InferenceSession(chosen_onnx, sess_opts, providers=['CPUExecutionProvider'])
-                self.ort_input_name = self.ort_session.get_inputs()[0].name
-                self.input_size = (160, 160) if "160" in chosen_onnx else (192, 192)
-                self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-                self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-                self.use_onnx = True
-                print(f"[DepthEstimator] ONNX Runtime Ready ({chosen_onnx}, input {self.input_size}). Latency target < 45ms.")
-            except Exception as e:
-                print(f"[DepthEstimator] Khong the nap ONNX Runtime: {e}.")
-
-        if not self.use_onnx:
-            # Fallback: Chỉ nạp model PyTorch từ file CỤC BỘ, KHÔNG dùng torch.hub.load từ GitHub
-            try:
-                import torch
-                import torch.nn.functional as F
-                self._torch = torch
-                self._F = F
-            except ImportError as err:
-                raise RuntimeError(f"Cả ONNX Runtime và PyTorch đều không khả dụng: {err}")
-
-            if device is None:
-                if torch.cuda.is_available():
-                    self.device = torch.device("cuda")
-                    print(f"[DepthEstimator] Using GPU: {torch.cuda.get_device_name(0)}")
-                else:
-                    self.device = torch.device("cpu")
-                    print("[DepthEstimator] Using CPU")
-            else:
-                self.device = torch.device(device)
-
-            if self.device.type == "cpu":
-                try:
-                    torch.set_num_threads(max(2, torch.get_num_threads()))
-                except Exception:
-                    pass
-
-            # Tìm model cục bộ trước, KHÔNG tải từ internet
-            local_model_path = os.path.join(os.path.dirname(__file__), "model-small.onnx")
-            hub_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "torch", "hub")
-
-            # 100% Offline Edge Security: Tuyệt đối không dùng torch.hub.load lúc runtime
-            raise RuntimeError(
-                "[DepthEstimator] KHÔNG THỂ nạp mô hình PyTorch MiDaS lúc runtime. "
-                "Hệ thống bắt buộc chạy 100% Offline Edge qua mô hình ONNX đã xác thực SHA-256. "
-                "Vui lòng cung cấp file ONNX hợp lệ (ví dụ midas_small_160.onnx)."
-            )
-
-            self.model.to(self.device).eval()
-            self.transform = transforms.small_transform
-            print("[DepthEstimator] Mo hinh MiDaS_small PyTorch san sang (Ready).")
+        # The small desktop graphs require untracked external weights. Use the
+        # self-contained, portrait MiDaS export already shipped on Android.
+        import onnxruntime as ort
+        model_path = os.path.join(os.path.dirname(__file__), config.DEMO_MODEL_PATH)
+        if not _verify_onnx_sha256(model_path):
+            raise RuntimeError("MiDaS asset missing or integrity check failed")
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = min(4, os.cpu_count() or 1)
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        self.ort_session = ort.InferenceSession(model_path, opts, providers=['CPUExecutionProvider'])
+        tensor = self.ort_session.get_inputs()[0]
+        if tensor.shape != [1, 3, 256, 192] or tensor.type != 'tensor(float)':
+            raise RuntimeError(f"Unsupported MiDaS input contract: {tensor.shape} {tensor.type}")
+        self.ort_input_name = tensor.name
+        self.input_size = (192, 256)
+        self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        self.use_onnx = True
 
     def infer_depth(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -460,26 +402,13 @@ class DepthEstimator:
             - depth_raw: float32 disparity gốc từ MiDaS
         """
         h, w = frame_bgr.shape[:2]
-        if self.use_onnx:
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            resized = cv2.resize(rgb, self.input_size, interpolation=cv2.INTER_LINEAR)
-            norm = ((resized.astype(np.float32) / 255.0 - self.mean) / self.std).transpose(2, 0, 1)[np.newaxis, ...]
-            out = self.ort_session.run(None, {self.ort_input_name: norm})[0].squeeze()
-            depth_raw = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
-        else:
-            torch = self._torch
-            F = self._F
-            with torch.inference_mode():
-                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                input_batch = self.transform(frame_rgb).to(self.device)
-                prediction = self.model(input_batch)
-                prediction = F.interpolate(
-                    prediction.unsqueeze(1),
-                    size=frame_bgr.shape[:2],
-                    mode="bilinear",
-                    align_corners=False,
-                ).squeeze()
-                depth_raw = prediction.cpu().numpy().astype(np.float32)
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, self.input_size, interpolation=cv2.INTER_LINEAR)
+        norm = np.ascontiguousarray(((resized.astype(np.float32) / 255.0 - self.mean) / self.std).transpose(2, 0, 1)[None])
+        output = self.ort_session.run(None, {self.ort_input_name: norm})[0]
+        if output.shape != (1, 256, 192) or not np.isfinite(output).all() or np.any(output <= 0):
+            raise RuntimeError("Invalid MiDaS output tensor")
+        depth_raw = cv2.resize(output[0], (w, h), interpolation=cv2.INTER_LINEAR)
 
         d_min = depth_raw.min()
         d_max = depth_raw.max()
