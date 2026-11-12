@@ -39,6 +39,8 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions { unitTests.isReturnDefaultValues = true }
+
     buildFeatures {
         viewBinding = true
     }
@@ -49,6 +51,7 @@ android {
 }
 
 dependencies {
+    testImplementation("junit:junit:4.13.2")
     // CameraX 1.3.4
     val cameraxVersion = "1.3.4"
     implementation("androidx.camera:camera-core:$cameraxVersion")

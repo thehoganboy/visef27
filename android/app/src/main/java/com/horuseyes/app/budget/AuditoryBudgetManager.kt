@@ -19,11 +19,11 @@ data class BudgetDecision(
     val priorityScore: Float,
     val volumeFactor: Float,
     val safeDirection: String,
-    val guidanceState: String = "ESCAPE_RIGHT",
+    val guidanceState: String = "PATH_UNVERIFIED",
     val cueMode: String,
     val suppressedCount: Int,
     val activeObstacleId: Int,
-    val threatLevel: String = "SAFE",
+    val threatLevel: String = "UNKNOWN",
     val suppressedObstacles: List<Obstacle> = emptyList()
 )
 
@@ -43,7 +43,7 @@ class AuditoryBudgetManager {
     companion object {
         fun computeThreatScore(ttc: Float, proximity: Float, uncertainty: Float): Float {
             val kinetic = if (ttc < Float.POSITIVE_INFINITY) {
-                (1.0f / max(ttc, Config.TTC_EPSILON)) * (1.0f - 0.3f * uncertainty)
+                (1.0f / max(ttc, Config.TTC_EPSILON))
             } else {
                 0.0f
             }
@@ -59,6 +59,15 @@ class AuditoryBudgetManager {
         val safeDir = kinRes.safeDirection
         val allObs = depthRes.allObstacles
         val isEvading = kinRes.isEvading
+
+        if (!depthRes.isValid || threatLevel in setOf("SENSOR_FAULT", "UNKNOWN", "INITIALIZING")) {
+            return faultDecision()
+        }
+        if (kinRes.hazardState == "COASTING_HAZARD" && allObs.isEmpty()) {
+            return faultDecision().copy(cueMode = "SHARP_PING", threatLevel = threatLevel,
+                volumeFactor = 1f, proximity = if (threatLevel == "CRITICAL") 1f else .7f,
+                guidanceState = "HAZARD_DETECTED")
+        }
 
         // ── Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if (kinRes.hazardState == "LOST_UNRESOLVED" || threatLevel == "UNRESOLVED_HAZARD") {
@@ -106,10 +115,10 @@ class AuditoryBudgetManager {
         }
 
         // ── 1. Quy tắc Triệt tiêu thính giác (Suppression Filter - Im lặng tuyệt đối) ──
-        if (threatLevel == "SAFE" ||
+        if (threatLevel == "SAFE" && (
             allObs.isEmpty() ||
             distCm >= Config.DIST_SAFE_CM ||
-            (distCm >= Config.DIST_ALERT_CM && ttc > Config.TTC_WARNING)
+            (distCm >= Config.DIST_ALERT_CM && ttc > Config.TTC_WARNING))
         ) {
             currentActiveId = null
             activeHoldCounter = 0
@@ -136,6 +145,7 @@ class AuditoryBudgetManager {
         }
 
         // ── 2. Đánh giá điểm ưu tiên (Threat Score) cho từng ứng viên ──
+        if (allObs.isEmpty()) return faultDecision()
         val scoredList = ArrayList<Triple<Float, Obstacle, Float>>() // <effectiveScore, obs, ottc>
         for (o in allObs) {
             val ottc = kinRes.obstacleTtcs[o.id] ?: Float.POSITIVE_INFINITY
@@ -154,7 +164,7 @@ class AuditoryBudgetManager {
         val winnerObs: Obstacle
         val winnerTtc: Float
 
-        if (currentActiveId == null) {
+        if (currentActiveId == null || topTtc <= Config.TTC_CRITICAL || topObs.distCm <= Config.DIST_CRITICAL_CM) {
             currentActiveId = topObs.id
             activeHoldCounter = 1
             pendingSwitchId = null
@@ -231,3 +241,8 @@ class AuditoryBudgetManager {
         )
     }
 }
+
+fun faultDecision() = BudgetDecision(true, 0f, .4f, Float.NaN, Float.POSITIVE_INFINITY,
+    priorityScore = 99f, volumeFactor = .35f, safeDirection = "STOP",
+    guidanceState = "PERCEPTION_UNAVAILABLE", cueMode = "SYSTEM_FAULT_TONE",
+    suppressedCount = 0, activeObstacleId = 0, threatLevel = "SENSOR_FAULT")

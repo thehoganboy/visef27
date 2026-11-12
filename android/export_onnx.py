@@ -54,6 +54,8 @@ def main():
     sess = ort.InferenceSession(tmp_path, providers=["CPUExecutionProvider"])
     imgs = sorted(glob.glob(os.path.join(PROJECT_ROOT, "data", "nyu2_test", "*_colors.png")))[:6]
     imgs += sorted(glob.glob(os.path.join(PROJECT_ROOT, "data", "rgbd_dataset_freiburg3_walking_static", "rgb", "*.png")))[::200][:4]
+    if not imgs:
+        raise RuntimeError("No real verification images; refusing unverified export")
     worst = 0.0
     for p in imgs:
         bgr = cv2.imread(p)

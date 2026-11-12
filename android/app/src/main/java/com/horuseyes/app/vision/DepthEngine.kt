@@ -45,7 +45,9 @@ data class DepthResult(
     val uncertaintyScore: Float,
     val isSaturated: Boolean,
     val sectorDists: Map<String, Float>,
-    val allObstacles: List<Obstacle>
+    val allObstacles: List<Obstacle>,
+    val isValid: Boolean = true,
+    val sourceAspect: Float = 0.75f
 )
 
 /**
@@ -81,12 +83,18 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
 
     init {
         val modelBytes = loadModelFromAssets(context, modelAssetName)
+        val hash = java.security.MessageDigest.getInstance("SHA-256").digest(modelBytes)
+            .joinToString("") { "%02x".format(it) }
+        require(hash == "0f6727bda50b289a803b8146cdf531dae409927600f017778d07828ba6f1f82d") { "MiDaS integrity failure" }
         val opts = OrtSession.SessionOptions().apply {
             setIntraOpNumThreads(4)
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
         }
         session = env.createSession(modelBytes, opts)
+        opts.close()
         inputName = session.inputNames.iterator().next()
+        val shape = (session.inputInfo[inputName]!!.info as ai.onnxruntime.TensorInfo).shape
+        require(shape.contentEquals(inputTensorShape)) { "Unsupported model input" }
     }
 
     private fun loadModelFromAssets(context: Context, assetName: String): ByteArray {
@@ -114,6 +122,15 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
 
         // 1. Tiền xử lý ImageNet: Chuẩn hóa Planar NCHW [1, 3, 256, 192]
         scaledBitmap.getPixels(pixelArray, 0, inW, 0, 0, inW, inH)
+        var lumaSum = 0.0
+        var dark = 0; var bright = 0
+        for (p in pixelArray) {
+            val y = .299 * ((p shr 16) and 255) + .587 * ((p shr 8) and 255) + .114 * (p and 255)
+            lumaSum += y
+            if (y < 10) dark++
+            if (y > 245) bright++
+        }
+        require(dark < totalPixels * .8 && bright < totalPixels * .8 && lumaSum / totalPixels > 12) { "Visual observation unavailable" }
         inputBuffer.clear()
 
         val meanR = 0.485f; val meanG = 0.456f; val meanB = 0.406f
@@ -177,6 +194,8 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
                 }
             }
         }
+
+        require(rawDisparity.all { it.isFinite() && it > 0f }) { "Invalid MiDaS output" }
 
         // 3. Chuẩn hóa dNorm [0.0, 1.0] và đo đạc cực trị
         var dMin = Float.MAX_VALUE

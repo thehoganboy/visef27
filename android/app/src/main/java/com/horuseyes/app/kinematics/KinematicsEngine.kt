@@ -40,7 +40,7 @@ data class KinematicsResult(
     val obstacleVzs: Map<Int, Float>,
     val trackDetails: Map<Int, TrackDetail>,
     val sectorScores: Map<String, Float> = mapOf("LEFT" to 0.5f, "RIGHT" to 0.5f),
-    val guidanceState: String = "ESCAPE_RIGHT",
+    val guidanceState: String = "PATH_UNVERIFIED",
     val hazardState: String = "INITIALIZING",
     val lostUnresolvedTimestamp: Double = 0.0,
     val timestamp: Float = 0f
@@ -390,7 +390,7 @@ class KinematicsEngine {
         return null
     }
 
-    fun compute(depthRes: DepthResult, timestamp: Float): KinematicsResult {
+    fun compute(depthRes: DepthResult, timestamp: Float, yawRate: Float = 0f): KinematicsResult {
         val now = timestamp
 
         // Directive 01B-A++ Task P1-F02: Watchdog frame gap check
@@ -418,7 +418,7 @@ class KinematicsEngine {
         // Directive 01B-A++ Task P0-F01: State taxonomy when allObs is empty
         if (allObs.isEmpty()) {
             val dPan = currPan - prevPan
-            val isRotatingAway = Math.abs(dPan) > 0.15f
+            val isRotatingAway = Math.abs(dPan) > 0.15f || kotlin.math.abs(yawRate) > 0.15f
 
             prevDistCm = currDist
             prevPan = currPan
@@ -437,7 +437,7 @@ class KinematicsEngine {
                         "RIGHT" to SectorThreat("RIGHT", secDists["RIGHT"] ?: 250f, 0f, Float.POSITIVE_INFINITY, lastThreatLevel)
                     )
                     return KinematicsResult(
-                        primaryTtc = if (lastThreatLevel == "CRITICAL") 0.5f else 1.5f,
+                        primaryTtc = Float.POSITIVE_INFINITY,
                         primaryVelocityZ = 0f,
                         threats = threats,
                         safeDirection = "NONE",
