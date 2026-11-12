@@ -17,6 +17,119 @@ struct DirectionalAdvisory {
     }
 }
 
+func estimateDirectionalAdvisory(
+    observation: ObstacleDetectionResult?,
+    threat: String,
+    now: Double,
+    hfovDeg: Double = 65.0,
+    prevAngle: Double? = nil
+) -> DirectionalAdvisory {
+    if threat == "PAUSED" || threat == "INITIALIZING" || threat == "SENSOR_FAULT" || observation == nil || !(observation?.isValid ?? false) {
+        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now)
+    }
+    guard let obs = observation, !obs.isZeroLuxBlind else {
+        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now)
+    }
+
+    let halfFov = hfovDeg / 2.0
+    let obsRange = (-halfFov)...halfFov
+    let camW = Double(obs.camWidth > 0 ? obs.camWidth : 192)
+    let cx = camW / 2.0
+    let fx = cx / tan(halfFov * .pi / 180.0)
+
+    let zLeft = Double(obs.sectorDists["LEFT"] ?? 250.0)
+    let zCenter = Double(obs.sectorDists["CENTER"] ?? obs.distCM)
+    let zRight = Double(obs.sectorDists["RIGHT"] ?? 250.0)
+
+    if zCenter < 50.0 && zLeft < 60.0 && zRight < 60.0 {
+        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+    }
+
+    struct ObsProfile {
+        let angCenter: Double
+        let radius: Double
+        let weight: Double
+    }
+    var profiles: [ObsProfile] = []
+
+    for o in obs.allObstacles {
+        let l = Double(o.bbox.x)
+        let r = Double(o.bbox.x + o.bbox.w)
+        let z = max(10.0, Double(o.distCM))
+        let angLeft = atan2(l - cx, fx) * 180.0 / .pi
+        let angRight = atan2(r - cx, fx) * 180.0 / .pi
+        let angCenter = (angLeft + angRight) / 2.0
+        let angHalfW = max(2.0, (angRight - angLeft) / 2.0)
+        let marginDeg = min(22.0, max(4.0, atan2(20.0, z) * 180.0 / .pi))
+        let totalRadius = angHalfW + marginDeg
+        let weight: Double
+        if z < 50.0 { weight = 20.0 }
+        else if z < 80.0 { weight = 10.0 }
+        else if z < 150.0 { weight = 4.0 }
+        else { weight = 1.0 }
+        profiles.append(ObsProfile(angCenter: angCenter, radius: totalRadius, weight: weight))
+    }
+
+    if profiles.isEmpty && Double(obs.distCM) < 150.0 && !obs.distCM.isNaN {
+        let angCenter = Double(obs.pan) * halfFov
+        let weight = obs.distCM < 80.0 ? 15.0 : 5.0
+        profiles.append(ObsProfile(angCenter: angCenter, radius: 12.0, weight: weight))
+    }
+
+    if profiles.isEmpty && zCenter >= 180.0 && zLeft >= 150.0 && zRight >= 150.0 {
+        let angOut = (prevAngle != nil && prevAngle!.isFinite) ? (0.3 * 0.0 + 0.7 * prevAngle!) : 0.0
+        return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angOut, confidence: 0.92, observedAngularRange: obsRange, sourceTimestamp: now)
+    }
+
+    var bestAngle = 0.0
+    var minRisk = Double.infinity
+    var ang = -halfFov + 2.5
+    while ang <= halfFov - 2.5 + 1e-4 {
+        var risk = 0.0
+        for p in profiles {
+            let dAng = abs(ang - p.angCenter)
+            if dAng < p.radius {
+                let pen = 1.0 - (dAng / p.radius)
+                risk += p.weight * (pen * pen) * 15.0
+            } else {
+                let dEdge = dAng - p.radius
+                if dEdge < 15.0 {
+                    risk += p.weight * exp(-((dEdge * dEdge) / 40.0)) * 2.0
+                }
+            }
+        }
+
+        let zSec: Double
+        if ang < -10.0 { zSec = zLeft }
+        else if ang > 10.0 { zSec = zRight }
+        else { zSec = zCenter }
+
+        if zSec < 80.0 { risk += ((80.0 - zSec) / 10.0) * 5.0 }
+        else if zSec < 150.0 { risk += ((150.0 - zSec) / 70.0) * 2.0 }
+
+        risk += 0.05 * abs(ang)
+
+        if risk < minRisk {
+            minRisk = risk
+            bestAngle = ang
+        }
+        ang += 2.5
+    }
+
+    if minRisk > 30.0 || (threat == "CRITICAL" && zCenter < 40.0 && zLeft < 50.0 && zRight < 50.0) {
+        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+    }
+
+    let conf = max(0.30, min(0.95, 1.0 - (minRisk / 35.0)))
+    var selected = bestAngle
+    if let prev = prevAngle, prev.isFinite {
+        selected = 0.45 * selected + 0.55 * prev
+    }
+    selected = max(-halfFov, min(halfFov, selected))
+
+    return DirectionalAdvisory(state: "AVAILABLE", angleDeg: selected, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: now)
+}
+
 final class DemoController: ObservableObject {
     let camera = CameraTorchManager()
     private let audio = SpatialAudioEngine()
@@ -39,6 +152,7 @@ final class DemoController: ObservableObject {
     private var started: Double = 0
     private var lastFrame: Double = 0
     private var yaw: Float = 0
+    private var prevAngle: Double? = nil
 
     func appear() {
         camera.onFrameProcessed = { [weak self] buffer, frameId, settle, luma in
@@ -72,7 +186,9 @@ final class DemoController: ObservableObject {
                     self.result = obs.isValid ? obs : nil
                     self.sourceTimestamp = now
                     self.threat = risk.threatLevel
-                    self.advisory = DirectionalAdvisory(state: risk.threatLevel == "CRITICAL" ? "STOP" : "UNAVAILABLE", sourceTimestamp: now)
+                    let adv = estimateDirectionalAdvisory(observation: obs, threat: risk.threatLevel, now: now, prevAngle: self.prevAngle)
+                    self.advisory = adv
+                    self.prevAngle = adv.state == "AVAILABLE" ? adv.angleDeg : nil
                     self.audio.update(decision: decision)
                 }
             }
@@ -95,7 +211,7 @@ final class DemoController: ObservableObject {
             priorityScore: 0, volumeFactor: 0, safeDirection: "NONE", cueMode: "MUTED", threatLevel: "UNKNOWN", suppressedCount: 0)
     }
     private func fault() {
-        threat = "SENSOR_FAULT"; result = nil; advisory = DirectionalAdvisory()
+        threat = "SENSOR_FAULT"; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
         audio.update(decision: BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
             ttc: .infinity, priorityScore: 99, volumeFactor: 0.35, safeDirection: "STOP",
             cueMode: "SYSTEM_FAULT_TONE", threatLevel: "SENSOR_FAULT", suppressedCount: 0))
@@ -103,7 +219,7 @@ final class DemoController: ObservableObject {
     func toggle() { setActive(!active) }
     func setActive(_ value: Bool) {
         lock.lock(); generation += 1; enabled = value; lock.unlock()
-        active = value; result = nil; advisory = DirectionalAdvisory()
+        active = value; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
         started = CACurrentMediaTime(); sourceTimestamp = started
         threat = value ? "INITIALIZING" : "PAUSED"
         audio.update(decision: silentDecision())
