@@ -136,7 +136,7 @@ def test_actual_model_real_frame():
 def test_continuous_180_directional_guidance():
     """Verify continuous angles theta in [-90, +90], obstacle avoidance, and refusal."""
     def make_custom_obs(obstacles, sectors=None, valid=True, is_zero_lux=False):
-        s_dists = sectors or {'LEFT': 250.0, 'CENTER': 250.0, 'RIGHT': 250.0}
+        s_dists = sectors if sectors is not None else {'LEFT': 250.0, 'CENTER': 250.0, 'RIGHT': 250.0}
         return ObstacleDetectionResult(
             x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.5, dist_cm=200.0,
             mode_text='TEST', uncertainty_score=0.1, is_wall=False,
@@ -148,7 +148,8 @@ def test_continuous_180_directional_guidance():
     clear_adv = estimate_directional_advisory(make_custom_obs([]), threat='SAFE', now=10.0)
     assert clear_adv.state == DirectionState.AVAILABLE
     assert clear_adv.angle_deg == 0.0
-    assert clear_adv.confidence > 0.8
+    # Heuristic support score, not a fabricated certainty
+    assert 0.4 <= clear_adv.confidence <= 0.65
     assert clear_adv.drawable_angle(10.2) == 0.0
 
     # 2. Right-side obstacle (x=480) -> steers left (angle < 0)
@@ -228,3 +229,42 @@ def test_continuous_180_directional_guidance():
     )
     assert smooth_adv.state == DirectionState.AVAILABLE
     assert -32.5 <= smooth_adv.angle_deg <= 32.5
+
+    # 11. P0-01 Mandatory Tests: Sector Validity & Fabricated Defaults Rejection
+    # (a) Three missing sectors -> no AVAILABLE direction (UNAVAILABLE)
+    no_sec_obs = make_custom_obs([], sectors={})
+    no_sec_adv = estimate_directional_advisory(no_sec_obs, threat='SAFE', now=10.0)
+    assert no_sec_adv.state == DirectionState.UNAVAILABLE
+    assert no_sec_adv.angle_deg is None
+
+    # (b) Left sector missing -> candidates on left rejected; cannot steer left from missing data
+    missing_left_obs = make_custom_obs([cent_obs], sectors={'CENTER': 55.0, 'RIGHT': 250.0})
+    ml_adv = estimate_directional_advisory(missing_left_obs, threat='CRITICAL', now=10.0)
+    # Left candidates ineligible -> must choose valid Right candidates or STOP
+    assert ml_adv.state == DirectionState.AVAILABLE
+    assert ml_adv.angle_deg > 0.0  # Steers right, NOT into missing left!
+
+    # (c) Center sector is NaN -> cannot recommend forward solely from other sectors
+    nan_center_obs = make_custom_obs([], sectors={'LEFT': 250.0, 'CENTER': float('nan'), 'RIGHT': 250.0})
+    nan_c_adv = estimate_directional_advisory(nan_center_obs, threat='SAFE', now=10.0)
+    # Forward is not eligible, so it can only recommend a supported side or UNAVAILABLE
+    if nan_c_adv.state == DirectionState.AVAILABLE:
+        assert abs(nan_c_adv.angle_deg) > 10.0  # Cannot be straight ahead
+
+    # (d) Missing obstacle list with invalid depth -> UNKNOWN
+    inv_obs = make_custom_obs([], sectors={'LEFT': float('nan'), 'CENTER': float('nan'), 'RIGHT': float('nan')}, valid=False)
+    assert estimate_directional_advisory(inv_obs, threat='SENSOR_FAULT', now=10.0).state == DirectionState.UNKNOWN
+
+    # (e) Critical obstacle appearing during smoothing -> immediate STOP (no smoothing into STOP)
+    sudden_block = estimate_directional_advisory(
+        make_custom_obs([cent_obs], {'LEFT': 30.0, 'CENTER': 25.0, 'RIGHT': 30.0}),
+        threat='CRITICAL', now=10.0, prev_angle=15.0
+    )
+    assert sudden_block.state == DirectionState.STOP
+    assert sudden_block.angle_deg is None
+
+    # (f) Hysteresis prevents rapid left/right oscillation for small score differences
+    obs_symmetric = make_custom_obs([], {'LEFT': 200.0, 'CENTER': 200.0, 'RIGHT': 200.0})
+    adv_favors_prev_left = estimate_directional_advisory(obs_symmetric, threat='SAFE', now=10.0, prev_angle=-5.0)
+    assert adv_favors_prev_left.state == DirectionState.AVAILABLE
+    assert adv_favors_prev_left.angle_deg < 0.0

@@ -1,43 +1,44 @@
 {
-  "source_sha": "0cbcc3145f80e90d3af1ad8edcf44547c1454b45",
+  "source_sha": "f10b53bf5a5c8f45e93b07bde354e040ff5c4a26",
   "dirty": true,
   "platform": "Windows-11-10.0.26300-SP0",
   "processor": "Intel64 Family 6 Model 142 Stepping 12, GenuineIntel",
-  "frames": 120,
-  "input": "tests/fixtures/demo/manifest.json",
-  "elapsed_sec": 47.21900000004098,
+  "frames": 40,
+  "input": "data/tum_walking_static.mp4",
+  "elapsed_sec": 24.73399999999674,
   "camera_to_audio": "NOT MEASURED: replay does not include camera or physical audio",
   "latency": {
     "inference_ms": {
-      "median": 164.15120000601746,
-      "p95": 516.2768699869047,
-      "worst": 1067.2999999951571
+      "median": 262.15150000643916,
+      "p95": 671.4759000111369,
+      "worst": 867.7977000479586
     },
     "objects_ms": {
-      "median": 98.88440000941046,
-      "p95": 219.13177499664013,
-      "worst": 420.79120001289994
+      "median": 152.60275002219714,
+      "p95": 400.7828350266208,
+      "worst": 966.8580999714322
     },
     "risk_ms": {
-      "median": 0.36929998896084726,
-      "p95": 0.982904972624965,
-      "worst": 3.604199970141053
+      "median": 1.4475999923888594,
+      "p95": 10.941485001239922,
+      "worst": 32.34509995672852
     },
     "budget_ms": {
-      "median": 0.10449998080730438,
-      "p95": 0.18028502236120394,
-      "worst": 0.6237000343389809
+      "median": 0.10339997243136168,
+      "p95": 0.22783996537327703,
+      "worst": 1.6246999730356038
     },
     "render_ms": {
-      "median": 15.861000021686777,
-      "p95": 32.74539000121876,
-      "worst": 67.81879998743534
+      "median": 19.080350000876933,
+      "p95": 80.28623999853147,
+      "worst": 388.29619996249676
     },
     "total_ms": {
-      "median": 290.69220001110807,
-      "p95": 716.1851950368143,
-      "worst": 1211.7286999709904
+      "median": 446.6739499766845,
+      "p95": 1099.8447900288736,
+      "worst": 1651.9202999770641
     }
   },
-  "processing_fps": 2.8735049501122645
+  "processing_fps": 1.9148468102170026,
+  "annotated_video": "reports\\demo_ready\\replay\\annotated_replay.mp4"
 }

@@ -93,14 +93,40 @@ def estimate_directional_advisory(
     fx = cx / math.tan(math.radians(half_fov))
     obs_range = (-half_fov, half_fov)
 
-    # 3. Extract sector distances
+    # 3. Explicit validity-aware sector extraction (no fabricated 250cm fallback)
     sector_dists = getattr(observation, "sector_dists", {}) or {}
-    z_left = float(sector_dists.get("LEFT", 250.0))
-    z_center = float(sector_dists.get("CENTER", getattr(observation, "dist_cm", 250.0)))
-    z_right = float(sector_dists.get("RIGHT", 250.0))
+    spatial_val = getattr(observation, "spatial_validity", {}) or {}
 
-    # Completely obstructed environment check
-    if z_center < 50.0 and z_left < 60.0 and z_right < 60.0:
+    def classify_sector(sec_name: str) -> tuple[str, float]:
+        """Classify sector into VALID, UNKNOWN, INVALID, STALE."""
+        if not isinstance(sector_dists, dict) or sec_name not in sector_dists:
+            return "UNKNOWN", float("nan")
+        val = sector_dists[sec_name]
+        if val is None:
+            return "UNKNOWN", float("nan")
+        try:
+            val_f = float(val)
+        except (ValueError, TypeError):
+            return "INVALID", float("nan")
+        if not math.isfinite(val_f) or val_f <= 0:
+            return "INVALID", float("nan")
+        if spatial_val and sec_name in spatial_val:
+            s_val = spatial_val[sec_name]
+            if isinstance(s_val, (int, float)):
+                if not math.isfinite(s_val) or s_val < 0.5:
+                    return "INVALID", float("nan")
+            elif s_val not in {None, "VALID"}:
+                return "INVALID", float("nan")
+        return "VALID", val_f
+
+    status_l, z_left = classify_sector("LEFT")
+    status_c, z_center = classify_sector("CENTER")
+    status_r, z_right = classify_sector("RIGHT")
+
+    # Completely obstructed check if all sectors are valid and close
+    if (status_c == "VALID" and z_center < 50.0 and
+            status_l == "VALID" and z_left < 60.0 and
+            status_r == "VALID" and z_right < 60.0):
         return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=now)
 
     # 4. Map obstacles to angular span and risk weights
@@ -111,7 +137,7 @@ def estimate_directional_advisory(
         if not bbox or len(bbox) < 4:
             continue
         bx, by, bw, bh = bbox[:4]
-        z_obs = float(getattr(obs, "dist_cm", z_center))
+        z_obs = float(getattr(obs, "dist_cm", z_center if status_c == "VALID" else 100.0))
         if not math.isfinite(z_obs) or z_obs <= 0:
             z_obs = 100.0
 
@@ -137,40 +163,67 @@ def estimate_directional_advisory(
 
         obstacle_profiles.append((ang_center, total_radius, weight, z_obs))
 
-    # If single obstacle attribute exists but all_obstacles is empty
-    if not obstacle_profiles:
-        primary_dist = float(getattr(observation, "dist_cm", 250.0))
-        if math.isfinite(primary_dist) and primary_dist < 150.0:
-            pan = float(getattr(observation, "pan", 0.0) or 0.0)
-            ang_center = pan * half_fov
-            weight = 15.0 if primary_dist < 80.0 else 5.0
-            obstacle_profiles.append((ang_center, 12.0, weight, primary_dist))
+    # Single obstacle fallback when all_obstacles is empty
+    if not obstacle_profiles and status_c == "VALID" and z_center < 150.0:
+        pan = float(getattr(observation, "pan", 0.0) or 0.0)
+        ang_center = pan * half_fov
+        weight = 15.0 if z_center < 80.0 else 5.0
+        obstacle_profiles.append((ang_center, 12.0, weight, z_center))
 
-    # If no obstacle profiles and all sectors clear (> 180cm), clear straight path
-    if not obstacle_profiles and z_center >= 180.0 and z_left >= 150.0 and z_right >= 150.0:
-        angle_out = 0.0
-        if prev_angle is not None and math.isfinite(prev_angle):
-            angle_out = 0.3 * angle_out + 0.7 * prev_angle
+    # Clear observation with no detected obstacles
+    # ONLY allowed when ALL three sectors are confirmed VALID and clear
+    if not obstacle_profiles:
+        if status_c == "VALID" and status_l == "VALID" and status_r == "VALID":
+            if z_center >= 150.0 and z_left >= 150.0 and z_right >= 150.0:
+                angle_out = 0.0
+                if prev_angle is not None and math.isfinite(prev_angle):
+                    angle_out = 0.3 * angle_out + 0.7 * prev_angle
+                # Documented: 0.55 is a heuristic support score for an unobstructed corridor,
+                # NOT a calibrated probability of physical safety.
+                return DirectionalAdvisory(
+                    state=DirectionState.AVAILABLE,
+                    angle_deg=round(angle_out, 1),
+                    confidence=0.55,
+                    observed_angular_range=obs_range,
+                    source_timestamp=now
+                )
+        elif status_c != "VALID" and status_l != "VALID" and status_r != "VALID":
+            # No valid sector data at all -> cannot recommend any direction
+            return DirectionalAdvisory(
+                state=DirectionState.UNAVAILABLE,
+                observed_angular_range=obs_range,
+                source_timestamp=now
+            )
+
+    # 5. Build candidate angles within observed FOV (step 2.5 degrees)
+    # Heading eligibility depends on sector data validity
+    candidates = []
+    ang = -half_fov + 2.5
+    while ang <= half_fov - 2.5 + 1e-5:
+        # Sector support requirement
+        if ang < -10.0:
+            if status_l == "VALID":
+                candidates.append((ang, z_left))
+        elif ang > 10.0:
+            if status_r == "VALID":
+                candidates.append((ang, z_right))
+        else:
+            if status_c == "VALID":
+                candidates.append((ang, z_center))
+        ang += 2.5
+
+    # If no candidate heading has valid sector support, directional guidance is unavailable
+    if not candidates:
         return DirectionalAdvisory(
-            state=DirectionState.AVAILABLE,
-            angle_deg=round(angle_out, 1),
-            confidence=0.92,
+            state=DirectionState.UNAVAILABLE,
             observed_angular_range=obs_range,
             source_timestamp=now
         )
 
-    # 5. Evaluate candidate angles across observed FOV (step 2.5 degrees)
-    # Exclude outer edge margin (2.5 deg from bounds) to ensure valid heading
-    candidates = []
-    ang = -half_fov + 2.5
-    while ang <= half_fov - 2.5 + 1e-5:
-        candidates.append(ang)
-        ang += 2.5
-
     best_candidate = 0.0
     min_risk = float("inf")
 
-    for cand in candidates:
+    for cand, z_sec in candidates:
         risk = 0.0
 
         # Obstacle risk penalty
@@ -186,14 +239,7 @@ def estimate_directional_advisory(
                 if d_edge < 15.0:
                     risk += weight * math.exp(-(d_edge ** 2) / 40.0) * 2.0
 
-        # Sector risk penalty
-        if cand < -10.0:
-            z_sec = z_left
-        elif cand > 10.0:
-            z_sec = z_right
-        else:
-            z_sec = z_center
-
+        # Sector proximity penalty from verified sector distance
         if z_sec < 80.0:
             risk += ((80.0 - z_sec) / 10.0) * 5.0
         elif z_sec < 150.0:
@@ -202,22 +248,28 @@ def estimate_directional_advisory(
         # Straightforward bias (small penalty for deviating from center)
         risk += 0.05 * abs(cand)
 
+        # Hysteresis bonus: slightly favor candidate near previous heading to prevent jitter
+        if prev_angle is not None and math.isfinite(prev_angle):
+            if abs(cand - prev_angle) <= 3.5:
+                risk -= 1.0
+
         if risk < min_risk:
             min_risk = risk
             best_candidate = cand
 
     # 6. Safety boundary checks
-    # If all candidates have extreme risk (> 30.0), no safe heading exists -> STOP
-    if min_risk > 30.0 or (threat == "CRITICAL" and z_center < 40.0 and z_left < 50.0 and z_right < 50.0):
+    # If all eligible candidates have extreme risk (> 30.0), path is blocked -> STOP
+    if min_risk > 30.0 or (threat == "CRITICAL" and status_c == "VALID" and z_center < 40.0):
         return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=now)
 
     # 7. Confidence & Temporal Smoothing
-    confidence = max(0.30, min(0.95, 1.0 - (min_risk / 35.0)))
+    # Heuristic support score bounded in [0.30, 0.85]
+    confidence = max(0.30, min(0.85, 1.0 - (min_risk / 35.0)))
     selected_angle = best_candidate
     if prev_angle is not None and math.isfinite(prev_angle):
         selected_angle = 0.45 * selected_angle + 0.55 * prev_angle
 
-    # Clamp to observed angular range
+    # Clamp strictly to observed angular range
     selected_angle = max(-half_fov, min(half_fov, selected_angle))
 
     return DirectionalAdvisory(

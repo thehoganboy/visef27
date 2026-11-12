@@ -46,12 +46,21 @@ fun estimateDirectionalAdvisory(
     val cx = camW / 2f
     val fx = cx / kotlin.math.tan(Math.toRadians(halfFov.toDouble())).toFloat()
 
-    val zLeft = depth.sectorDists["LEFT"] ?: 250f
-    val zCenter = depth.sectorDists["CENTER"] ?: depth.distCm
-    val zRight = depth.sectorDists["RIGHT"] ?: 250f
+    // Explicit validity-aware sector extraction (no fabricated 250cm defaults)
+    val zLeftRaw = depth.sectorDists["LEFT"]
+    val validL = zLeftRaw != null && zLeftRaw.isFinite() && zLeftRaw > 0f
+    val zLeft = if (validL) zLeftRaw!! else Float.NaN
 
-    // Completely obstructed check
-    if (zCenter < 50f && zLeft < 60f && zRight < 60f) {
+    var zCenterRaw = depth.sectorDists["CENTER"] ?: depth.distCm
+    val validC = zCenterRaw.isFinite() && zCenterRaw > 0f
+    val zCenter = if (validC) zCenterRaw else Float.NaN
+
+    val zRightRaw = depth.sectorDists["RIGHT"]
+    val validR = zRightRaw != null && zRightRaw.isFinite() && zRightRaw > 0f
+    val zRight = if (validR) zRightRaw!! else Float.NaN
+
+    // Completely obstructed check if all sectors are valid and close
+    if (validC && zCenter < 50f && validL && zLeft < 60f && validR && zRight < 60f) {
         return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
     }
 
@@ -61,7 +70,7 @@ fun estimateDirectionalAdvisory(
     for (o in depth.allObstacles) {
         val l = if (o.bbox.right > o.bbox.left) o.bbox.left.toFloat() else (o.x - 20f)
         val r = if (o.bbox.right > o.bbox.left) o.bbox.right.toFloat() else (o.x + 20f)
-        val z = max(10f, o.distCm)
+        val z = max(10f, if (o.distCm.isFinite() && o.distCm > 0f) o.distCm else if (validC) zCenter else 100f)
         val angLeft = Math.toDegrees(kotlin.math.atan2((l - cx).toDouble(), fx.toDouble())).toFloat()
         val angRight = Math.toDegrees(kotlin.math.atan2((r - cx).toDouble(), fx.toDouble())).toFloat()
         val angCenter = (angLeft + angRight) / 2f
@@ -77,24 +86,49 @@ fun estimateDirectionalAdvisory(
         profiles.add(ObsProfile(angCenter, totalRadius, weight))
     }
 
-    if (profiles.isEmpty() && depth.distCm < 150f && depth.distCm.isFinite()) {
+    if (profiles.isEmpty() && validC && zCenter < 150f) {
         val angCenter = depth.pan * halfFov
-        val weight = if (depth.distCm < 80f) 15f else 5f
+        val weight = if (zCenter < 80f) 15f else 5f
         profiles.add(ObsProfile(angCenter, 12f, weight))
     }
 
-    if (profiles.isEmpty() && zCenter >= 180f && zLeft >= 150f && zRight >= 150f) {
-        val angOut = if (prevAngle != null && prevAngle.isFinite()) 0.3f * 0f + 0.7f * prevAngle else 0f
-        return DirectionalAdvisory("AVAILABLE", angOut, 0.92f, obsRange, nowNanos)
+    // Clear frame with no detected obstacles: only permitted if ALL 3 sectors are valid & clear
+    if (profiles.isEmpty()) {
+        if (validC && validL && validR && zCenter >= 150f && zLeft >= 150f && zRight >= 150f) {
+            val angOut = if (prevAngle != null && prevAngle.isFinite()) 0.3f * 0f + 0.7f * prevAngle else 0f
+            // Heuristic support score 0.55f, not 0.92f
+            return DirectionalAdvisory("AVAILABLE", angOut, 0.55f, obsRange, nowNanos)
+        } else if (!validC && !validL && !validR) {
+            return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
+        }
+    }
+
+    // Evaluate candidate headings with required sector validity
+    data class Candidate(val ang: Float, val zSec: Float)
+    val candidates = mutableListOf<Candidate>()
+    var ang = -halfFov + 2.5f
+    while (ang <= halfFov - 2.5f + 1e-4f) {
+        if (ang < -10f) {
+            if (validL) candidates.add(Candidate(ang, zLeft))
+        } else if (ang > 10f) {
+            if (validR) candidates.add(Candidate(ang, zRight))
+        } else {
+            if (validC) candidates.add(Candidate(ang, zCenter))
+        }
+        ang += 2.5f
+    }
+
+    if (candidates.isEmpty()) {
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
     }
 
     var bestAngle = 0f
     var minRisk = Float.MAX_VALUE
-    var ang = -halfFov + 2.5f
-    while (ang <= halfFov - 2.5f + 1e-4f) {
+
+    for (cand in candidates) {
         var risk = 0f
         for (p in profiles) {
-            val dAng = abs(ang - p.angCenter)
+            val dAng = abs(cand.ang - p.angCenter)
             if (dAng < p.radius) {
                 val pen = 1f - (dAng / p.radius)
                 risk += p.weight * (pen * pen) * 15f
@@ -106,28 +140,27 @@ fun estimateDirectionalAdvisory(
             }
         }
 
-        val zSec = when {
-            ang < -10f -> zLeft
-            ang > 10f -> zRight
-            else -> zCenter
-        }
-        if (zSec < 80f) risk += ((80f - zSec) / 10f) * 5f
-        else if (zSec < 150f) risk += ((150f - zSec) / 70f) * 2f
+        if (cand.zSec < 80f) risk += ((80f - cand.zSec) / 10f) * 5f
+        else if (cand.zSec < 150f) risk += ((150f - cand.zSec) / 70f) * 2f
 
-        risk += 0.05f * abs(ang)
+        risk += 0.05f * abs(cand.ang)
+
+        // Hysteresis margin
+        if (prevAngle != null && prevAngle.isFinite() && abs(cand.ang - prevAngle) <= 3.5f) {
+            risk -= 1.0f
+        }
 
         if (risk < minRisk) {
             minRisk = risk
-            bestAngle = ang
+            bestAngle = cand.ang
         }
-        ang += 2.5f
     }
 
-    if (minRisk > 30f || (threat == "CRITICAL" && zCenter < 40f && zLeft < 50f && zRight < 50f)) {
+    if (minRisk > 30f || (threat == "CRITICAL" && validC && zCenter < 40f)) {
         return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
     }
 
-    val conf = max(0.30f, min(0.95f, 1f - (minRisk / 35f)))
+    val conf = max(0.30f, min(0.85f, 1f - (minRisk / 35f)))
     var selected = bestAngle
     if (prevAngle != null && prevAngle.isFinite()) {
         selected = 0.45f * selected + 0.55f * prevAngle

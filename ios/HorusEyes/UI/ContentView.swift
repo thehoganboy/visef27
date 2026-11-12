@@ -37,11 +37,20 @@ func estimateDirectionalAdvisory(
     let cx = camW / 2.0
     let fx = cx / tan(halfFov * .pi / 180.0)
 
-    let zLeft = Double(obs.sectorDists["LEFT"] ?? 250.0)
-    let zCenter = Double(obs.sectorDists["CENTER"] ?? obs.distCM)
-    let zRight = Double(obs.sectorDists["RIGHT"] ?? 250.0)
+    // Explicit validity-aware sector extraction (no fabricated 250cm defaults)
+    let zLeftRaw = obs.sectorDists["LEFT"]
+    let validL = zLeftRaw != nil && zLeftRaw!.isFinite && zLeftRaw! > 0
+    let zLeft = validL ? Double(zLeftRaw!) : Double.nan
 
-    if zCenter < 50.0 && zLeft < 60.0 && zRight < 60.0 {
+    var zCenterRaw = obs.sectorDists["CENTER"] ?? obs.distCM
+    let validC = zCenterRaw.isFinite && zCenterRaw > 0
+    let zCenter = validC ? Double(zCenterRaw) : Double.nan
+
+    let zRightRaw = obs.sectorDists["RIGHT"]
+    let validR = zRightRaw != nil && zRightRaw!.isFinite && zRightRaw! > 0
+    let zRight = validR ? Double(zRightRaw!) : Double.nan
+
+    if validC && zCenter < 50.0 && validL && zLeft < 60.0 && validR && zRight < 60.0 {
         return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
     }
 
@@ -55,7 +64,7 @@ func estimateDirectionalAdvisory(
     for o in obs.allObstacles {
         let l = Double(o.bbox.x)
         let r = Double(o.bbox.x + o.bbox.w)
-        let z = max(10.0, Double(o.distCM))
+        let z = max(10.0, (o.distCM.isFinite && o.distCM > 0) ? Double(o.distCM) : (validC ? zCenter : 100.0))
         let angLeft = atan2(l - cx, fx) * 180.0 / .pi
         let angRight = atan2(r - cx, fx) * 180.0 / .pi
         let angCenter = (angLeft + angRight) / 2.0
@@ -70,24 +79,51 @@ func estimateDirectionalAdvisory(
         profiles.append(ObsProfile(angCenter: angCenter, radius: totalRadius, weight: weight))
     }
 
-    if profiles.isEmpty && Double(obs.distCM) < 150.0 && !obs.distCM.isNaN {
+    if profiles.isEmpty && validC && zCenter < 150.0 {
         let angCenter = Double(obs.pan) * halfFov
-        let weight = obs.distCM < 80.0 ? 15.0 : 5.0
+        let weight = zCenter < 80.0 ? 15.0 : 5.0
         profiles.append(ObsProfile(angCenter: angCenter, radius: 12.0, weight: weight))
     }
 
-    if profiles.isEmpty && zCenter >= 180.0 && zLeft >= 150.0 && zRight >= 150.0 {
-        let angOut = (prevAngle != nil && prevAngle!.isFinite) ? (0.3 * 0.0 + 0.7 * prevAngle!) : 0.0
-        return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angOut, confidence: 0.92, observedAngularRange: obsRange, sourceTimestamp: now)
+    // Clear frame with no detected obstacles: only permitted if ALL 3 sectors are valid & clear
+    if profiles.isEmpty {
+        if validC && validL && validR && zCenter >= 150.0 && zLeft >= 150.0 && zRight >= 150.0 {
+            let angOut = (prevAngle != nil && prevAngle!.isFinite) ? (0.3 * 0.0 + 0.7 * prevAngle!) : 0.0
+            // Heuristic support score 0.55, not 0.92
+            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: now)
+        } else if !validC && !validL && !validR {
+            return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: now)
+        }
+    }
+
+    struct Candidate {
+        let ang: Double
+        let zSec: Double
+    }
+    var candidates: [Candidate] = []
+    var ang = -halfFov + 2.5
+    while ang <= halfFov - 2.5 + 1e-4 {
+        if ang < -10.0 {
+            if validL { candidates.append(Candidate(ang: ang, zSec: zLeft)) }
+        } else if ang > 10.0 {
+            if validR { candidates.append(Candidate(ang: ang, zSec: zRight)) }
+        } else {
+            if validC { candidates.append(Candidate(ang: ang, zSec: zCenter)) }
+        }
+        ang += 2.5
+    }
+
+    if candidates.isEmpty {
+        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: now)
     }
 
     var bestAngle = 0.0
     var minRisk = Double.infinity
-    var ang = -halfFov + 2.5
-    while ang <= halfFov - 2.5 + 1e-4 {
+
+    for cand in candidates {
         var risk = 0.0
         for p in profiles {
-            let dAng = abs(ang - p.angCenter)
+            let dAng = abs(cand.ang - p.angCenter)
             if dAng < p.radius {
                 let pen = 1.0 - (dAng / p.radius)
                 risk += p.weight * (pen * pen) * 15.0
@@ -99,28 +135,27 @@ func estimateDirectionalAdvisory(
             }
         }
 
-        let zSec: Double
-        if ang < -10.0 { zSec = zLeft }
-        else if ang > 10.0 { zSec = zRight }
-        else { zSec = zCenter }
+        if cand.zSec < 80.0 { risk += ((80.0 - cand.zSec) / 10.0) * 5.0 }
+        else if cand.zSec < 150.0 { risk += ((150.0 - cand.zSec) / 70.0) * 2.0 }
 
-        if zSec < 80.0 { risk += ((80.0 - zSec) / 10.0) * 5.0 }
-        else if zSec < 150.0 { risk += ((150.0 - zSec) / 70.0) * 2.0 }
+        risk += 0.05 * abs(cand.ang)
 
-        risk += 0.05 * abs(ang)
+        // Hysteresis margin
+        if let prev = prevAngle, prev.isFinite, abs(cand.ang - prev) <= 3.5 {
+            risk -= 1.0
+        }
 
         if risk < minRisk {
             minRisk = risk
-            bestAngle = ang
+            bestAngle = cand.ang
         }
-        ang += 2.5
     }
 
-    if minRisk > 30.0 || (threat == "CRITICAL" && zCenter < 40.0 && zLeft < 50.0 && zRight < 50.0) {
+    if minRisk > 30.0 || (threat == "CRITICAL" && validC && zCenter < 40.0) {
         return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
     }
 
-    let conf = max(0.30, min(0.95, 1.0 - (minRisk / 35.0)))
+    let conf = max(0.30, min(0.85, 1.0 - (minRisk / 35.0)))
     var selected = bestAngle
     if let prev = prevAngle, prev.isFinite {
         selected = 0.45 * selected + 0.55 * prev

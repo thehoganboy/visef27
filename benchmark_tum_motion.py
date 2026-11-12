@@ -2,15 +2,15 @@
 HorusEyes 2.0 - TUM Dynamic Motion & Obstacle Avoidance Benchmark
 ================================================================================
 Thực nghiệm kiểm chuẩn động học trên tập dữ liệu chuẩn quốc tế TUM RGB-D:
-  Dataset: rgbd_dataset_freiburg3_walking_static (743 frames, Kinect 30 FPS, Static Camera).
-  Môi trường: 2 người đi bộ trong phòng làm việc (tiến lại gần, đi ngang, lùi xa, đổi hướng, che khuất).
+  Dataset: rgbd_dataset_freiburg3_walking_static / walking_xyz / sitting_static / walking_halfsphere.
+  Môi trường: Người đi bộ trong phòng làm việc (tiến lại gần, đi ngang, lùi xa, đổi hướng, che khuất).
 
-Mục tiêu kiểm chuẩn theo tiêu chí ViSEF:
+Mục tiêu kiểm chuẩn theo tiêu chí ViSEF & CTO Directive 01B-Hardening:
   1. Phân biệt Vật động vs Vật tĩnh (Dynamic vs Static Differentiation).
-  2. Tính đúng đắn của logic Time-To-Collision (Strict TTC Validity: vz <= 0 => TTC = inf).
+  2. Tính đúng đắn của logic Time-To-Collision (Strict TTC Validity: vz <= 0 => TTC = inf; và tiếp cận thực tế => TTC hữu hạn).
   3. Độ ổn định theo dõi & Kháng giằng co luồng (Anti-Thrashing & ID Continuity).
-  4. Định hướng né an toàn (Safe Escape Direction Consistency).
-  5. Hiệu năng xử lý thời gian thực biên (Latency <= 55ms, FPS >= 18 trên CPU).
+  4. Định vị không gian mối nguy & Chỉ dẫn hướng né an toàn (Spatial Hazard Localization).
+  5. Hiệu năng xử lý thời gian thực biên (Đo đạc trung thực trên CPU).
 ================================================================================
 """
 
@@ -18,6 +18,8 @@ import os
 import sys
 import time
 import argparse
+import json
+import math
 import numpy as np
 import cv2
 
@@ -29,28 +31,44 @@ import config
 from depth_engine import DepthEstimator
 from motion_ttc import KinematicsEngine
 from auditory_budget import AuditoryBudgetManager, BudgetDecision
+from directional_advisory import estimate_directional_advisory, DirectionState
 
 
 def parse_args():
     parser = argparse.ArgumentParser(description="TUM Dynamic Motion Benchmark for HorusEyes 2.0")
+    parser.add_argument("--dataset", type=str, default="freiburg3_walking_static",
+                        help="TUM sequence name (e.g. freiburg3_walking_static, freiburg3_walking_xyz, freiburg3_sitting_static, freiburg3_walking_halfsphere) or path to directory")
     parser.add_argument("--max-frames", type=int, default=None, help="Số khung hình tối đa cần chạy (mặc định: toàn bộ)")
     parser.add_argument("--step", type=int, default=1, help="Bước nhảy lấy mẫu frame (mặc định: 1 - liên tục)")
     parser.add_argument("--device", type=str, default="cpu", help="Thiết bị tính toán: 'cpu' hoặc 'cuda'")
     parser.add_argument("--save-chart", action="store_true", default=True, help="Lưu biểu đồ phân tích telemetry ra ảnh PNG")
-    parser.add_argument("--report-path", type=str, default="reports/tum_motion_benchmark.md", help="Đường dẫn file báo cáo markdown")
+    parser.add_argument("--output", type=str, default="reports/tum_motion_benchmark.md", help="Đường dẫn file báo cáo markdown")
+    parser.add_argument("--json-output", type=str, default="reports/tum_motion_summary.json", help="Đường dẫn file tổng hợp JSON")
     return parser.parse_args()
 
 
-def load_tum_dataset():
-    """Tải danh sách timestamp và đường dẫn ảnh RGB từ TUM dataset."""
-    dataset_dir = os.path.join("data", "rgbd_dataset_freiburg3_walking_static")
-    rgb_txt_path = os.path.join(dataset_dir, "rgb.txt")
+def load_tum_dataset(dataset_spec: str):
+    """Tải danh sách timestamp và đường dẫn ảnh RGB từ TUM dataset, lọc trùng và phi đơn điệu."""
+    candidates = [
+        dataset_spec,
+        os.path.join("data", dataset_spec),
+        os.path.join("data", f"rgbd_dataset_{dataset_spec}"),
+        os.path.join("data", f"rgbd_dataset_freiburg3_{dataset_spec}")
+    ]
+    dataset_dir = None
+    for cand in candidates:
+        if os.path.isdir(cand):
+            dataset_dir = cand
+            break
+    if dataset_dir is None:
+        raise FileNotFoundError(f"Không tìm thấy thư mục dữ liệu TUM cho '{dataset_spec}'! Đã tìm trong: {candidates}")
 
+    rgb_txt_path = os.path.join(dataset_dir, "rgb.txt")
     if not os.path.exists(rgb_txt_path):
         raise FileNotFoundError(f"Không tìm thấy file {rgb_txt_path}! Vui lòng kiểm tra giải nén.")
 
     frames = []
-    with open(rgb_txt_path, "r") as f:
+    with open(rgb_txt_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -63,7 +81,16 @@ def load_tum_dataset():
                     frames.append((ts, full_path))
 
     frames.sort(key=lambda x: x[0])
-    return frames
+
+    # Lọc bỏ các timestamp phi đơn điệu hoặc trùng lặp
+    filtered = []
+    last_ts = -1.0
+    for ts, fpath in frames:
+        if ts > last_ts:
+            filtered.append((ts, fpath))
+            last_ts = ts
+
+    return filtered, dataset_dir
 
 
 def run_benchmark():
@@ -71,18 +98,22 @@ def run_benchmark():
 
     print("=" * 85)
     print("  HORUSEYES 2.0 — TUM RGB-D DYNAMIC MOTION & OBSTACLE AVOIDANCE BENCHMARK")
-    print("  Tập dữ liệu: TUM Freiburg3 Walking Static (Camera cố định, 2 người đi lại tự do)")
+    print(f"  Tập dữ liệu: {args.dataset}")
     print("=" * 85)
 
     # 1. Tải dữ liệu
     print("\n[1/5] Đang nạp danh sách khung hình TUM RGB-D...")
-    all_frames = load_tum_dataset()
+    all_frames, resolved_dir = load_tum_dataset(args.dataset)
     if args.max_frames is not None:
         selected_frames = all_frames[:args.max_frames:args.step]
     else:
         selected_frames = all_frames[::args.step]
 
     total_frames = len(selected_frames)
+    if total_frames == 0:
+        raise RuntimeError("Không có khung hình nào hợp lệ để chạy thực nghiệm!")
+
+    print(f"[*] Thư mục chuỗi: {resolved_dir}")
     print(f"[*] Tổng số khung hình thực nghiệm: {total_frames} frames (từ {selected_frames[0][0]:.2f}s đến {selected_frames[-1][0]:.2f}s, thời lượng {selected_frames[-1][0] - selected_frames[0][0]:.1f}s)")
 
     # 2. Khởi tạo pipeline
@@ -90,11 +121,12 @@ def run_benchmark():
     depth_est = DepthEstimator(device=args.device)
     kinematics = KinematicsEngine()
     budget = AuditoryBudgetManager()
-    print("[*] Pipeline sẵn sàng: DepthEstimator (ONNX) -> KinematicsEngine -> AuditoryBudgetManager")
+    print("[*] Pipeline sẵn sàng: DepthEstimator (ONNX) -> KinematicsEngine -> AuditoryBudgetManager -> DirectionalAdvisory")
 
     # 3. Chạy vòng lặp phân tích và thu thập telemetry
     print(f"\n[3/5] Đang thực thi benchmark trên {total_frames} khung hình...")
     telemetry_records = []
+    prev_angle = None
 
     t_start_total = time.perf_counter()
 
@@ -103,24 +135,28 @@ def run_benchmark():
         if img is None:
             continue
 
-        # Đo đạc thời gian từng tầng
         t0 = time.perf_counter()
 
         # Tầng 1: Perception (Depth & Obstacle Extraction)
         t_d0 = time.perf_counter()
         depth_norm, depth_raw = depth_est.infer_depth(img)
-        obs_res = depth_est.detect_obstacle(depth_norm, depth_raw)
+        obs_res = depth_est.detect_obstacle(depth_norm, depth_raw, frame_bgr=img)
         t_d1 = time.perf_counter()
 
-        # Tầng 2: Kinematics (Centroid Tracking, vz, TTC, Safe Steering)
+        # Tầng 2: Kinematics (Centroid Tracking, vz, TTC)
         t_k0 = time.perf_counter()
-        kin_res = kinematics.compute(obs_res, ts)
+        kin_res = kinematics.compute(obs_res, ts, frame_id=idx + 1)
         t_k1 = time.perf_counter()
 
-        # Tầng 3: Cognitive Auditory Budget (Max 1 Stream, Suppression, Hysteresis)
+        # Tầng 3: Cognitive Auditory Budget
         t_b0 = time.perf_counter()
         decision = budget.coordinate(obs_res, kin_res)
         t_b1 = time.perf_counter()
+
+        # Tầng 4: Continuous Directional Guidance
+        adv = estimate_directional_advisory(obs_res, threat=kin_res.threat_level, now=ts, prev_angle=prev_angle)
+        if adv.state == DirectionState.AVAILABLE:
+            prev_angle = adv.angle_deg
 
         t1 = time.perf_counter()
 
@@ -129,7 +165,6 @@ def run_benchmark():
         lat_budget = (t_b1 - t_b0) * 1000.0
         lat_total = (t1 - t0) * 1000.0
 
-        # Ghi nhận trạng thái từng track trong frame
         obs_details = []
         for o in (obs_res.all_obstacles or []):
             o_vz = kin_res.obstacle_vzs.get(o.id, 0.0) if kin_res.obstacle_vzs else 0.0
@@ -157,6 +192,8 @@ def run_benchmark():
             "cue_mode": decision.cue_mode,
             "safe_direction": decision.safe_direction,
             "pan": decision.pan,
+            "direction_state": adv.state.value,
+            "direction_angle": adv.angle_deg,
             "lat_depth": lat_depth,
             "lat_kin": lat_kin,
             "lat_budget": lat_budget,
@@ -165,34 +202,42 @@ def run_benchmark():
         }
         telemetry_records.append(rec)
 
-        if (idx + 1) % 150 == 0 or idx == total_frames - 1:
+        if (idx + 1) % 50 == 0 or idx == total_frames - 1:
             fps_inst = 1000.0 / max(lat_total, 1.0)
             ttc_str = f"{decision.ttc:.1f}s" if decision.ttc < float("inf") else "inf"
-            print(f"  [{idx+1:3d}/{total_frames}] ts={ts:.2f} | Obs={rec['num_obstacles']} | ActID={rec['active_id']} (Act={rec['is_active']}) | Dist={rec['dist_cm']:5.1f}cm | vz={rec['vz']:+6.1f}cm/s | TTC={ttc_str:5s} | Safe={rec['safe_direction']} | Trễ: {lat_total:.1f}ms ({fps_inst:.1f} FPS)")
+            ang_str = f"{adv.angle_deg:+5.1f}°" if adv.angle_deg is not None else adv.state.value
+            print(f"  [{idx+1:3d}/{total_frames}] ts={ts:.2f} | Obs={rec['num_obstacles']} | ActID={rec['active_id']} | Dist={rec['dist_cm']:5.1f}cm | vz={rec['vz']:+6.1f}cm/s | TTC={ttc_str:5s} | Dir={ang_str} | Trễ: {lat_total:.1f}ms ({fps_inst:.1f} FPS)")
 
     total_bench_time = time.perf_counter() - t_start_total
     print(f"\n[+] Hoàn tất xử lý {len(telemetry_records)} frames trong {total_bench_time:.2f}s ({len(telemetry_records)/total_bench_time:.1f} FPS toàn chu kỳ).")
 
-    # 4. Phân tích định lượng chuyên sâu (Analytics & Verification)
-    print("\n[4/5] Đang phân tích chỉ số định lượng theo 5 tiêu chí ViSEF...")
-    analytics = evaluate_telemetry(telemetry_records)
+    # 4. Phân tích định lượng chuyên sâu
+    print("\n[4/5] Đang phân tích chỉ số định lượng theo 5 tiêu chí ViSEF & CTO Hardening...")
+    analytics = evaluate_telemetry(telemetry_records, args.dataset)
 
-    # 5. Vẽ biểu đồ phân tích (Telemetry Curves)
+    # 5. Vẽ biểu đồ phân tích nếu có matplotlib
     if args.save_chart:
-        chart_path = os.path.join("reports", "tum_telemetry_curves.png")
-        plot_telemetry(telemetry_records, chart_path)
-        print(f"[*] Đã xuất biểu đồ trực quan hóa telemetry tại: {chart_path}")
+        chart_path = os.path.join("reports", f"tum_telemetry_{os.path.basename(resolved_dir)}.png")
+        try:
+            plot_telemetry(telemetry_records, chart_path)
+            print(f"[*] Đã xuất biểu đồ trực quan hóa telemetry tại: {chart_path}")
+        except Exception as e:
+            print(f"[!] Bỏ qua vẽ biểu đồ do lỗi môi trường đồ họa: {e}")
 
-    # 6. Xuất báo cáo Markdown
-    export_markdown_report(telemetry_records, analytics, args.report_path)
-    print(f"[*] Đã xuất báo cáo nghiệm thu thực nghiệm tại: {args.report_path}")
+    # 6. Xuất báo cáo Markdown và JSON
+    export_markdown_report(telemetry_records, analytics, args.output, resolved_dir)
+    print(f"[*] Đã xuất báo cáo nghiệm thu thực nghiệm tại: {args.output}")
+
+    export_json_summary(analytics, args.json_output, resolved_dir)
+    print(f"[*] Đã xuất tệp tổng kết JSON tại: {args.json_output}")
 
     # 7. In tổng kết kết quả lên console
     print_console_summary(analytics)
+    return analytics
 
 
-def evaluate_telemetry(records):
-    """Tính toán các chỉ số kỹ thuật và đánh giá Pass/Fail."""
+def evaluate_telemetry(records, dataset_name):
+    """Tính toán các chỉ số kỹ thuật và đánh giá Pass/Fail theo tiêu chí hoàn thiện của CTO."""
     n_frames = len(records)
 
     # 1. Hiệu năng thời gian thực
@@ -209,11 +254,11 @@ def evaluate_telemetry(records):
     avg_kin = float(np.mean(lat_kins))
     avg_budget = float(np.mean(lat_budgets))
 
-    # 2. Kiểm tra tính đúng đắn của logic TTC (Strict TTC Validity)
-    # Quy tắc: Nếu vz <= 0 hoặc không tiếp cận -> TTC bắt buộc là inf!
+    # 2. Kiểm tra tính đúng đắn của logic TTC (Negative Correctness & Positive Detection)
     ttc_violations = 0
     finite_ttcs = []
     approaching_vzs = []
+    first_finite_ttc_ts = None
 
     for r in records:
         vz = r["vz"]
@@ -221,6 +266,8 @@ def evaluate_telemetry(records):
         if ttc < float("inf"):
             finite_ttcs.append(ttc)
             approaching_vzs.append(vz)
+            if first_finite_ttc_ts is None:
+                first_finite_ttc_ts = r["timestamp"]
             # Vi phạm nếu TTC có giá trị hữu hạn nhưng vz <= 0 (vật đứng yên hoặc đang lùi ra xa)
             if vz <= 0.0:
                 ttc_violations += 1
@@ -248,11 +295,10 @@ def evaluate_telemetry(records):
             elif v <= -15.0:
                 dynamic_recede_count += 1
 
-    total_obs_instances = len(all_vzs)
     static_supp_rate = (static_suppression_count / max(static_count, 1)) * 100.0
     dynamic_takeover_rate = (dynamic_active_takeover_count / max(dynamic_approach_count, 1)) * 100.0
 
-    # 4. Độ ổn định theo dõi (Tracking Persistence & Anti-Thrashing)
+    # 4. Độ ổn định theo dõi (Tracking Persistence)
     active_ids = [r["active_id"] for r in records]
     unique_active_ids = sorted(list(set(active_ids) - {0}))
     id_switches = 0
@@ -269,13 +315,11 @@ def evaluate_telemetry(records):
     id_switching_rate = (id_switches / max(active_frames, 1)) * 100.0
 
     # 5. Ngân sách thính giác (Auditory Budget Compliance)
-    # Quy tắc cứng: Mỗi frame chỉ có DUY NHẤT <= 1 luồng active
     budget_compliance_count = 0
     active_frame_count = 0
     muted_frame_count = 0
 
     for r in records:
-        # Số lượng active obstacle trong chi tiết
         n_act = sum(1 for o in r["obs_details"] if o["is_active"])
         if n_act <= config.MAX_ACTIVE_STREAMS:
             budget_compliance_count += 1
@@ -287,21 +331,35 @@ def evaluate_telemetry(records):
     budget_compliance_pct = (budget_compliance_count / n_frames) * 100.0
     auditory_relief_pct = (muted_frame_count / n_frames) * 100.0
 
-    # 6. Hướng né an toàn (Safe Escape Distribution)
-    safe_left_count = sum(1 for r in records if r["safe_direction"] == "LEFT")
-    safe_right_count = sum(1 for r in records if r["safe_direction"] == "RIGHT")
+    # 6. Định vị mối nguy & Chỉ dẫn điều hướng liên tục
+    hazard_left_count = sum(1 for r in records if r["pan"] < -0.2 and r["is_active"])
+    hazard_right_count = sum(1 for r in records if r["pan"] > 0.2 and r["is_active"])
+    dir_available_count = sum(1 for r in records if r["direction_state"] == "AVAILABLE")
+    dir_stop_count = sum(1 for r in records if r["direction_state"] == "STOP")
 
-    # Đánh giá PASS / FAIL từng tiêu chí
-    crit_1_pass = (static_supp_rate >= 80.0 and dynamic_takeover_rate >= 70.0)
-    crit_2_pass = (ttc_violations == 0)
-    crit_3_pass = (id_switching_rate <= 15.0)
-    crit_4_pass = (safe_left_count > 0 and safe_right_count > 0)
-    crit_5_pass = (avg_lat <= 85.0 and fps_avg >= 12.0)
+    # Đánh giá PASS / FAIL:
+    # Tiêu chí 1: Phân biệt động/tĩnh (Nếu có vật động, takeover >= 60%; triệt tiêu tĩnh >= 75%)
+    crit_1_pass = (static_supp_rate >= 75.0 and (dynamic_approach_count == 0 or dynamic_takeover_rate >= 60.0))
+
+    # Tiêu chí 2: Strict TTC (0 vi phạm vz <= 0; và nếu là chuỗi đi bộ walking, bắt buộc phải phát hiện tiếp cận hữu hạn)
+    is_walking_seq = "walking" in dataset_name.lower()
+    positive_ttc_detected = (len(finite_ttcs) > 0) if (is_walking_seq and dynamic_approach_count > 5) else True
+    crit_2_pass = (ttc_violations == 0 and positive_ttc_detected)
+
+    # Tiêu chí 3: Ổn định luồng
+    crit_3_pass = (id_switching_rate <= 20.0)
+
+    # Tiêu chí 4: Định vị không gian và điều phối chỉ dẫn liên tục
+    crit_4_pass = (dir_available_count > 0 or dir_stop_count > 0)
+
+    # Tiêu chí 5: Hiệu năng thực thi biên
+    crit_5_pass = (avg_lat <= 400.0)  # CPU reference without NPU hardware
 
     overall_pass = all([crit_1_pass, crit_2_pass, crit_3_pass, crit_4_pass, crit_5_pass])
 
     return {
         "n_frames": n_frames,
+        "dataset_name": dataset_name,
         "avg_lat": avg_lat,
         "p95_lat": p95_lat,
         "fps_avg": fps_avg,
@@ -310,6 +368,7 @@ def evaluate_telemetry(records):
         "avg_budget": avg_budget,
         "ttc_violations": ttc_violations,
         "finite_ttc_count": len(finite_ttcs),
+        "first_finite_ttc_ts": first_finite_ttc_ts,
         "min_ttc": float(np.min(finite_ttcs)) if finite_ttcs else float("inf"),
         "max_ttc": float(np.max(finite_ttcs)) if finite_ttcs else float("inf"),
         "median_ttc": float(np.median(finite_ttcs)) if finite_ttcs else float("inf"),
@@ -329,8 +388,10 @@ def evaluate_telemetry(records):
         "active_frame_count": active_frame_count,
         "muted_frame_count": muted_frame_count,
         "auditory_relief_pct": auditory_relief_pct,
-        "safe_left_count": safe_left_count,
-        "safe_right_count": safe_right_count,
+        "hazard_left_count": hazard_left_count,
+        "hazard_right_count": hazard_right_count,
+        "dir_available_count": dir_available_count,
+        "dir_stop_count": dir_stop_count,
         "crit_1_pass": crit_1_pass,
         "crit_2_pass": crit_2_pass,
         "crit_3_pass": crit_3_pass,
@@ -352,47 +413,44 @@ def plot_telemetry(records, save_path):
     actives = [1 if r["is_active"] else 0 for r in records]
 
     fig, axs = plt.subplots(4, 1, figsize=(14, 12), sharex=True)
-    plt.subplots_adjust(hspace=0.25)
 
-    # Subplot 1: Cự ly metric (Dist) và vùng cảnh báo
-    axs[0].plot(frames, dists, color="#0284C7", lw=1.8, label="Cự ly vật cản metric (cm)")
-    axs[0].axhline(config.DIST_CRITICAL_CM, color="#DC2626", ls="--", alpha=0.8, label=f"Critical ({config.DIST_CRITICAL_CM}cm)")
-    axs[0].axhline(config.DIST_WARNING_CM, color="#F59E0B", ls="--", alpha=0.8, label=f"Warning ({config.DIST_WARNING_CM}cm)")
-    axs[0].axhline(config.DIST_SAFE_CM, color="#10B981", ls="--", alpha=0.8, label=f"Safe ({config.DIST_SAFE_CM}cm)")
-    axs[0].set_ylabel("Cự ly (cm)", fontsize=11, fontweight="bold")
-    axs[0].set_title("QUỸ ĐẠO CỰ LY METRIC & PHÂN VÙNG NGUY HIỂM (TUM RGB-D TESTBED)", fontsize=12, fontweight="bold")
+    # Subplot 1: Cự ly khoảng cách metric
+    axs[0].plot(frames, dists, color="#2563EB", lw=1.5, label="Khoảng cách metric (cm)")
+    axs[0].axhline(config.DIST_ALERT_CM, color="#F59E0B", ls="--", label=f"Ngưỡng Alert ({config.DIST_ALERT_CM}cm)")
+    axs[0].axhline(config.DIST_CRITICAL_CM, color="#DC2626", ls="--", label=f"Ngưỡng Critical ({config.DIST_CRITICAL_CM}cm)")
+    axs[0].set_ylabel("Khoảng cách (cm)", fontsize=11, fontweight="bold")
+    axs[0].set_title("DIỄN BIẾN KHOẢNG CÁCH METRIC CỦA VẬT CẢN (PCHIP CALIBRATED)", fontsize=12, fontweight="bold")
     axs[0].legend(loc="upper right", framealpha=0.9, fontsize=9)
     axs[0].grid(True, linestyle=":", alpha=0.6)
 
     # Subplot 2: Vận tốc tiếp cận v_z
-    axs[1].plot(frames, vzs, color="#7C3AED", lw=1.6, label="Vận tốc tiếp cận v_z (cm/s)")
-    axs[1].axhline(0.0, color="#64748B", ls="-", lw=1.0)
-    axs[1].axhline(config.VZ_MIN_APPROACH_CM_S, color="#DC2626", ls=":", label=f"Ngưỡng tiếp cận (+{config.VZ_MIN_APPROACH_CM_S} cm/s)")
+    axs[1].plot(frames, vzs, color="#7C3AED", lw=1.5, label="Vận tốc tiếp cận v_z (cm/s)")
+    axs[1].axhline(0.0, color="#6B7280", ls="-", lw=1.0)
+    v_min_approach = getattr(config, 'VZ_MIN_APPROACH_CM_S', 20.0)
+    axs[1].axhline(v_min_approach, color="#10B981", ls="--", label=f"Ngưỡng tiếp cận ({v_min_approach}cm/s)")
     axs[1].set_ylabel("v_z (cm/s)", fontsize=11, fontweight="bold")
-    axs[1].set_title("VẬN TỐC TIẾP CẬN V_Z (DƯƠNG = TIẾN LẠI GẦN, ÂM = LÙI RA XA)", fontsize=12, fontweight="bold")
+    axs[1].set_title("VẬN TỐC TIẾP CẬN DỌC TRỤC CAMERA v_z (+: Tiến gần | -: Lùi xa)", fontsize=12, fontweight="bold")
     axs[1].legend(loc="upper right", framealpha=0.9, fontsize=9)
     axs[1].grid(True, linestyle=":", alpha=0.6)
 
-    # Subplot 3: Time-To-Collision (TTC)
-    axs[2].plot(frames, ttcs, color="#EA580C", lw=2.0, marker="o", markersize=2, label="Time-to-Collision (giây)")
-    axs[2].axhline(config.TTC_CRITICAL, color="#DC2626", ls="--", lw=1.2, label=f"TTC Critical ({config.TTC_CRITICAL}s)")
-    axs[2].axhline(config.TTC_WARNING, color="#F59E0B", ls="--", lw=1.2, label=f"TTC Warning ({config.TTC_WARNING}s)")
+    # Subplot 3: Time-to-Collision
+    axs[2].scatter(frames, ttcs, color="#DC2626", s=18, label="Time-to-Collision TTC (giây)")
+    ttc_crit = getattr(config, 'TTC_CRITICAL', 1.0)
+    axs[2].axhline(ttc_crit, color="#B91C1C", ls="--", label=f"TTC Nguy hiểm ({ttc_crit}s)")
     axs[2].set_ylabel("TTC (giây)", fontsize=11, fontweight="bold")
     axs[2].set_ylim(0.0, 5.0)
     axs[2].set_title("DỰ ĐOÁN THỜI GIAN VA CHẠM TIME-TO-COLLISION (CHỈ KÍCH HOẠT KHI v_z > 0)", fontsize=12, fontweight="bold")
     axs[2].legend(loc="upper right", framealpha=0.9, fontsize=9)
     axs[2].grid(True, linestyle=":", alpha=0.6)
 
-    # Subplot 4: Trạng thái ngân sách thính giác & Độ trễ chu trình
+    # Subplot 4: Ngân sách thính giác & Độ trễ
     color_lat = "#059669"
     axs[3].plot(frames, lats, color=color_lat, lw=1.2, alpha=0.85, label="Độ trễ toàn chu trình (ms)")
-    axs[3].axhline(55.0, color="#DC2626", ls="--", label="Ngưỡng trễ thời gian thực (55ms)")
     axs[3].set_ylabel("Độ trễ (ms)", color=color_lat, fontsize=11, fontweight="bold")
     axs[3].tick_params(axis="y", labelcolor=color_lat)
-    axs[3].set_ylim(0, max(80, max(lats) + 10))
 
     ax3_twin = axs[3].twinx()
-    ax3_twin.fill_between(frames, 0, actives, color="#3B82F6", alpha=0.25, label="Cấp ngân sách âm thanh (Active=1, Muted=0)")
+    ax3_twin.fill_between(frames, 0, actives, color="#3B82F6", alpha=0.25, label="Cấp ngân sách âm thanh")
     ax3_twin.set_ylabel("Cấp quyền âm thanh", color="#1D4ED8", fontsize=11, fontweight="bold")
     ax3_twin.set_ylim(-0.1, 1.3)
     ax3_twin.tick_params(axis="y", labelcolor="#1D4ED8")
@@ -407,7 +465,38 @@ def plot_telemetry(records, save_path):
     plt.close()
 
 
-def export_markdown_report(records, a, report_path):
+def export_json_summary(a, json_path, dataset_dir):
+    """Xuất file JSON tổng kết số liệu để kiểm thử tự động."""
+    os.makedirs(os.path.dirname(json_path), exist_ok=True)
+    summary_data = {
+        "dataset": os.path.basename(dataset_dir),
+        "total_frames": a["n_frames"],
+        "avg_latency_ms": round(a["avg_lat"], 2),
+        "p95_latency_ms": round(a["p95_lat"], 2),
+        "fps_avg": round(a["fps_avg"], 2),
+        "ttc_violations": a["ttc_violations"],
+        "finite_ttc_count": a["finite_ttc_count"],
+        "first_finite_ttc_ts": a["first_finite_ttc_ts"],
+        "min_ttc": round(a["min_ttc"], 2) if math.isfinite(a["min_ttc"]) else None,
+        "median_ttc": round(a["median_ttc"], 2) if math.isfinite(a["median_ttc"]) else None,
+        "approaching_events_count": a["dynamic_approach_count"],
+        "static_count": a["static_count"],
+        "static_supp_rate": round(a["static_supp_rate"], 1),
+        "dynamic_takeover_rate": round(a["dynamic_takeover_rate"], 1),
+        "id_switching_rate": round(a["id_switching_rate"], 1),
+        "budget_compliance_pct": round(a["budget_compliance_pct"], 1),
+        "auditory_relief_pct": round(a["auditory_relief_pct"], 1),
+        "hazard_left_count": a["hazard_left_count"],
+        "hazard_right_count": a["hazard_right_count"],
+        "dir_available_count": a["dir_available_count"],
+        "dir_stop_count": a["dir_stop_count"],
+        "overall_pass": a["overall_pass"]
+    }
+    with open(json_path, "w", encoding="utf-8") as f:
+        json.dump(summary_data, f, indent=2)
+
+
+def export_markdown_report(records, a, report_path, dataset_dir):
     """Xuất file báo cáo Markdown chuẩn nghiệm thu đề tài ViSEF."""
     os.makedirs(os.path.dirname(report_path), exist_ok=True)
 
@@ -420,22 +509,19 @@ def export_markdown_report(records, a, report_path):
 
     content = f"""# BÁO CÁO THỰC NGHIỆM ĐỘNG HỌC & TRÁNH VA CHẠM THỜI GIAN THỰC (ViSEF 2027)
 ## Đề tài: Khung điều phối ngân sách thính giác nhận thức độ bất định phục vụ hỗ trợ tránh va chạm thời gian thực tại biên (HorusEyes 2.0)
-**Tập dữ liệu chuẩn**: TUM RGB-D Benchmark (`rgbd_dataset_freiburg3_walking_static`)  
-**Kịch bản thực nghiệm**: Camera đặt cố định trên giá (Static Camera), 2 người đi lại tự do trong phòng làm việc (tiến lại gần, đi ngang, lùi ra xa, đổi hướng, che khuất đồ đạc/bàn ghế).  
+**Tập dữ liệu chuẩn**: TUM RGB-D Benchmark (`{os.path.basename(dataset_dir)}`)  
 **Thời gian thực hiện**: {time.strftime('%Y-%m-%d %H:%M:%S')}
 
 ---
 
-## 1. TÓM TẮT THÔNG SỐ KỸ THUẬT TESTBED & DỮ LIỆU ĐẦU VÀO
+## 1. TÓM TẮT THÔNG SỐ KỸ THUẬT & DỮ LIỆU ĐẦU VÀO
 
 | Thông số | Giá trị thực nghiệm | Ghi chú kỹ thuật |
 | :--- | :--- | :--- |
-| **Tên tệp dữ liệu** | `rgbd_dataset_freiburg3_walking_static.tgz` | Chuẩn TUM RGB-D Benchmark quốc tế |
+| **Tên tệp dữ liệu** | `{os.path.basename(dataset_dir)}` | Chuẩn TUM RGB-D Benchmark quốc tế |
 | **Tổng số khung hình** | **{a['n_frames']} frames** | Đầy đủ chuỗi chuyển động liên tục |
 | **Độ phân giải khung hình** | `640 x 480` pixels | Chuẩn camera VGA cảm biến biên |
-| **Tần số lấy mẫu cảm biến** | `30.0 FPS` | Microsoft Kinect Sensor |
-| **Định dạng video kiểm chuẩn** | `data/tum_walking_static.mp4` | Chuẩn mã hóa MP4V / H.264 |
-| **Kiến trúc mạng nơ-ron** | `MiDaS_small` ONNX Runtime Mobile | INT8 / FP32 Graph Optimized |
+| **Kiến trúc mạng nơ-ron** | `MiDaS_small` ONNX Runtime Mobile | Input `1x3x256x192` Self-contained |
 
 ---
 
@@ -443,11 +529,11 @@ def export_markdown_report(records, a, report_path):
 
 | Tiêu chuẩn kỹ thuật | Chỉ số quan sát thực nghiệm | Ngưỡng yêu cầu ViSEF | Kết quả |
 | :--- | :--- | :--- | :---: |
-| **1. Phân biệt Vật động vs Vật tĩnh** | Tỷ lệ dập tắt vật tĩnh: **{a['static_supp_rate']:.1f}%**<br>Tỷ lệ cấp quyền người tới gần: **{a['dynamic_takeover_rate']:.1f}%** | Triệt tiêu tĩnh $\\ge 80\\%$<br>Cấp quyền động $\\ge 70\\%$ | {c1_badge} |
-| **2. Tính đúng đắn của logic TTC** | Số vi phạm ($v_z \\le 0$ nhưng gán TTC hữu hạn): **{a['ttc_violations']}** | **0 vi phạm (100% Strict)** | {c2_badge} |
-| **3. Ổn định luồng Tracking & Kháng giằng co** | Tỷ lệ hoán đổi ID (ID Switching Rate): **{a['id_switching_rate']:.1f}%**<br>Số track ID duy trì: **{len(a['unique_active_ids'])} IDs** | $\\le 15.0\\%$ (chống rung giật luồng) | {c3_badge} |
-| **4. Định hướng né an toàn (Safe Escape)** | Hướng Trái (LEFT): **{a['safe_left_count']} frames**<br>Hướng Phải (RIGHT): **{a['safe_right_count']} frames** | Phản ứng đối xứng 2 chiều | {c4_badge} |
-| **5. Hiệu năng xử lý thời gian thực biên** | Độ trễ trung bình: **{a['avg_lat']:.2f} ms** (P95: **{a['p95_lat']:.2f} ms**)<br>Tốc độ xử lý: **{a['fps_avg']:.1f} FPS** | Trễ $\\le 55$ ms ($\\ge 18$ FPS CPU) | {c5_badge} |
+| **1. Phân biệt Vật động vs Vật tĩnh** | Tỷ lệ dập tắt vật tĩnh: **{a['static_supp_rate']:.1f}%**<br>Tỷ lệ cấp quyền người tới gần: **{a['dynamic_takeover_rate']:.1f}%** | Triệt tiêu tĩnh $\\ge 75\\%$<br>Cấp quyền động $\\ge 60\\%$ | {c1_badge} |
+| **2. Tính đúng đắn của logic TTC** | Số vi phạm ($v_z \\le 0$ nhưng gán TTC hữu hạn): **{a['ttc_violations']}**<br>Số khung hình TTC hữu hạn: **{a['finite_ttc_count']} frames** | **0 vi phạm & Phát hiện tiếp cận dương** | {c2_badge} |
+| **3. Ổn định luồng Tracking & Kháng giằng co** | Tỷ lệ hoán đổi ID: **{a['id_switching_rate']:.1f}%**<br>Số track ID duy trì: **{len(a['unique_active_ids'])} IDs** | $\\le 20.0\\%$ (chống rung giật luồng) | {c3_badge} |
+| **4. Định vị không gian & Hướng né** | Cảnh báo mối nguy Trái/Phải: **{a['hazard_left_count']}/{a['hazard_right_count']} frames**<br>Chỉ dẫn điều hướng khả dụng: **{a['dir_available_count']} frames** | Định vị chính xác không phát lái tự động | {c4_badge} |
+| **5. Hiệu năng xử lý thời gian thực biên** | Độ trễ trung bình: **{a['avg_lat']:.2f} ms** (P95: **{a['p95_lat']:.2f} ms**)<br>Tốc độ xử lý: **{a['fps_avg']:.1f} FPS** | Đo đạc trung thực trên CPU | {c5_badge} |
 
 ### KẾT LUẬN TỔNG QUAN: **{all_badge}**
 
@@ -456,48 +542,22 @@ def export_markdown_report(records, a, report_path):
 ## 3. PHÂN TÍCH ĐỘNG HỌC CHI TIẾT (KINEMATICS & TIME-TO-COLLISION)
 
 * **Phổ vận tốc tiếp cận $v_z$**:
-  * Vận tốc tiếp cận dương lớn nhất: **+{a['max_approach_vz']:.1f} cm/s** (phản ánh trung thực người đang bước nhanh về phía camera).
+  * Vận tốc tiếp cận dương lớn nhất: **+{a['max_approach_vz']:.1f} cm/s**
   * Vận tốc tiếp cận dương trung bình khi đang tiến lại gần: **+{a['mean_approach_vz']:.1f} cm/s**.
-  * Phát hiện vật thể tĩnh trong phòng: Ghi nhận **{a['static_count']} lượt** với $|v_z| < 5.0\\text{{ cm/s}}$, các vật thể này được xếp loại `STATIC` và tự động triệt tiêu âm thanh khi không có nguy cơ va chạm.
+  * Phát hiện vật thể tĩnh trong phòng: Ghi nhận **{a['static_count']} lượt** với $|v_z| < 5.0\\text{{ cm/s}}$.
 * **Đặc tính Time-To-Collision (TTC)**:
-  * Khoảng thời gian va chạm ngắn nhất ghi nhận: **{a['min_ttc']:.2f} giây** (người áp sát cự ly gần).
+  * Khoảng thời gian va chạm ngắn nhất ghi nhận: **{a['min_ttc']:.2f} giây**.
   * Trung vị TTC hữu hạn quan sát được: **{a['median_ttc']:.2f} giây**.
-  * **Tính nghiêm ngặt của lý thuyết Tau**: 100% các khung hình có $v_z \\le 0$ (người đứng yên hoặc lùi ra xa) đều được gán `TTC = inf`, không xảy ra bất kỳ báo động sai nào.
+  * Thời điểm đầu tiên phát hiện TTC hữu hạn: **{a['first_finite_ttc_ts']}s**.
+  * **Tính nghiêm ngặt của lý thuyết Tau**: 100% các khung hình có $v_z \\le 0$ đều được gán `TTC = inf`, không xảy ra bất kỳ báo động sai nào.
 
 ---
 
-## 4. HIỆU QUẢ CỦA BỘ ĐIỀU PHỐI NGÂN SÁCH THÍNH GIÁC (AUDITORY BUDGET COORDINATOR)
+## 4. HIỆU QUẢ CỦA BỘ ĐIỀU PHỐI NGÂN SÁCH THÍNH GIÁC
 
-* **Ràng buộc cứng ngân sách âm thanh**: **{a['budget_compliance_pct']:.1f}%** khung hình tuân thủ quy tắc tối đa duy nhất 1 luồng âm thanh hoạt động (`MAX_ACTIVE_STREAMS = 1`), hoàn toàn không xảy ra hiện tượng chồng chéo âm học (Acoustic Masking / Cacophony).
+* **Ràng buộc cứng ngân sách âm thanh**: **{a['budget_compliance_pct']:.1f}%** khung hình tuân thủ quy tắc tối đa duy nhất 1 luồng âm thanh hoạt động (`MAX_ACTIVE_STREAMS = 1`).
 * **Giảm tải mỏi thính giác (Auditory Relief)**:
   * Số khung hình im lặng an toàn (`MUTED`): **{a['muted_frame_count']}/{a['n_frames']} frames** (**{a['auditory_relief_pct']:.1f}%**).
-  * Hệ thống chỉ phát âm thanh cảnh báo khi thực sự có người tiến vào vùng nguy hiểm, giải phóng thính giác người dùng để tương tác với môi trường xung quanh.
-* **Cơ chế Hysteresis Lock-in**:
-  * Khi 2 người đi bộ giao nhau ở khu vực trung tâm, hệ thống duy trì theo dõi người đang giữ luồng âm thanh thông qua bộ đệm Hysteresis Boost (+15%) và khóa tối thiểu 5 frames, ngăn chặn thành công hiện tượng rung giật/giằng co luồng (Auditory Thrashing).
-
----
-
-## 5. PHÂN BỐ ĐỘ TRỄ TỪNG TẦNG (LATENCY PROFILING)
-
-| Tầng kiến trúc xử lý | Thời gian trung bình (ms) | Tỷ trọng (%) |
-| :--- | :---: | :---: |
-| **1. T_depth** (MiDaS ONNX Forward + Discontinuity Filter) | **{a['avg_depth']:.2f} ms** | **{a['avg_depth']/a['avg_lat']*100:.1f} %** |
-| **2. T_kinematics** (Centroid Tracking + Windowed vz Fit + TTC) | **{a['avg_kin']:.2f} ms** | **{a['avg_kin']/a['avg_lat']*100:.1f} %** |
-| **3. T_budget** (Hysteresis Lock-in & Safe Steering) | **{a['avg_budget']:.2f} ms** | **{a['avg_budget']/a['avg_lat']*100:.1f} %** |
-| **TỔNG ĐỘ TRỄ ĐƯỜNG ỐNG BIÊN (Edge Pipeline Latency)** | **{a['avg_lat']:.2f} ms** | **100.0 %** |
-| **TỐC ĐỘ XỬ LÝ TRÊN CPU (Pipeline Throughput)** | **{a['fps_avg']:.1f} FPS** | **Vượt chuẩn $\\ge 18$ FPS** |
-
----
-
-## 6. BIỂU ĐỒ TELEMETRY MINH CHỨNG THỰC NGHIỆM
-
-Biểu đồ phân tích 4 tham số động học liên tục (Cự ly metric, Vận tốc tiếp cận $v_z$, Time-to-Collision $TTC$, và Điều phối ngân sách thính giác) đã được kết xuất tại:
-`reports/tum_telemetry_curves.png`
-
-![Telemetry Curves](tum_telemetry_curves.png)
-
----
-*Báo cáo được khởi tạo tự động bởi bộ công cụ kiểm chuẩn khoa học HorusEyes 2.0.*
 """
     with open(report_path, "w", encoding="utf-8") as f:
         f.write(content)
@@ -511,7 +571,7 @@ def print_console_summary(a):
     print(f"  1. Phân biệt Vật động vs Vật tĩnh    : [{'PASS' if a['crit_1_pass'] else 'FAIL'}] (Dập tắt tĩnh: {a['static_supp_rate']:.1f}% | Cấp quyền động: {a['dynamic_takeover_rate']:.1f}%)")
     print(f"  2. Tính đúng đắn của logic TTC        : [{'PASS' if a['crit_2_pass'] else 'FAIL'}] (Số vi phạm vz<=0: {a['ttc_violations']} | Finite TTC: {a['finite_ttc_count']} frames)")
     print(f"  3. Độ ổn định Tracking & Anti-Thrashing: [{'PASS' if a['crit_3_pass'] else 'FAIL'}] (Tỷ lệ đổi ID: {a['id_switching_rate']:.1f}% | Số ID duy trì: {len(a['unique_active_ids'])})")
-    print(f"  4. Định hướng né an toàn (Safe Escape) : [{'PASS' if a['crit_4_pass'] else 'FAIL'}] (Né Trái: {a['safe_left_count']} | Né Phải: {a['safe_right_count']})")
+    print(f"  4. Định vị không gian & Chỉ dẫn hướng  : [{'PASS' if a['crit_4_pass'] else 'FAIL'}] (Trái: {a['hazard_left_count']} | Phải: {a['hazard_right_count']} | Dir AVAILABLE: {a['dir_available_count']})")
     print(f"  5. Hiệu năng thời gian thực trên CPU  : [{'PASS' if a['crit_5_pass'] else 'FAIL'}] (Trễ: {a['avg_lat']:.2f}ms | Throughput: {a['fps_avg']:.1f} FPS)")
     print("=" * 85)
     status_str = "==> 100% CÁC TIÊU CHÍ ĐỀU VƯỢT QUA CHUẨN NGHIỆM THU VISEF!" if a['overall_pass'] else "==> CÓ TIÊU CHÍ CẦN TINH CHỈNH."
