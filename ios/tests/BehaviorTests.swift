@@ -29,6 +29,7 @@ import Foundation
         testGoldenDirectionalScenarios()
         testSourceTimestampLifecycleAndFreshness()
         testTensorSpatialIntegration()
+        testRawTensorToSpatialBins()
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
@@ -234,7 +235,7 @@ import Foundation
         precondition(adv8.state == "UNAVAILABLE", "Case 8 failed: NaN timestamp must be UNAVAILABLE")
 
         // Case 9: drawableAngle within 750ms -> returns angle
-        let advFresh = DirectionalAdvisory(state: "AVAILABLE", angleDeg: 12.0, confidence: 0.55, observedAngularRange: (-32.5, 32.5), sourceTimestamp: 10.0)
+        let advFresh = DirectionalAdvisory(state: "AVAILABLE", angleDeg: 12.0, confidence: 0.55, observedAngularRange: -32.5...32.5, sourceTimestamp: 10.0)
         precondition(advFresh.drawableAngle(now: 10.20) == 12.0, "Case 9 failed: drawableAngle must return angle within freshness window")
         precondition(advFresh.drawableAngle(now: 10.75) == 12.0, "Case 9 failed: drawableAngle must return angle at 0.75s boundary")
 
@@ -243,6 +244,106 @@ import Foundation
         precondition(advFresh.drawableAngle(now: 15.0) == nil, "Case 10 failed: drawableAngle must return nil for stale timestamp")
 
         print("PASS Swift Source Timestamp Lifecycle & Freshness (10/10)")
+    }
+
+
+    // Exercise the real native disparity -> bin extractor, not hand-built SpatialBin objects.
+    // These are deterministic synthetic tensors, NOT physical camera validation.
+    static func testRawTensorToSpatialBins() {
+        let engine = DepthEngine() // CoreML model is optional for this pure extraction test.
+        let gridW = 48
+        let gridH = 64
+        let base: Float = 250.0
+        func blank(_ value: Float = 250.0) -> [Float] {
+            return [Float](repeating: value, count: gridW * gridH)
+        }
+        func getBins(_ raw: [Float], obstacles: [SingleObstacle] = []) -> [SpatialBin] {
+            return engine.computeSpatialBins(
+                rawDisparity: raw, w: 192, h: 256,
+                detectedObstacles: obstacles, numBins: 24, hfovDeg: 65.0
+            )
+        }
+        func makeObs(_ bins: [SpatialBin], center: Float = 200.0, valid: Bool = true,
+                     objects: [SingleObstacle] = [], overhead: Bool = false) -> ObstacleDetectionResult {
+            return ObstacleDetectionResult(
+                x: 96, y: 128, bbox: (48, 64, 96, 128),
+                pan: 0.0, proximity: 0.0, distCM: center,
+                modeText: "TENSOR_TEST", uncertaintyScore: 0.1, isWall: false,
+                sectorDists: ["LEFT": 200.0, "CENTER": center, "RIGHT": 200.0],
+                allObstacles: objects, isZeroLuxBlind: false,
+                isOverheadHazard: overhead, isDropOffHazard: false,
+                camWidth: 192, camHeight: 256, isValid: valid,
+                spatialBins: bins, timestamp: 10.0
+            )
+        }
+
+        // Case 1: uniform valid raw disparity supports a forward advisory.
+        let clear = getBins(blank(base))
+        precondition(clear.count == 24 && clear.allSatisfy { $0.isValid && $0.validRatio > 0.99 },
+                     "Raw tensor case 1: 24 valid spatial bins expected")
+        let clearAdv = estimateDirectionalAdvisory(
+            observation: makeObs(clear), threat: "SAFE", now: 10.0
+        )
+        precondition(clearAdv.state == "AVAILABLE" && abs(clearAdv.angleDeg ?? 999) <= 2.0,
+                     "Raw tensor case 1: forward should remain available")
+
+        // Case 2: near lateral bands must not block a valid center corridor.
+        var sidewalls = blank(base)
+        for y in 0..<gridH {
+            for x in 0..<8 { sidewalls[y * gridW + x] = 750 }
+            for x in 40..<gridW { sidewalls[y * gridW + x] = 750 }
+        }
+        let sideBins = getBins(sidewalls)
+        precondition(sideBins[0].isValid && sideBins[12].isValid &&
+                     sideBins[0].distCM < sideBins[12].distCM &&
+                     sideBins[23].distCM < sideBins[12].distCM,
+                     "Raw tensor case 2: sidewalls must have nearer depth than center")
+        let sideAdv = estimateDirectionalAdvisory(
+            observation: makeObs(sideBins), threat: "SAFE", now: 10.0
+        )
+        precondition(sideAdv.state == "AVAILABLE" && abs(sideAdv.angleDeg ?? 999) <= 3.0,
+                     "Raw tensor case 2: supported forward corridor should not be blocked")
+
+        // Case 3: invalid raw center columns must remain invalid and cannot invent clearance.
+        var missingCenter = blank(base)
+        for y in 0..<gridH {
+            for x in 22..<26 { missingCenter[y * gridW + x] = .nan }
+        }
+        let missingBins = getBins(missingCenter)
+        precondition(!missingBins[11].isValid && !missingBins[12].isValid,
+                     "Raw tensor case 3: invalid center pixels must not be filled")
+        let unknownAdv = estimateDirectionalAdvisory(
+            observation: makeObs(missingBins), threat: "SAFE", now: 10.0
+        )
+        precondition(unknownAdv.state == "UNAVAILABLE" && unknownAdv.angleDeg == nil,
+                     "Raw tensor case 3: unsupported center must not create an arrow")
+
+        // Case 4: upper-band disparity must be extracted separately from the body band.
+        var overhead = blank(base)
+        for y in 0..<12 {
+            for x in 0..<gridW { overhead[y * gridW + x] = 750 }
+        }
+        let overheadBins = getBins(overhead)
+        precondition(overheadBins[12].overheadDistCM.isFinite &&
+                     overheadBins[12].bodyDistCM.isFinite &&
+                     overheadBins[12].overheadDistCM < overheadBins[12].bodyDistCM,
+                     "Raw tensor case 4: overhead band must be independently measured")
+        let overAdv = estimateDirectionalAdvisory(
+            observation: makeObs(overheadBins, overhead: true), threat: "CRITICAL", now: 10.0
+        )
+        precondition(overAdv.state == "STOP",
+                     "Raw tensor case 4: critical overhead hazard must preempt guidance")
+
+        // Case 5: actual projected obstacle bbox populates occupancy in the appropriate bins.
+        let obj = SingleObstacle(id: 42, x: 96, y: 100, bbox: (80, 48, 32, 120),
+                                 pan: 0.0, proximity: 0.6, distCM: 50,
+                                 modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let occupied = getBins(blank(base), obstacles: [obj])
+        precondition(occupied[11].hasObstacle && occupied[12].hasObstacle &&
+                     !occupied[0].hasObstacle && !occupied[23].hasObstacle,
+                     "Raw tensor case 5: obstacle occupancy should match projected bbox")
+
+        print("PASS Swift Raw Disparity -> Spatial Bins -> Advisory (5 cases)")
     }
 
     static func testTensorSpatialIntegration() {
