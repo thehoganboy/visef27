@@ -58,6 +58,7 @@ jobs:
 
       - name: Run native Swift behavior regressions
         run: |
+          set -euo pipefail
           echo "=== Compiling native Swift behavior regressions ==="
           swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
             echo "FATAL: swiftc compilation failed"
