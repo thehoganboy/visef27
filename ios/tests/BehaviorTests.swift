@@ -30,18 +30,30 @@ import Foundation
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
-        let candidates = [
+        let cwd = FileManager.default.currentDirectoryPath
+        var candidates: [String] = [
             "tests/golden_directional_scenarios.json",
+            "\(cwd)/tests/golden_directional_scenarios.json",
             "../tests/golden_directional_scenarios.json",
             "../../tests/golden_directional_scenarios.json"
         ]
+        if let ghWs = ProcessInfo.processInfo.environment["GITHUB_WORKSPACE"] {
+            candidates.insert("\(ghWs)/tests/golden_directional_scenarios.json", at: 0)
+        }
         for path in candidates {
-            if let data = FileManager.default.contents(atPath: path),
-               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let scenarios = json["scenarios"] as? [[String: Any]] {
-                return scenarios
+            let url = URL(fileURLWithPath: path)
+            do {
+                let data = try Data(contentsOf: url)
+                let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+                if let scenarios = json?["scenarios"] as? [[String: Any]] {
+                    print("[BehaviorTests] Successfully loaded \(scenarios.count) scenarios from: \(path)")
+                    return scenarios
+                }
+            } catch {
+                // Continue trying candidate paths
             }
         }
+        print("[BehaviorTests] FATAL: Could not load golden scenarios. Tried paths: \(candidates) (CWD: \(cwd))")
         return nil
     }
 
