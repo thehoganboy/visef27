@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
     private var audio: SpatialAudioEngine? = null
     private var running = false
     private var isTorchOn = false
+    private var lastTorchToggleTime = 0L
     private var closed = false
     private var lastResult = 0L
     private var started = 0L
@@ -152,11 +153,20 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
         }
     }
     private fun toggleTorch() {
+        val now = SystemClock.elapsedRealtime()
+        // P1-E: Debounce rapid repeated taps (250ms guard)
+        if (now - lastTorchToggleTime < 250L) return
+        lastTorchToggleTime = now
+
         val cam = activeCamera ?: return
         if (cam.cameraInfo.hasFlashUnit()) {
-            isTorchOn = !isTorchOn
-            cam.cameraControl.enableTorch(isTorchOn)
-            updateTorchButton()
+            val targetState = !isTorchOn
+            cam.cameraControl.enableTorch(targetState).addListener({
+                runOnUiThread {
+                    isTorchOn = targetState
+                    updateTorchButton()
+                }
+            }, ContextCompat.getMainExecutor(this))
         }
     }
     private fun forceTorchOff() {

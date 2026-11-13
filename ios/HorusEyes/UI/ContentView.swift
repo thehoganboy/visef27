@@ -378,7 +378,10 @@ struct DirectionIndicator: View {
 
     var body: some View {
         Group {
-            if let angle = advisory.drawableAngle(now: CACurrentMediaTime()), threat != "PAUSED" {
+            let isStop = (advisory.state == "STOP" || threat == "CRITICAL") && threat != "PAUSED"
+            let isPaused = threat == "PAUSED"
+
+            if !isStop && !isPaused, let angle = advisory.drawableAngle(now: CACurrentMediaTime()) {
                 // Perceptual visual rotation mapping (P0-01)
                 let visualAngle = max(-45.0, min(45.0, angle * 1.4))
                 let lateralOffset = max(-35.0, min(35.0, visualAngle * 0.9))
@@ -399,23 +402,23 @@ struct DirectionIndicator: View {
                     .animation(.spring(response: 0.22, dampingFraction: 0.75), value: angle)
                     .accessibilityLabel("Estimated direction advisory")
             } else {
-                Label(
-                    threat == "CRITICAL" ? "STOP" : threat == "PAUSED" ? "PAUSED" : "UNAVAILABLE",
-                    systemImage: threat == "CRITICAL" ? "hand.raised.fill" : "minus.circle"
-                )
-                .font(.system(size: 22, weight: .bold))
-                .foregroundColor(threat == "CRITICAL" ? Color(red: 1.0, green: 0.23, blue: 0.19) : Color(red: 0.95, green: 0.95, blue: 0.97))
-                .padding(.horizontal, 24)
-                .padding(.vertical, 14)
-                .background(
-                    RoundedRectangle(cornerRadius: 18, style: .continuous)
-                        .fill(Color(white: 0.05).opacity(0.85))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                        )
-                )
-                .accessibilityLabel(threat == "CRITICAL" ? "Stop. Obstacle detected" : "Direction unavailable")
+                let labelText = isPaused ? "PAUSED" : (isStop ? "STOP" : "UNAVAILABLE")
+                let iconName = isStop ? "hand.raised.fill" : "minus.circle"
+
+                Label(labelText, systemImage: iconName)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(isStop ? Color(red: 1.0, green: 0.23, blue: 0.19) : Color(red: 0.95, green: 0.95, blue: 0.97))
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color(white: 0.05).opacity(0.85))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                            )
+                    )
+                    .accessibilityLabel(isStop ? "Stop. Obstacle detected" : (isPaused ? "Perception paused" : "Direction unavailable"))
             }
         }
     }

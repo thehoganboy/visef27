@@ -237,4 +237,73 @@ class TensorSpatialIntegrationTest {
         val adv = estimateDirectionalAdvisory(depth, threat = "SENSOR_FAULT", nowNanos = 10_000_000_000L)
         assertEquals("UNKNOWN", adv.state)
     }
+
+    @Test
+    fun test11_lowLightCorridorBelow150cm() {
+        val tensor = createBaseTensor(fillVal = 200.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 110.0f,
+            pan = 0.0f, proximity = 0.3f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 110.0f, "CENTER" to 110.0f, "RIGHT" to 110.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("AVAILABLE", adv.state)
+        assertEquals("AVAILABLE_FORWARD", adv.reasonCode)
+        assertTrue(abs(adv.angleDeg ?: 999.0f) <= 2.5f)
+    }
+
+    @Test
+    fun test12_reasonCodesAndStaleRejection() {
+        val tensor = createBaseTensor(fillVal = 200.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 110.0f,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 110.0f, "CENTER" to 110.0f, "RIGHT" to 110.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advStale = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 11_000_000_000L)
+        assertEquals("UNAVAILABLE", advStale.state)
+        assertEquals("SOURCE_FRAME_STALE", advStale.reasonCode)
+    }
+
+    @Test
+    fun test13_nonfiniteClearanceRejection() {
+        val tensor = createBaseTensor(fillVal = 200.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val corruptedBins = bins.map {
+            SpatialBin(
+                binId = it.binId, angleMin = it.angleMin, angleMax = it.angleMax, angleCenter = it.angleCenter,
+                validRatio = it.validRatio, rawDepthStatistic = it.rawDepthStatistic,
+                estimatedDistanceCm = Float.NaN, isValid = true, hasObstacle = false
+            )
+        }
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to Float.NaN, "CENTER" to Float.NaN, "RIGHT" to Float.NaN),
+            allObstacles = emptyList(), isValid = true, spatialBins = corruptedBins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("UNAVAILABLE", adv.state)
+        assertEquals("LOCAL_DEPTH_MISSING", adv.reasonCode)
+    }
+
+    @Test
+    fun test14_directionalStopUnderNonCriticalThreat() {
+        val tensor = createBaseTensor(fillVal = 750.0f) // ~28cm
+        val obsWall = Obstacle(1, 96, 128, Rect(0, 0, 192, 256), 0.0f, 28.0f, 0.9f, 0.1f, isWall = true)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsWall), numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 28.0f,
+            pan = 0.0f, proximity = 0.9f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 28.0f, "RIGHT" to 28.0f),
+            allObstacles = listOf(obsWall), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "WARNING", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", adv.state)
+        assertTrue(adv.reasonCode == "CRITICAL_OBSTACLE" || adv.reasonCode == "CORRIDOR_OBSTRUCTED")
+    }
 }

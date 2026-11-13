@@ -817,19 +817,22 @@ class DepthEstimator:
             if overhead_fg_cm < overhead_bg_cm - config.OVERHEAD_DEPTH_DELTA_CM and overhead_fg_cm < config.DIST_WARNING_CM:
                 overhead_hazard = True
 
-        # ── Phân tích Ground/Curb ROI (15% đáy) ──
+        # ── Phân tích Ground/Curb ROI (15% đáy, P1-D: Robust Ground Evidence Quality Guard) ──
         drop_off_hazard = False
         ground_roi_raw = depth_raw[bot_cut:, :]
         if ground_roi_raw.size > 0:
-            # So sánh gradient dọc: đáy frame so với vùng ngay trên đáy
             above_bot = depth_raw[bot_cut - int(0.05 * h):bot_cut, :]
-            if above_bot.size > 0:
-                above_median = float(np.median(above_bot))
-                below_median = float(np.median(ground_roi_raw))
-                # Gradient bất thường: đáy xa hơn (depth nhỏ hơn) rất nhiều → bậc thềm xuống
-                gradient_ratio = abs(above_median - below_median) / max(above_median, 1.0)
-                if gradient_ratio > config.DROP_OFF_GRADIENT_THRESH and below_median < above_median * 0.6:
-                    drop_off_hazard = True
+            valid_ground = ground_roi_raw[np.isfinite(ground_roi_raw) & (ground_roi_raw > 0)]
+            valid_above = above_bot[np.isfinite(above_bot) & (above_bot > 0)]
+            min_valid_ground = max(10, int(0.25 * ground_roi_raw.size))
+            min_valid_above = max(6, int(0.25 * above_bot.size))
+            if valid_ground.size >= min_valid_ground and valid_above.size >= min_valid_above:
+                above_median = float(np.median(valid_above))
+                below_median = float(np.median(valid_ground))
+                if math.isfinite(above_median) and math.isfinite(below_median) and above_median > 0 and below_median > 0:
+                    gradient_ratio = abs(above_median - below_median) / max(above_median, 1.0)
+                    if gradient_ratio > config.DROP_OFF_GRADIENT_THRESH and below_median < above_median * 0.6:
+                        drop_off_hazard = True
 
         # ════════════════════════════════════════════════════════════════════════
         # BƯỚC 2: Phát hiện vật cản Sobel/Discontinuity (C) + Vách tường (D)

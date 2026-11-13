@@ -155,9 +155,9 @@ def estimate_directional_advisory(
             if len(finite_c_dists) == len(c_bins) and len(finite_c_dists) > 0 and all(d >= 75.0 for d in finite_c_dists):
                 pass  # Central corridor is genuinely open with valid distance readings
             else:
-                return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+                return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code="CORRIDOR_OBSTRUCTED")
         else:
-            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code="CORRIDOR_OBSTRUCTED")
 
     # Overhead hazard or drop-off hazard under CRITICAL threat forces immediate STOP
     is_overhead = bool(getattr(observation, "overhead_hazard", False) or
@@ -167,7 +167,8 @@ def estimate_directional_advisory(
                        getattr(observation, "is_drop_off_hazard", False) or
                        getattr(observation, "mode_text", "") == "DROP_OFF")
     if threat == "CRITICAL" and (is_overhead or is_drop_off):
-        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+        code = "OVERHEAD_HAZARD" if is_overhead else "DROP_OFF_HAZARD"
+        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code=code)
 
     # 4. Map obstacles to angular span and risk weights
     # Remove remaining fabricated 100cm fallback: preserve unknown-distance obstacles by their angular bbox
@@ -219,22 +220,26 @@ def estimate_directional_advisory(
             weight = 12.0
             obstacle_profiles.append((ang_center, total_radius, weight, float("nan"), False))
 
-    # Clear observation with no detected obstacles (P0-02)
+    # Clear observation with no detected obstacles (P0-02 & P0-B)
     if not obstacle_profiles:
         center_supported = False
-        cand_dist = z_center if status_c == "VALID" else float("nan")
+        center_coverage_ok = False
+        cand_dist = z_center if (status_c == "VALID" and math.isfinite(z_center) and z_center > 0) else float("nan")
         if spatial_bins and len(spatial_bins) > 0:
             c_bins = [b for b in spatial_bins if abs(getattr(b, "angle_center", 99.0)) <= 5.0]
             valid_c = [b for b in c_bins if getattr(b, "is_valid", False)]
             if len(valid_c) >= max(1, int(len(c_bins) * 0.75)):
-                center_supported = True
-                dists = [getattr(b, "dist_cm", float("nan")) for b in valid_c if math.isfinite(getattr(b, "dist_cm", float("nan")))]
+                center_coverage_ok = True
+                dists = [getattr(b, "dist_cm", float("nan")) for b in valid_c if math.isfinite(getattr(b, "dist_cm", float("nan"))) and getattr(b, "dist_cm", float("nan")) > 0]
                 if dists:
                     cand_dist = min(dists)
+                    center_supported = True
         elif status_c == "VALID":
-            center_supported = True
+            center_coverage_ok = True
+            if math.isfinite(z_center) and z_center > 0:
+                center_supported = True
 
-        if center_supported and (not math.isfinite(cand_dist) or cand_dist >= 75.0):
+        if center_supported and math.isfinite(cand_dist) and cand_dist > 0 and cand_dist >= 75.0:
             angle_out = 0.0
             if prev_angle is not None and math.isfinite(prev_angle):
                 angle_out = 0.3 * angle_out + 0.7 * prev_angle
@@ -254,11 +259,17 @@ def estimate_directional_advisory(
                 reason_code="CRITICAL_OBSTACLE"
             )
         else:
+            if not center_coverage_ok:
+                reason = "CENTER_COVERAGE_INSUFFICIENT"
+            elif not center_supported or not math.isfinite(cand_dist) or cand_dist <= 0:
+                reason = "LOCAL_DEPTH_MISSING"
+            else:
+                reason = "NO_SUPPORTED_CANDIDATE"
             return DirectionalAdvisory(
                 state=DirectionState.UNAVAILABLE,
                 observed_angular_range=obs_range,
                 source_timestamp=adv_ts,
-                reason_code="CENTER_COVERAGE_INSUFFICIENT" if not center_supported else "NO_SUPPORTED_CANDIDATE"
+                reason_code=reason
             )
 
     # 5. Build candidate angles within observed FOV (step 2.5 degrees)

@@ -152,23 +152,30 @@ func estimateDirectionalAdvisory(
 
     let bins = obs.spatialBins
 
-    // Clear observation with no detected obstacles (P0-02)
+    // Clear observation with no detected obstacles (P0-02 & P0-B)
     if profiles.isEmpty {
         var centerSupported = false
-        var candDist = validC ? zCenter : Double.nan
+        var centerCoverageOk = false
+        var candDist = (validC && zCenter.isFinite && zCenter > 0) ? zCenter : Double.nan
         if !bins.isEmpty {
             let cBins = bins.filter { abs($0.angleCenter) <= 5.0 }
             let validCList = cBins.filter { $0.isValid }
             if validCList.count >= max(1, Int(Double(cBins.count) * 0.75)) {
-                centerSupported = true
+                centerCoverageOk = true
                 let dists = validCList.compactMap { Double($0.distCM) }.filter { $0.isFinite && $0 > 0 }
-                if !dists.isEmpty { candDist = dists.min() ?? Double.nan }
+                if !dists.isEmpty {
+                    candDist = dists.min() ?? Double.nan
+                    centerSupported = true
+                }
             }
         } else if validC {
-            centerSupported = true
+            centerCoverageOk = true
+            if zCenter.isFinite && zCenter > 0 {
+                centerSupported = true
+            }
         }
 
-        if centerSupported && (!candDist.isFinite || candDist >= 75.0) {
+        if centerSupported && candDist.isFinite && candDist > 0 && candDist >= 75.0 {
             var angleOut = 0.0
             if let pa = prevAngle, pa.isFinite {
                 angleOut = 0.3 * angleOut + 0.7 * pa
@@ -191,13 +198,21 @@ func estimateDirectionalAdvisory(
                 reasonCode: "CRITICAL_OBSTACLE"
             )
         } else {
+            let reason: String
+            if !centerCoverageOk {
+                reason = "CENTER_COVERAGE_INSUFFICIENT"
+            } else if !centerSupported || !candDist.isFinite || candDist <= 0 {
+                reason = "LOCAL_DEPTH_MISSING"
+            } else {
+                reason = "NO_SUPPORTED_CANDIDATE"
+            }
             return DirectionalAdvisory(
                 state: "UNAVAILABLE",
                 angleDeg: nil,
                 confidence: nil,
                 observedAngularRange: obsRange,
                 sourceTimestamp: advTs,
-                reasonCode: !centerSupported ? "CENTER_COVERAGE_INSUFFICIENT" : "NO_SUPPORTED_CANDIDATE"
+                reasonCode: reason
             )
         }
     }

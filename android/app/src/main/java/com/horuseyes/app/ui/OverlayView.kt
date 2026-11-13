@@ -55,11 +55,11 @@ fun estimateDirectionalAdvisory(
 
     // Spatial observation freshness check (reject missing, invalid, or stale observations > 750ms)
     if (depth.timestampNanos <= 0L) {
-        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos, reasonCode = "SOURCE_FRAME_MISSING")
     }
     val ageSeconds = (nowNanos - depth.timestampNanos) / 1_000_000_000.0
     if (ageSeconds < -0.05 || ageSeconds > 0.75) {
-        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = depth.timestampNanos)
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = depth.timestampNanos, reasonCode = "SOURCE_FRAME_STALE")
     }
     val advNanos = depth.timestampNanos
 
@@ -142,23 +142,30 @@ fun estimateDirectionalAdvisory(
 
     val bins = depth.spatialBins
 
-    // Clear observation with no detected obstacles (P0-02)
+    // Clear observation with no detected obstacles (P0-02 & P0-B)
     if (profiles.isEmpty()) {
         var centerSupported = false
-        var candDist = if (validC) zCenter else Float.NaN
+        var centerCoverageOk = false
+        var candDist = if (validC && zCenter.isFinite() && zCenter > 0f) zCenter else Float.NaN
         if (bins.isNotEmpty()) {
             val cBins = bins.filter { abs(it.angleCenter) <= 5.0f }
             val validCList = cBins.filter { it.isValid }
             if (validCList.size >= max(1, (cBins.size * 0.75f).toInt())) {
-                centerSupported = true
+                centerCoverageOk = true
                 val dists = validCList.map { it.estimatedDistanceCm }.filter { it.isFinite() && it > 0f }
-                if (dists.isNotEmpty()) candDist = dists.minOrNull() ?: Float.NaN
+                if (dists.isNotEmpty()) {
+                    candDist = dists.minOrNull() ?: Float.NaN
+                    centerSupported = true
+                }
             }
         } else if (validC) {
-            centerSupported = true
+            centerCoverageOk = true
+            if (zCenter.isFinite() && zCenter > 0f) {
+                centerSupported = true
+            }
         }
 
-        if (centerSupported && (!candDist.isFinite() || candDist >= 75.0f)) {
+        if (centerSupported && candDist.isFinite() && candDist > 0f && candDist >= 75.0f) {
             var angleOut = 0.0f
             if (prevAngle != null && prevAngle.isFinite()) {
                 angleOut = 0.3f * angleOut + 0.7f * prevAngle
@@ -179,11 +186,18 @@ fun estimateDirectionalAdvisory(
                 reasonCode = "CRITICAL_OBSTACLE"
             )
         } else {
+            val reason = if (!centerCoverageOk) {
+                "CENTER_COVERAGE_INSUFFICIENT"
+            } else if (!centerSupported || !candDist.isFinite() || candDist <= 0f) {
+                "LOCAL_DEPTH_MISSING"
+            } else {
+                "NO_SUPPORTED_CANDIDATE"
+            }
             return DirectionalAdvisory(
                 state = "UNAVAILABLE",
                 observedRange = obsRange,
                 sourceNanos = advNanos,
-                reasonCode = if (!centerSupported) "CENTER_COVERAGE_INSUFFICIENT" else "NO_SUPPORTED_CANDIDATE"
+                reasonCode = reason
             )
         }
     }
@@ -411,7 +425,8 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         depth = result; threat = state; timestamp = result.timestampNanos
         advisory = estimateDirectionalAdvisory(result, state, nowNanos, prevAngle = prevAngle)
         prevAngle = if (advisory.state == "AVAILABLE") advisory.angleDeg else null
-        contentDescription = if (state == "CRITICAL") "Stop. Obstacle detected" else "Direction advisory"
+        val isStop = advisory.state == "STOP" || state == "CRITICAL"
+        contentDescription = if (isStop) "Stop. Obstacle detected" else "Direction advisory"
         invalidate()
     }
 
@@ -427,10 +442,11 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
             val scale = min(width / sw, height / sh)
             val ox = (width - sw * scale) / 2; val oy = (height - scale) / 2
 
-            val primaryColor = when (threat) {
-                "CRITICAL" -> Color.rgb(255, 59, 48)   // Apple Red
-                "WARNING" -> Color.rgb(255, 149, 0)    // Apple Orange
-                else -> Color.rgb(242, 242, 247)       // Apple Crisp White
+            val isStop = advisory.state == "STOP" || threat == "CRITICAL"
+            val primaryColor = when {
+                isStop -> Color.rgb(255, 59, 48)       // Apple Red
+                threat == "WARNING" -> Color.rgb(255, 149, 0) // Apple Orange
+                else -> Color.rgb(242, 242, 247)             // Apple Crisp White
             }
 
             for (o in d.allObstacles) {
@@ -512,9 +528,11 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
 
             canvas.restore()
         } else {
-            val text = when (threat) {
-                "PAUSED" -> "PAUSED"
-                "CRITICAL" -> "STOP"
+            val isStop = (advisory.state == "STOP" || threat == "CRITICAL") && threat != "PAUSED"
+            val isPaused = threat == "PAUSED"
+            val text = when {
+                isPaused -> "PAUSED"
+                isStop -> "STOP"
                 else -> "UNAVAILABLE"
             }
             paint.style = Paint.Style.FILL
@@ -536,7 +554,7 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
 
             // Text
             paint.style = Paint.Style.FILL
-            paint.color = if (threat == "CRITICAL") Color.rgb(255, 59, 48) else Color.rgb(242, 242, 247)
+            paint.color = if (isStop) Color.rgb(255, 59, 48) else Color.rgb(242, 242, 247)
             canvas.drawText(text, cx, cy + 8f * density, paint)
             paint.isFakeBoldText = false
         }

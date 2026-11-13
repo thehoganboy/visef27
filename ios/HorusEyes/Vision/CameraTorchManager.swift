@@ -36,6 +36,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private var darkFrameCount: Int = 0
     private var blindFrameCount: Int = 0
     private var isTorchForcedManual: Bool = false
+    private var lastTorchToggleTime: CFTimeInterval = 0.0
 
     // FPS Meter
     private var fpsCounter: Int = 0
@@ -332,7 +333,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
     // ── Hardware Torch Actuator ───────────────────────────────────────────────
     private func setHardwareTorch(on: Bool) {
-        guard let device = videoDevice, device.hasTorch else { return }
+        guard let device = videoDevice, device.hasTorch, device.isTorchAvailable else { return }
 
         do {
             try device.lockForConfiguration()
@@ -344,7 +345,10 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             device.unlockForConfiguration()
 
             DispatchQueue.main.async { [weak self] in
-                self?.isTorchActive = on
+                guard let self = self else { return }
+                self.isTorchActive = on
+                self.aeSettleFramesRemaining = Config.flashAeSettleFrames
+                self.onTorchToggled?(on)
             }
         } catch {
             print("[HorusEyes] Error setting torch: \(error)")
@@ -353,14 +357,16 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
     // ── Manual Override Toggle ────────────────────────────────────────────────
     func toggleManualTorch() {
+        let now = CACurrentMediaTime()
+        // P1-E: Debounce rapid repeated taps (250ms guard) to prevent desynchronization
+        guard now - lastTorchToggleTime >= 0.25 else { return }
+        lastTorchToggleTime = now
         hapticGenerator.impactOccurred()
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             let newState = !self.isTorchActive
             self.isTorchForcedManual = true // Lock manual choice for this running session
             self.setHardwareTorch(on: newState)
-            self.aeSettleFramesRemaining = Config.flashAeSettleFrames
-            self.onTorchToggled?(newState)
         }
     }
 
@@ -376,7 +382,6 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             guard let self = self else { return }
             self.isTorchForcedManual = false
             self.setHardwareTorch(on: false)
-            self.onTorchToggled?(false)
         }
     }
 }

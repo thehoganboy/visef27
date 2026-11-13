@@ -288,7 +288,7 @@ final class DepthEngine: ObservableObject {
     }
 
     // ── Spatial Engine v8 Multi-Hazard Safety Arbiter ─────────────────────────
-    private func evaluateSpatialEngineV8(
+    func evaluateSpatialEngineV8(
         rawDisparity: [Float],
         w: Int,
         h: Int,
@@ -378,47 +378,63 @@ final class DepthEngine: ObservableObject {
         if distC.isFinite && distC > 0 { sectorDists["CENTER"] = distC }
         if distR.isFinite && distR > 0 { sectorDists["RIGHT"] = distR }
 
-        // Step 3: Overhead Hazard Check (top 15% ROI)
+        // Step 3: Overhead Hazard Check (top 15% ROI, Evidence Quality Guard)
         var isOverhead = false
         let topCut = max(1, Int(Double(gridH) * Double(Config.topMaskRatio)))
         var topRaws = [Float]()
         for y in 0..<topCut {
             for x in 0..<gridW {
-                topRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { topRaws.append(v) }
             }
         }
-        if !topRaws.isEmpty {
+        let totalTopSamples = topCut * gridW
+        let minValidTop = max(10, Int(Double(totalTopSamples) * 0.25))
+        if topRaws.count >= minValidTop {
             let topFgRaw = Self.percentile(topRaws, 0.85)
-            let topFgDist = pchip.interpolate(topFgRaw)
             let topBgRaw = Self.percentile(topRaws, 0.30)
-            let topBgDist = pchip.interpolate(topBgRaw)
-            if topFgDist < (topBgDist - Config.overheadDepthDeltaCM) && topFgDist < Config.distWarningCM {
-                isOverhead = true
+            if topFgRaw.isFinite && topBgRaw.isFinite {
+                let topFgDist = pchip.interpolate(topFgRaw)
+                let topBgDist = pchip.interpolate(topBgRaw)
+                if topFgDist.isFinite && topBgDist.isFinite && topFgDist < (topBgDist - Config.overheadDepthDeltaCM) && topFgDist < Config.distWarningCM {
+                    isOverhead = true
+                }
             }
         }
 
-        // Step 4: Drop-Off Hazard Check (bottom 15% ROI)
+        // Step 4: Drop-Off Hazard Check (bottom 15% ROI, P1-D: Robust Ground Evidence Quality Guard)
         var isDropOff = false
         let botCut = Int(Double(gridH) * (1.0 - Double(Config.bottomMaskRatio)))
         var groundRaws = [Float]()
         var aboveGroundRaws = [Float]()
         for y in botCut..<gridH {
             for x in 0..<gridW {
-                groundRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { groundRaws.append(v) }
             }
         }
         let aboveYStart = max(0, botCut - Int(Double(gridH) * 0.05))
         for y in aboveYStart..<botCut {
             for x in 0..<gridW {
-                aboveGroundRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { aboveGroundRaws.append(v) }
             }
         }
-        if !groundRaws.isEmpty && !aboveGroundRaws.isEmpty {
+        let totalGroundSamples = (gridH - botCut) * gridW
+        let totalAboveSamples = (botCut - aboveYStart) * gridW
+        let minValidGround = max(10, Int(Double(totalGroundSamples) * 0.25))
+        let minValidAbove = max(6, Int(Double(totalAboveSamples) * 0.25))
+
+        // P1-D: Do not evaluate drop-off gradient unless BOTH ground regions meet required observation quality.
+        // Insufficient or all-NaN ground evidence must be treated as UNKNOWN, never as confirmed drop-off.
+        if groundRaws.count >= minValidGround && aboveGroundRaws.count >= minValidAbove {
             let groundMed = Self.median(groundRaws)
             let aboveMed = Self.median(aboveGroundRaws)
-            let gradRatio = abs(aboveMed - groundMed) / max(aboveMed, 1.0)
-            if gradRatio > Config.dropOffGradientThresh && groundMed < aboveMed * 0.6 {
-                isDropOff = true
+            if groundMed.isFinite && aboveMed.isFinite && groundMed > 0 && aboveMed > 0 {
+                let gradRatio = abs(aboveMed - groundMed) / max(aboveMed, 1.0)
+                if gradRatio > Config.dropOffGradientThresh && groundMed < aboveMed * 0.6 {
+                    isDropOff = true
+                }
             }
         }
 
@@ -577,7 +593,7 @@ final class DepthEngine: ObservableObject {
     // ── Numerical Utilities ───────────────────────────────────────────────────
     private static func percentile(_ array: [Float], _ p: Float) -> Float {
         let valid = array.filter { $0.isFinite && $0 > 0 }
-        guard !valid.isEmpty else { return 0.0 }
+        guard !valid.isEmpty else { return .nan }
         let sorted = valid.sorted()
         let idx = min(sorted.count - 1, max(0, Int(Float(sorted.count - 1) * p)))
         return sorted[idx]

@@ -248,3 +248,47 @@ def test_12_reason_codes_and_stale_rejection():
     adv_stop = advisory_for_risk("CRITICAL", 10.0)
     assert adv_stop.state == "STOP"
     assert adv_stop.reason_code == "CRITICAL_OBSTACLE"
+
+
+def test_13_nonfinite_clearance_rejection():
+    """13. Valid angular coverage with missing/NaN metric distance must NOT produce AVAILABLE."""
+    tensor = create_base_tensor(fill_val=200.0)
+    bins = compute_spatial_bins(tensor, w=192, h=256, num_bins=24)
+    # Manually corrupt bin distances to NaN while keeping angular validity
+    corrupted_bins = []
+    for b in bins:
+        b_corrupted = type(b)(
+            bin_id=b.bin_id, angle_min=b.angle_min, angle_max=b.angle_max, angle_center=b.angle_center,
+            valid_ratio=b.valid_ratio, depth_raw_p80=getattr(b, "depth_raw_p80", 200.0),
+            dist_cm=float("nan"), is_valid=True, has_obstacle=False,
+            body_dist_cm=float("nan"), ground_dist_cm=float("nan"), overhead_dist_cm=float("nan")
+        )
+        corrupted_bins.append(b_corrupted)
+
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(48, 64, 96, 128), pan=0.0, proximity=0.2, dist_cm=float("nan"),
+        mode_text="SAFE", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": float("nan"), "CENTER": float("nan"), "RIGHT": float("nan")},
+        all_obstacles=[], is_valid=True, spatial_bins=corrupted_bins, timestamp=10.0
+    )
+    adv = estimate_directional_advisory(obs, threat="SAFE", now=10.0)
+    # MUST be UNAVAILABLE with LOCAL_DEPTH_MISSING, never AVAILABLE
+    assert adv.state == "UNAVAILABLE"
+    assert adv.reason_code == "LOCAL_DEPTH_MISSING"
+
+
+def test_14_directional_stop_under_non_critical_threat():
+    """14. Directional STOP must trigger when all directions are blocked even under WARNING/SAFE threat."""
+    # Frontal obstruction blocking all headings within stopping distance
+    tensor = np.full((256, 192), 750.0, dtype=np.float32) # ~28cm
+    bins = compute_spatial_bins(tensor, w=192, h=256, num_bins=24)
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(0, 0, 192, 256), pan=0.0, proximity=0.8, dist_cm=28.0,
+        mode_text="WALL", uncertainty_score=0.1, is_wall=True,
+        sector_dists={"LEFT": 28.0, "CENTER": 28.0, "RIGHT": 28.0},
+        all_obstacles=[], is_valid=True, spatial_bins=bins, timestamp=10.0
+    )
+    # Passed with threat="WARNING" (non-CRITICAL)
+    adv = estimate_directional_advisory(obs, threat="WARNING", now=10.0)
+    assert adv.state == "STOP"
+    assert adv.reason_code in ("CRITICAL_OBSTACLE", "CORRIDOR_OBSTRUCTED")

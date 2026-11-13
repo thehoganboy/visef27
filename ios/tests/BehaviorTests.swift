@@ -31,6 +31,7 @@ import Foundation
         testTensorSpatialIntegration()
         testRawTensorToSpatialBins()
         testLowLightRobustnessAndLocalDisparity()
+        testLowLightReleaseCandidateCorrectiveAudit()
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
@@ -566,5 +567,82 @@ import Foundation
         precondition(adv4.reasonCode == "SOURCE_FRAME_STALE", "Test 4 reason code expected SOURCE_FRAME_STALE, got \(adv4.reasonCode)")
 
         print("PASS Swift Low-Light Guidance Stability & Local Disparity (4 tests)")
+    }
+
+    static func testLowLightReleaseCandidateCorrectiveAudit() {
+        let engine = DepthEngine()
+        let kin = KinematicsEngine()
+        let halfFov: Float = 32.5
+        let binW: Float = 65.0 / 24.0
+
+        func makeBin(id: Int, dist: Float, isValid: Bool = true) -> SpatialBin {
+            let aMin = -halfFov + Float(id) * binW
+            let aMax = aMin + binW
+            let aCenter = (aMin + aMax) / 2.0
+            return SpatialBin(
+                binId: id, angleMin: aMin, angleMax: aMax, angleCenter: aCenter,
+                validRatio: isValid ? 1.0 : 0.0, rawDepthStatistic: 200.0,
+                distCM: dist, isValid: isValid, hasObstacle: false,
+                bodyDistCM: dist, groundDistCM: .nan, overheadDistCM: .nan
+            )
+        }
+
+        // 1. P0-A / P0-B: Directional STOP under non-CRITICAL threat (e.g. WARNING)
+        let bins30cm = (0..<24).map { makeBin(id: $0, dist: 30.0) }
+        let obs30cm = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (0, 0, 192, 256), pan: 0.0, proximity: 1.0, distCM: 30.0,
+            modeText: "WALL", uncertaintyScore: 0.1, isWall: true,
+            sectorDists: ["LEFT": 30.0, "CENTER": 30.0, "RIGHT": 30.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins30cm, timestamp: 10.0
+        )
+        let advStop = estimateDirectionalAdvisory(observation: obs30cm, threat: "WARNING", now: 10.0)
+        precondition(advStop.state == "STOP", "P0-A failed: Directional STOP must trigger even under WARNING threat")
+        precondition(advStop.reasonCode == "CRITICAL_OBSTACLE" || advStop.reasonCode == "CORRIDOR_OBSTRUCTED", "P0-A reason code expected STOP code, got \(advStop.reasonCode)")
+
+        // 2. P0-B: Nonfinite clearance rejection (valid angular bin coverage but all-NaN distances)
+        let binsNan = (0..<24).map { makeBin(id: $0, dist: .nan, isValid: true) }
+        let obsNan = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.2, distCM: .nan,
+            modeText: "SAFE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": .nan, "CENTER": .nan, "RIGHT": .nan],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: binsNan, timestamp: 10.0
+        )
+        let advNan = estimateDirectionalAdvisory(observation: obsNan, threat: "SAFE", now: 10.0)
+        precondition(advNan.state == "UNAVAILABLE", "P0-B failed: NaN distances must yield UNAVAILABLE")
+        precondition(advNan.reasonCode == "LOCAL_DEPTH_MISSING", "P0-B reason code expected LOCAL_DEPTH_MISSING, got \(advNan.reasonCode)")
+
+        // 3. P0-C: Decoupled local observability from primary TTC distance in KinematicsEngine
+        let obsValidLocalWithNanPrimary = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.2, distCM: .nan,
+            modeText: "SAFE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 120.0, "CENTER": 120.0, "RIGHT": 120.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: (0..<24).map { makeBin(id: $0, dist: 120.0) }, timestamp: 20.0
+        )
+        let kinResult = kin.compute(obstacleResult: obsValidLocalWithNanPrimary, frameId: 100, timestamp: 20.0, aeSettleRemaining: 0)
+        precondition(kinResult.threatLevel != "SENSOR_FAULT", "P0-C failed: Valid local observation with NaN primary distCM must not trigger SENSOR_FAULT (got \(kinResult.threatLevel))")
+        precondition(kinResult.primaryTTC.isInfinite, "P0-C failed: Primary TTC must be infinite when primary dist is NaN")
+
+        // 4. P1-D: All-NaN ground disparity handling in DepthEngine
+        var tensorWithNanGround = [Float](repeating: 200.0, count: 48 * 64)
+        // Set lower 25% (ground region) to NaN
+        let botCut = Int(Double(64) * 0.78)
+        for y in botCut..<64 {
+            for x in 0..<48 {
+                tensorWithNanGround[y * 48 + x] = .nan
+            }
+        }
+        let depthResult = engine.evaluateSpatialEngineV8(
+            rawDisparity: tensorWithNanGround,
+            w: 192,
+            h: 256,
+            meanLuma: 50.0,
+            sourceTimestamp: 10.0
+        )
+        precondition(!depthResult.isDropOffHazard, "P1-D failed: All-NaN ground disparity must not trigger false isDropOffHazard")
+
+        print("PASS Swift Low-Light Release Candidate Corrective Audit (P0-A, P0-B, P0-C, P1-D)")
     }
 }

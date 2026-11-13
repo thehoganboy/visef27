@@ -58,12 +58,64 @@ final class KinematicsEngine {
         userWalkSpeedCmS: Float = Config.userWalkSpeedCmS,
         imuYawRateRadS: Float = 0.0
     ) -> KinematicsResult {
-        guard obstacleResult.isValid && obstacleResult.distCM.isFinite else {
+        // True perception failure: invalid observation or complete zero-lux blindness
+        guard obstacleResult.isValid && !obstacleResult.isZeroLuxBlind else {
             historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
             return KinematicsResult(primaryTTC: .infinity, primaryVelocityZ: 0, threats: [:],
                 safeDirection: "STOP", isEvading: false, threatLevel: "SENSOR_FAULT",
                 guidanceState: "PERCEPTION_UNAVAILABLE", hazardState: "SENSOR_FAULT",
                 lostUnresolvedTimestamp: lostUnresolvedTimestamp, timestamp: timestamp)
+        }
+
+        // P0-C: Decouple local observability from coarse primary TTC distance.
+        // If perception is valid but primary object distance is missing/nonfinite,
+        // do not compute velocity/TTC, but do NOT classify as total SENSOR_FAULT.
+        guard obstacleResult.distCM.isFinite && obstacleResult.distCM > 0 else {
+            historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
+            lastFrameId = frameId
+
+            let isOverhead = obstacleResult.isOverheadHazard || obstacleResult.modeText == "OVERHEAD" || obstacleResult.allObstacles.contains(where: { $0.modeText == "OVERHEAD" })
+            let isDropOff = obstacleResult.isDropOffHazard || obstacleResult.modeText == "DROP_OFF" || obstacleResult.allObstacles.contains(where: { $0.modeText == "DROP_OFF" })
+
+            let zC = obstacleResult.sectorDists["CENTER"] ?? .nan
+            let zL = obstacleResult.sectorDists["LEFT"] ?? .nan
+            let zR = obstacleResult.sectorDists["RIGHT"] ?? .nan
+
+            let threatLevel: String
+            let safeDirection: String
+            let guidanceState: String
+            let hState: String
+
+            if isOverhead || isDropOff {
+                threatLevel = "CRITICAL"
+                safeDirection = "STOP"
+                guidanceState = "HAZARD_IMMEDIATE"
+                hState = "ACTIVE_HAZARD"
+            } else if (zC.isFinite && zC < 40.0) || (zL.isFinite && zL < 30.0) || (zR.isFinite && zR < 30.0) {
+                threatLevel = "CRITICAL"
+                safeDirection = "STOP"
+                guidanceState = "HAZARD_IMMEDIATE"
+                hState = "ACTIVE_HAZARD"
+            } else if (zC.isFinite && zC < 80.0) || (zL.isFinite && zL < 60.0) || (zR.isFinite && zR < 60.0) {
+                threatLevel = "WARNING"
+                safeDirection = "NONE"
+                guidanceState = "CLEARANCE_RESTRICTED"
+                hState = "ACTIVE_HAZARD"
+            } else {
+                threatLevel = "SAFE"
+                safeDirection = "FORWARD"
+                guidanceState = "NORMAL_CLEAR"
+                hState = "CLEAR"
+            }
+
+            let res = KinematicsResult(
+                primaryTTC: .infinity, primaryVelocityZ: 0, threats: [:],
+                safeDirection: safeDirection, isEvading: false, threatLevel: threatLevel,
+                guidanceState: guidanceState, hazardState: hState,
+                lostUnresolvedTimestamp: lostUnresolvedTimestamp, timestamp: timestamp
+            )
+            cachedResult = res
+            return res
         }
         // Do not fit approach across rotation, exposure changes, gaps or a primary
         // region jump. This is still a single-region tracker, not identity proof.
