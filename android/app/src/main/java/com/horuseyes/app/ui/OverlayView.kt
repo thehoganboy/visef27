@@ -123,7 +123,7 @@ fun estimateDirectionalAdvisory(
     }
 
     // Step 5B: Determine eligibility for each candidate heading (P0-01 Hard Rejection)
-    data class Candidate(val ang: Float, val zSec: Float)
+    data class Candidate(val ang: Float, val zSec: Float, val risk: Float)
     val eligibleCandidates = mutableListOf<Candidate>()
     var obstructedCount = 0
 
@@ -136,22 +136,49 @@ fun estimateDirectionalAdvisory(
         if (!secValid) continue
 
         var isBlocked = false
-        for (p in profiles) {
-            val dAng = abs(cand - p.angCenter)
-            if (!p.isValidDist) {
-                if (dAng < p.radius) { isBlocked = true; break }
-            } else {
-                if (p.zObs < 50f && dAng < p.radius) { isBlocked = true; break }
-                if (p.zObs < 35f && dAng < (p.radius + 2f)) { isBlocked = true; break }
+        if (zSec < 40f) isBlocked = true
+
+        if (!isBlocked) {
+            for (p in profiles) {
+                val dAng = abs(cand - p.angCenter)
+                if (!p.isValidDist) {
+                    if (dAng < p.radius) { isBlocked = true; break }
+                } else {
+                    if (p.zObs < 50f && dAng < p.radius) { isBlocked = true; break }
+                    if (p.zObs < 35f && dAng < (p.radius + 2f)) { isBlocked = true; break }
+                }
             }
         }
-        if (zSec < 40f) isBlocked = true
 
         if (isBlocked) {
             obstructedCount++
             continue
         }
-        eligibleCandidates.add(Candidate(cand, zSec))
+
+        var risk = 0f
+        for (p in profiles) {
+            val dAng = abs(cand - p.angCenter)
+            if (dAng < p.radius) {
+                val penetration = 1f - (dAng / p.radius)
+                risk += p.weight * (penetration * penetration) * 15f
+            } else {
+                val dEdge = dAng - p.radius
+                if (dEdge < 15f) {
+                    risk += p.weight * kotlin.math.exp(-((dEdge * dEdge) / 40f)).toFloat() * 2f
+                }
+            }
+        }
+
+        if (zSec < 80f) risk += ((80f - zSec) / 10f) * 4f
+        else if (zSec < 150f) risk += ((150f - zSec) / 70f) * 1.5f
+
+        risk += 0.05f * abs(cand)
+
+        if (prevAngle != null && prevAngle.isFinite() && abs(cand - prevAngle) <= 3.5f) {
+            risk -= 1.0f
+        }
+
+        eligibleCandidates.add(Candidate(cand, zSec, risk))
     }
 
     // Step 5C: Evaluate outcomes when no candidate is eligible
@@ -163,43 +190,67 @@ fun estimateDirectionalAdvisory(
         }
     }
 
-    // Step 6: Score ONLY eligible candidates
-    var bestAngle = 0f
-    var minRisk = Float.MAX_VALUE
+    // ── Step 6: Hierarchical Movement Policy (Directive Section 3) ──
 
-    for (cand in eligibleCandidates) {
-        var risk = 0f
-        for (p in profiles) {
-            val dAng = abs(cand.ang - p.angCenter)
-            val dEdge = dAng - p.radius
-            if (dEdge < 15f) {
-                val clampedEdge = max(0f, dEdge)
-                risk += p.weight * kotlin.math.exp(-((clampedEdge * clampedEdge) / 40f)).toFloat() * 2.5f
-            }
-        }
-
-        if (cand.zSec < 80f) risk += ((80f - cand.zSec) / 10f) * 4f
-        else if (cand.zSec < 150f) risk += ((150f - cand.zSec) / 70f) * 1.5f
-
-        risk += 0.05f * abs(cand.ang)
-
-        // Hysteresis margin
-        if (prevAngle != null && prevAngle.isFinite() && abs(cand.ang - prevAngle) <= 3.5f) {
-            risk -= 1.0f
-        }
-
-        if (risk < minRisk) {
-            minRisk = risk
-            bestAngle = cand.ang
+    // Priority 1: HOLD FORWARD
+    var fwdEligible = false
+    var fwdDist = Float.NaN
+    var fwdRisk = Float.MAX_VALUE
+    for (c in eligibleCandidates) {
+        if (abs(c.ang - 0f) < 1.5f) {
+            fwdEligible = true
+            fwdDist = c.zSec
+            fwdRisk = c.risk
+            break
         }
     }
 
-    if (minRisk > 30f || (threat == "CRITICAL" && validC && zCenter < 40f)) {
+    val fwdEncroached = profiles.any { p -> abs(p.angCenter) < p.radius }
+
+    if (fwdEligible && !fwdEncroached && fwdDist >= 75f && fwdRisk <= 4f) {
+        var angleOut = 0f
+        if (prevAngle != null && prevAngle.isFinite()) {
+            angleOut = 0.35f * 0f + 0.65f * prevAngle
+            if (abs(angleOut) < 1.0f) angleOut = 0f
+        }
+        return DirectionalAdvisory("AVAILABLE", angleOut, 0.55f, obsRange, nowNanos)
+    }
+
+    // Priority 2: SMALL CORRECTION
+    val smallCandidates = eligibleCandidates.filter { abs(it.ang) <= 12.5f }
+    if (smallCandidates.isNotEmpty()) {
+        val bestSc = smallCandidates.minByOrNull { it.risk + 0.08f * abs(it.ang) }!!
+        if (bestSc.risk < 20f && (!fwdEligible || fwdEncroached || bestSc.risk < fwdRisk - 0.5f)) {
+            var scAngle = bestSc.ang
+            if (prevAngle != null && prevAngle.isFinite()) {
+                scAngle = 0.45f * scAngle + 0.55f * prevAngle
+            }
+            scAngle = max(-halfFov, min(halfFov, scAngle))
+            val conf = max(0.35f, min(0.55f, 1f - (bestSc.risk / 35f)))
+            return DirectionalAdvisory("AVAILABLE", scAngle, conf, obsRange, nowNanos)
+        }
+    }
+
+    // Priority 3: ALTERNATIVE HEADING
+    var bestCand = 0f
+    var minCost = Float.MAX_VALUE
+    for (c in eligibleCandidates) {
+        var cost = c.risk + 0.08f * abs(c.ang)
+        if (prevAngle != null && prevAngle.isFinite()) {
+            cost += 0.05f * abs(c.ang - prevAngle)
+        }
+        if (cost < minCost) {
+            minCost = cost
+            bestCand = c.ang
+        }
+    }
+
+    if (minCost > 30f || (threat == "CRITICAL" && validC && zCenter < 40f)) {
         return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
     }
 
-    val conf = max(0.30f, min(0.55f, 1f - (minRisk / 35f)))
-    var selected = bestAngle
+    val conf = max(0.30f, min(0.55f, 1f - (minCost / 35f)))
+    var selected = bestCand
     if (prevAngle != null && prevAngle.isFinite()) {
         selected = 0.45f * selected + 0.55f * prevAngle
     }

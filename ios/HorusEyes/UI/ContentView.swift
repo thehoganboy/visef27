@@ -120,6 +120,7 @@ func estimateDirectionalAdvisory(
     struct Candidate {
         let ang: Double
         let zSec: Double
+        let risk: Double
     }
     var eligibleCandidates: [Candidate] = []
     var obstructedCount = 0
@@ -136,22 +137,49 @@ func estimateDirectionalAdvisory(
         if !secValid { continue }
 
         var isBlocked = false
-        for p in profiles {
-            let dAng = abs(cand - p.angCenter)
-            if !p.isValidDist {
-                if dAng < p.radius { isBlocked = true; break }
-            } else {
-                if p.zObs < 50.0 && dAng < p.radius { isBlocked = true; break }
-                if p.zObs < 35.0 && dAng < (p.radius + 2.0) { isBlocked = true; break }
+        if zSec < 40.0 { isBlocked = true }
+
+        if !isBlocked {
+            for p in profiles {
+                let dAng = abs(cand - p.angCenter)
+                if !p.isValidDist {
+                    if dAng < p.radius { isBlocked = true; break }
+                } else {
+                    if p.zObs < 50.0 && dAng < p.radius { isBlocked = true; break }
+                    if p.zObs < 35.0 && dAng < (p.radius + 2.0) { isBlocked = true; break }
+                }
             }
         }
-        if zSec < 40.0 { isBlocked = true }
 
         if isBlocked {
             obstructedCount += 1
             continue
         }
-        eligibleCandidates.append(Candidate(ang: cand, zSec: zSec))
+
+        var risk = 0.0
+        for p in profiles {
+            let dAng = abs(cand - p.angCenter)
+            if dAng < p.radius {
+                let penetration = 1.0 - (dAng / p.radius)
+                risk += p.weight * (penetration * penetration) * 15.0
+            } else {
+                let dEdge = dAng - p.radius
+                if dEdge < 15.0 {
+                    risk += p.weight * exp(-((dEdge * dEdge) / 40.0)) * 2.0
+                }
+            }
+        }
+
+        if zSec < 80.0 { risk += ((80.0 - zSec) / 10.0) * 4.0 }
+        else if zSec < 150.0 { risk += ((150.0 - zSec) / 70.0) * 1.5 }
+
+        risk += 0.05 * abs(cand)
+
+        if let prev = prevAngle, prev.isFinite, abs(cand - prev) <= 3.5 {
+            risk -= 1.0
+        }
+
+        eligibleCandidates.append(Candidate(ang: cand, zSec: zSec, risk: risk))
     }
 
     // Step 5C: Evaluate outcomes when no candidate is eligible
@@ -163,43 +191,68 @@ func estimateDirectionalAdvisory(
         }
     }
 
-    // Step 6: Score ONLY eligible candidates
-    var bestAngle = 0.0
-    var minRisk = Double.infinity
+    // ── Step 6: Hierarchical Movement Policy (Directive Section 3) ──
 
-    for cand in eligibleCandidates {
-        var risk = 0.0
-        for p in profiles {
-            let dAng = abs(cand.ang - p.angCenter)
-            let dEdge = dAng - p.radius
-            if dEdge < 15.0 {
-                let clampedEdge = max(0.0, dEdge)
-                risk += p.weight * exp(-((clampedEdge * clampedEdge) / 40.0)) * 2.5
-            }
-        }
-
-        if cand.zSec < 80.0 { risk += ((80.0 - cand.zSec) / 10.0) * 4.0 }
-        else if cand.zSec < 150.0 { risk += ((150.0 - cand.zSec) / 70.0) * 1.5 }
-
-        risk += 0.05 * abs(cand.ang)
-
-        // Hysteresis margin
-        if let prev = prevAngle, prev.isFinite, abs(cand.ang - prev) <= 3.5 {
-            risk -= 1.0
-        }
-
-        if risk < minRisk {
-            minRisk = risk
-            bestAngle = cand.ang
+    // Priority 1: HOLD FORWARD
+    var fwdEligible = false
+    var fwdDist = Double.nan
+    var fwdRisk = Double.infinity
+    for c in eligibleCandidates {
+        if abs(c.ang - 0.0) < 1.5 {
+            fwdEligible = true
+            fwdDist = c.zSec
+            fwdRisk = c.risk
+            break
         }
     }
 
-    if minRisk > 30.0 || (threat == "CRITICAL" && validC && zCenter < 40.0) {
+    let fwdEncroached = profiles.contains { p in abs(p.angCenter) < p.radius }
+
+    if fwdEligible && !fwdEncroached && fwdDist >= 75.0 && fwdRisk <= 4.0 {
+        var angleOut = 0.0
+        if let prev = prevAngle, prev.isFinite {
+            angleOut = 0.35 * 0.0 + 0.65 * prev
+            if abs(angleOut) < 1.0 { angleOut = 0.0 }
+        }
+        return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angleOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: now)
+    }
+
+    // Priority 2: SMALL CORRECTION
+    let smallCandidates = eligibleCandidates.filter { abs($0.ang) <= 12.5 }
+    if !smallCandidates.isEmpty {
+        if let bestSc = smallCandidates.min(by: { ($0.risk + 0.08 * abs($0.ang)) < ($1.risk + 0.08 * abs($1.ang)) }) {
+            if bestSc.risk < 20.0 && (!fwdEligible || fwdEncroached || bestSc.risk < fwdRisk - 0.5) {
+                var scAngle = bestSc.ang
+                if let prev = prevAngle, prev.isFinite {
+                    scAngle = 0.45 * scAngle + 0.55 * prev
+                }
+                scAngle = max(-halfFov, min(halfFov, scAngle))
+                let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
+                return DirectionalAdvisory(state: "AVAILABLE", angleDeg: scAngle, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: now)
+            }
+        }
+    }
+
+    // Priority 3: ALTERNATIVE HEADING
+    var bestCand = 0.0
+    var minCost = Double.infinity
+    for c in eligibleCandidates {
+        var cost = c.risk + 0.08 * abs(c.ang)
+        if let prev = prevAngle, prev.isFinite {
+            cost += 0.05 * abs(c.ang - prev)
+        }
+        if cost < minCost {
+            minCost = cost
+            bestCand = c.ang
+        }
+    }
+
+    if minCost > 30.0 || (threat == "CRITICAL" && validC && zCenter < 40.0) {
         return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
     }
 
-    let conf = max(0.30, min(0.55, 1.0 - (minRisk / 35.0)))
-    var selected = bestAngle
+    let conf = max(0.30, min(0.55, 1.0 - (minCost / 35.0)))
+    var selected = bestCand
     if let prev = prevAngle, prev.isFinite {
         selected = 0.45 * selected + 0.55 * prev
     }
@@ -332,13 +385,14 @@ struct ContentView: View {
             }.clipped()
             Button(action: model.toggle) {
                 Text(model.active ? "DỪNG" : "CHẠY")
-                    .font(.system(size: 26, weight: .bold))
-                    .frame(maxWidth: .infinity, minHeight: 76)
+                    .font(.system(size: 28, weight: .bold))
+                    .frame(maxWidth: .infinity, minHeight: 110)
                     .foregroundColor(model.active ? Color.white : Color(white: 0.08))
-                    .background(model.active ? Color(red: 0.92, green: 0.31, blue: 0.31) : Color(white: 0.88)).cornerRadius(16)
+                    .background(model.active ? Color(red: 0.92, green: 0.31, blue: 0.31) : Color(white: 0.88)).cornerRadius(20)
             }
             .accessibilityLabel(model.active ? "Dừng nhận thức tránh va chạm" : "Bắt đầu nhận thức tránh va chạm")
-            .padding(20)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 16)
         }
         .background(Color(white: 0.07))
         .onAppear { model.appear() }

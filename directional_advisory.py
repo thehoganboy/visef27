@@ -105,6 +105,7 @@ def estimate_directional_advisory(
     # 3. Explicit validity-aware sector extraction (no fabricated 250cm fallback)
     sector_dists = getattr(observation, "sector_dists", {}) or {}
     spatial_val = getattr(observation, "spatial_validity", {}) or {}
+    spatial_bins = getattr(observation, "spatial_bins", None)
 
     def classify_sector(sec_name: str) -> tuple[str, float]:
         """Classify sector into VALID, UNKNOWN, INVALID, STALE."""
@@ -136,7 +137,16 @@ def estimate_directional_advisory(
     if (status_c == "VALID" and z_center < 50.0 and
             status_l == "VALID" and z_left < 60.0 and
             status_r == "VALID" and z_right < 60.0):
-        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+        # If spatial_bins are present, check whether central corridor bins are actually open
+        # (doorway scenario: doorposts make sector averages close, but central gap is open)
+        if spatial_bins and len(spatial_bins) > 0:
+            c_bins = [b for b in spatial_bins if abs(getattr(b, "angle_center", 99.0)) <= 6.0 and getattr(b, "is_valid", False)]
+            if c_bins and all(getattr(b, "dist_cm", 0.0) >= 75.0 for b in c_bins if math.isfinite(getattr(b, "dist_cm", 0.0))):
+                pass  # Central corridor is open; proceed to hierarchical corridor evaluation
+            else:
+                return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+        else:
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
 
     # 4. Map obstacles to angular span and risk weights
     # Remove remaining fabricated 100cm fallback: preserve unknown-distance obstacles by their angular bbox
@@ -229,75 +239,78 @@ def estimate_directional_advisory(
         ang += 2.5
 
     # Step 5B: Determine eligibility for each candidate heading
-    # Hard rejection rules (P0-01):
-    # 1. Sector information for candidate is invalid, unobservable, or stale
-    # 2. Candidate intersects the angular footprint of an unknown-distance obstacle
-    # 3. Candidate intersects a confirmed hazardous obstacle's required clearance envelope
+    # Evaluates candidate corridors against localized spatial bins or sectors
     eligible_candidates = []
     untrustworthy_sector_count = 0
     obstructed_count = 0
 
     for cand in all_candidates:
-        # 1. Sector support & validity requirement
-        if cand < -10.0:
-            sec_status, z_sec = status_l, z_left
-        elif cand > 10.0:
-            sec_status, z_sec = status_r, z_right
-        else:
-            sec_status, z_sec = status_c, z_center
+        # 1. Observation support and corridor distance extraction
+        cand_supported = False
+        cand_dist = float("nan")
 
-        if sec_status != "VALID":
+        if spatial_bins and len(spatial_bins) > 0:
+            c_min = cand - 5.0
+            c_max = cand + 5.0
+            overlapping = [
+                b for b in spatial_bins
+                if not (getattr(b, "angle_max", -99.0) < c_min or getattr(b, "angle_min", 99.0) > c_max)
+            ]
+            if overlapping:
+                valid_bins = [b for b in overlapping if getattr(b, "is_valid", False)]
+                if len(valid_bins) >= max(1, len(overlapping) // 2):
+                    dists = [getattr(b, "dist_cm", float("nan")) for b in valid_bins]
+                    valid_dists = [d for d in dists if math.isfinite(d) and d > 0]
+                    if valid_dists:
+                        cand_supported = True
+                        cand_dist = min(valid_dists)
+        else:
+            # 3-sector fallback for legacy mocks or tests without spatial_bins
+            if cand < -10.0:
+                sec_status, z_sec = status_l, z_left
+            elif cand > 10.0:
+                sec_status, z_sec = status_r, z_right
+            else:
+                sec_status, z_sec = status_c, z_center
+            if sec_status == "VALID":
+                cand_supported = True
+                cand_dist = z_sec
+
+        if not cand_supported:
             untrustworthy_sector_count += 1
             continue
 
-        # 2. Hard obstacle intersection checks
+        # 2. Hard obstacle and proximity intersection checks
         is_blocked = False
-        for ang_c, radius, weight, z_obs, is_valid_dist in obstacle_profiles:
-            d_ang = abs(cand - ang_c)
-            if not is_valid_dist:
-                # Unknown-distance obstacle: hard rejection if heading falls within angular footprint
-                if d_ang < radius:
-                    is_blocked = True
-                    break
-            else:
-                # Valid distance obstacle: hard rejection if hazardous proximity (z < 50cm) and heading intersects safety radius
-                if z_obs < 50.0 and d_ang < radius:
-                    is_blocked = True
-                    break
-                if z_obs < 35.0 and d_ang < (radius + 2.0):
-                    is_blocked = True
-                    break
-
-        if z_sec < 40.0:
+        if cand_dist < 40.0:
             is_blocked = True
+
+        if not is_blocked:
+            for ang_c, radius, weight, z_obs, is_valid_dist in obstacle_profiles:
+                d_ang = abs(cand - ang_c)
+                if not is_valid_dist:
+                    # Unknown-distance obstacle: hard rejection if heading falls within angular footprint
+                    if d_ang < radius:
+                        is_blocked = True
+                        break
+                else:
+                    # Valid distance obstacle: hard rejection if hazardous proximity (z < 50cm) and heading intersects safety radius
+                    if z_obs < 50.0 and d_ang < radius:
+                        is_blocked = True
+                        break
+                    if z_obs < 35.0 and d_ang < (radius + 2.0):
+                        is_blocked = True
+                        break
 
         if is_blocked:
             obstructed_count += 1
             continue
 
-        eligible_candidates.append((cand, z_sec))
-
-    # Step 5C: Evaluate outcomes when no candidate is eligible
-    if not eligible_candidates:
-        # If all candidates were rejected due to verified obstacle blockages, path is genuinely blocked -> STOP
-        # If candidates were rejected due to untrustworthy/missing sector data, evidence is insufficient -> UNAVAILABLE
-        if obstructed_count > 0 and (obstructed_count >= len(all_candidates) * 0.5 or (status_c == "VALID" and z_center < 50.0)):
-            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
-        else:
-            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, observed_angular_range=obs_range, source_timestamp=adv_ts)
-
-    # Step 6: Score ONLY eligible candidates
-    best_candidate = 0.0
-    min_risk = float("inf")
-
-    for cand, z_sec in eligible_candidates:
+        # 3. Candidate Risk Scoring
         risk = 0.0
-
-        # Obstacle proximity risk penalties (soft repulsion for eligible candidates passing nearby obstacles)
         for ang_c, radius, weight, z_obs, is_valid_dist in obstacle_profiles:
             d_ang = abs(cand - ang_c)
             if d_ang < radius:
-                # Penetration into obstacle safety envelope
                 penetration = 1.0 - (d_ang / radius)
                 risk += weight * (penetration ** 2) * 15.0
             else:
@@ -305,35 +318,103 @@ def estimate_directional_advisory(
                 if d_edge < 15.0:
                     risk += weight * math.exp(-(d_edge ** 2) / 40.0) * 2.0
 
-        # Sector proximity penalty from verified sector distance
-        if z_sec < 80.0:
-            risk += ((80.0 - z_sec) / 10.0) * 4.0
-        elif z_sec < 150.0:
-            risk += ((150.0 - z_sec) / 70.0) * 1.5
+        if cand_dist < 80.0:
+            risk += ((80.0 - cand_dist) / 10.0) * 4.0
+        elif cand_dist < 150.0:
+            risk += ((150.0 - cand_dist) / 70.0) * 1.5
 
-        # Straightforward bias (small penalty for deviating from center)
+        # Straightforward bias
         risk += 0.05 * abs(cand)
 
-        # Hysteresis bonus: slightly favor candidate near previous heading to prevent jitter
+        # Hysteresis bonus for previous heading to prevent jitter
         if prev_angle is not None and math.isfinite(prev_angle):
             if abs(cand - prev_angle) <= 3.5:
                 risk -= 1.0
 
-        if risk < min_risk:
-            min_risk = risk
+        eligible_candidates.append((cand, cand_dist, risk))
+
+    # Step 5C: Evaluate outcomes when no candidate is eligible
+    if not eligible_candidates:
+        if obstructed_count > 0 and (obstructed_count >= len(all_candidates) * 0.5 or (status_c == "VALID" and z_center < 50.0)):
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+        else:
+            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, observed_angular_range=obs_range, source_timestamp=adv_ts)
+
+    # ── Step 6: Hierarchical Movement Policy (Directive Section 3) ──
+
+    # Priority 1: HOLD FORWARD
+    # If the forward corridor is adequately supported, has acceptable clearance,
+    # and has no encroaching obstacles, maintain theta = 0.0 without chasing side advantages.
+    fwd_eligible = False
+    fwd_dist = float("nan")
+    fwd_risk = float("inf")
+    for cand, dist, r in eligible_candidates:
+        if abs(cand - 0.0) < 1.5:
+            fwd_eligible = True
+            fwd_dist = dist
+            fwd_risk = r
+            break
+
+    fwd_encroached = any(
+        (abs(ang_c) < radius)
+        for ang_c, radius, weight, z_obs, is_valid_dist in obstacle_profiles
+    )
+
+    if fwd_eligible and not fwd_encroached and fwd_dist >= 75.0 and fwd_risk <= 4.0:
+        angle_out = 0.0
+        if prev_angle is not None and math.isfinite(prev_angle):
+            # Smoothly decay any previous steering back to 0.0
+            angle_out = 0.35 * 0.0 + 0.65 * prev_angle
+            if abs(angle_out) < 1.0:
+                angle_out = 0.0
+        return DirectionalAdvisory(
+            state=DirectionState.AVAILABLE,
+            angle_deg=round(angle_out, 1),
+            confidence=0.55,
+            observed_angular_range=obs_range,
+            source_timestamp=adv_ts
+        )
+
+    # Priority 2: SMALL CORRECTION
+    # If lateral clearance shrinks (e.g. drifting toward doorpost or side boundary),
+    # recommend a small, restrained correction within [-12.5, +12.5] deg.
+    small_candidates = [(c, d, r) for c, d, r in eligible_candidates if abs(c) <= 12.5]
+    if small_candidates:
+        best_sc = min(small_candidates, key=lambda x: x[2] + 0.08 * abs(x[0]))
+        # Favor small correction if it is safe and provides better clearance than center (or center is encroached/ineligible)
+        if best_sc[2] < 20.0 and (not fwd_eligible or fwd_encroached or best_sc[2] < fwd_risk - 0.5):
+            sc_angle = best_sc[0]
+            if prev_angle is not None and math.isfinite(prev_angle):
+                sc_angle = 0.45 * sc_angle + 0.55 * prev_angle
+            sc_angle = max(-half_fov, min(half_fov, sc_angle))
+            conf = max(0.35, min(0.55, 1.0 - (best_sc[2] / 35.0)))
+            return DirectionalAdvisory(
+                state=DirectionState.AVAILABLE,
+                angle_deg=round(sc_angle, 1),
+                confidence=round(conf, 2),
+                observed_angular_range=obs_range,
+                source_timestamp=adv_ts
+            )
+
+    # Priority 3: ALTERNATIVE HEADING
+    # Forward is blocked/compromised: evaluate candidate corridors across observed FOV.
+    best_candidate = 0.0
+    min_cost = float("inf")
+    for cand, dist, r in eligible_candidates:
+        total_cost = r + 0.08 * abs(cand)
+        if prev_angle is not None and math.isfinite(prev_angle):
+            total_cost += 0.05 * abs(cand - prev_angle)
+        if total_cost < min_cost:
+            min_cost = total_cost
             best_candidate = cand
 
-    # Step 7: Safety boundary check on eligible candidates
-    if min_risk > 30.0 or (threat == "CRITICAL" and status_c == "VALID" and z_center < 40.0):
+    if min_cost > 30.0 or (threat == "CRITICAL" and status_c == "VALID" and z_center < 40.0):
         return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
 
-    # Step 8: Confidence & Temporal Smoothing
-    confidence = max(0.30, min(0.55, 1.0 - (min_risk / 35.0)))
+    confidence = max(0.30, min(0.55, 1.0 - (min_cost / 35.0)))
     selected_angle = best_candidate
     if prev_angle is not None and math.isfinite(prev_angle):
         selected_angle = 0.45 * selected_angle + 0.55 * prev_angle
-
-    # Clamp strictly to observed angular range
     selected_angle = max(-half_fov, min(half_fov, selected_angle))
 
     return DirectionalAdvisory(

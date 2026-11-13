@@ -46,8 +46,8 @@ def main():
     if args.export_video:
         mp4_path = str(dest / 'annotated_replay.mp4')
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        # Viewport render is 480w x 800h portrait
-        video_writer = cv2.VideoWriter(mp4_path, fourcc, min(fps, 30.0), (480, 800))
+        # Viewport render is landscape dual-panel (1280w x 720h)
+        video_writer = cv2.VideoWriter(mp4_path, fourcc, min(fps, 30.0), (view.width, view.height))
 
     rows = []
     start = time.monotonic()
@@ -96,7 +96,7 @@ def main():
             else:
                 prev_angle = None
 
-            canvas = view.render(frame, obs, k.threat_level, now=pts, advisory=adv)
+            canvas = view.render(frame, obs, k.threat_level, now=pts, advisory=adv, depth_viz=norm)
             t5 = time.perf_counter()
 
             if video_writer is not None:

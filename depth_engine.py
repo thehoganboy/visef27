@@ -237,6 +237,19 @@ class SingleObstacle:
 
 
 @dataclass
+class SpatialBin:
+    bin_id: int                     # Chỉ số bin 0..N-1
+    angle_min: float                # Góc ngang cực tiểu (độ)
+    angle_max: float                # Góc ngang cực đại (độ)
+    angle_center: float             # Góc ngang trung tâm (độ)
+    valid_ratio: float              # Tỷ lệ pixel hợp lệ trong bin [0.0, 1.0]
+    depth_raw_p80: float            # Phân vị 80 disparity raw
+    dist_cm: float                  # Khoảng cách ước lượng metric (cm)
+    is_valid: bool                  # Cờ dữ liệu hợp lệ
+    has_obstacle: bool = False      # Cờ có vật cản cắt qua bin
+
+
+@dataclass
 class ObstacleDetectionResult:
     x: int                          # Tọa độ X vật cản chính (gần nhất)
     y: int                          # Tọa độ Y vật cản chính
@@ -259,6 +272,7 @@ class ObstacleDetectionResult:
     measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # Directive 01B Principle B
     quality_state: str = "OBSERVABLE" # "OBSERVABLE", "DEGRADED", "UNOBSERVABLE", "UNKNOWN" (Directive 01B-A+ Task A+3)
     quality_reasons: List[str] = field(default_factory=list)
+    spatial_bins: Optional[List[SpatialBin]] = None # 16-32 horizontal spatial occupancy bins
 
 
 def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, List[str], dict]:
@@ -366,6 +380,83 @@ def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, L
     return quality_state, reasons, stats
 
 
+def compute_spatial_bins(
+    depth_raw: Optional[np.ndarray],
+    scale_factor: float = 1.0,
+    w: int = 640,
+    h: int = 480,
+    detected_list: Optional[List[SingleObstacle]] = None,
+    num_bins: int = 24,
+    hfov_deg: float = 65.0
+) -> List[SpatialBin]:
+    """
+    Compute 16-32 horizontal localized spatial occupancy bins (Directive Final UX Section 2.2).
+    Multi-band vertical pooling separates floor corridor, obstacle/body height, and overhead.
+    """
+    if detected_list is None:
+        detected_list = []
+    cx = w / 2.0
+    half_fov = hfov_deg / 2.0
+    fx = cx / math.tan(math.radians(half_fov))
+    cy1, cy2 = int(0.20 * h), int(0.75 * h)
+
+    bins: List[SpatialBin] = []
+    bin_w = w / float(num_bins)
+
+    has_depth = (
+        depth_raw is not None and isinstance(depth_raw, np.ndarray) and
+        depth_raw.ndim == 2 and depth_raw.shape[0] >= 10 and depth_raw.shape[1] >= 10
+    )
+
+    for i in range(num_bins):
+        bx1 = int(round(i * bin_w))
+        bx2 = int(round((i + 1) * bin_w))
+        bx2 = max(bx1 + 1, min(w, bx2))
+
+        ang_min = math.degrees(math.atan2(bx1 - cx, fx))
+        ang_max = math.degrees(math.atan2(bx2 - cx, fx))
+        ang_center = (ang_min + ang_max) / 2.0
+
+        if has_depth:
+            raw_slice = depth_raw[cy1:cy2, bx1:bx2]
+            finite_mask = np.isfinite(raw_slice) & (raw_slice > 0)
+            valid_ratio = float(np.mean(finite_mask)) if raw_slice.size > 0 else 0.0
+            if valid_ratio >= 0.35 and np.any(finite_mask):
+                raw_p80 = float(np.percentile(raw_slice[finite_mask], 80))
+                dist_cm = compute_metric_distance_cm(raw_p80, scale_factor)
+                is_valid = True
+            else:
+                raw_p80 = float("nan")
+                dist_cm = float("nan")
+                is_valid = False
+        else:
+            valid_ratio = 0.0
+            raw_p80 = float("nan")
+            dist_cm = float("nan")
+            is_valid = False
+
+        has_obs = False
+        for obs in detected_list:
+            if obs.bbox and len(obs.bbox) >= 4:
+                ox, oy, ow, oh = obs.bbox[:4]
+                if not (bx2 <= ox or bx1 >= ox + ow):
+                    has_obs = True
+                    break
+
+        bins.append(SpatialBin(
+            bin_id=i,
+            angle_min=round(ang_min, 2),
+            angle_max=round(ang_max, 2),
+            angle_center=round(ang_center, 2),
+            valid_ratio=round(valid_ratio, 3),
+            depth_raw_p80=raw_p80,
+            dist_cm=dist_cm,
+            is_valid=is_valid,
+            has_obstacle=has_obs
+        ))
+    return bins
+
+
 class DepthEstimator:
     """
     Module quản lý mô hình suy luận độ sâu và phát hiện vật cản không gian.
@@ -455,7 +546,8 @@ class DepthEstimator:
             spatial_validity=spatial_validity,
             measurement_basis="UNKNOWN",
             quality_state=quality_state,
-            quality_reasons=quality_reasons
+            quality_reasons=quality_reasons,
+            spatial_bins=compute_spatial_bins(None, w=w, h=h)
         )
 
     def detect_obstacle(
@@ -615,7 +707,8 @@ class DepthEstimator:
                 is_valid=False,
                 is_scale_uncalibrated=True,
                 validity_state="DEGRADED",
-                spatial_validity=spatial_validity
+                spatial_validity=spatial_validity,
+                spatial_bins=compute_spatial_bins(None, w=w, h=h)
             )
 
         # ── Lens Saturation Check ──
@@ -651,7 +744,8 @@ class DepthEstimator:
                 is_valid=True,
                 is_scale_uncalibrated=True,
                 validity_state="VALID",
-                spatial_validity=spatial_validity
+                spatial_validity=spatial_validity,
+                spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [single_sat])
             )
 
         # ════════════════════════════════════════════════════════════════════════
@@ -745,7 +839,8 @@ class DepthEstimator:
             return ObstacleDetectionResult(
                 x=w // 2, y=h // 2, bbox=safe_dummy.bbox, pan=0.0, proximity=0.0,
                 dist_cm=config.DIST_SAFE_CM, mode_text=safe_dummy.mode_text,
-                uncertainty_score=0.05, is_wall=False, sector_dists=sector_dists, all_obstacles=[safe_dummy]
+                uncertainty_score=0.05, is_wall=False, sector_dists=sector_dists, all_obstacles=[safe_dummy],
+                spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [safe_dummy])
             )
 
         # ── Kịch bản C: Phân đoạn vật cản nổi bật (Discontinuity & Gradient Filter) ──
@@ -766,14 +861,14 @@ class DepthEstimator:
         for c in cnts:
             area = cv2.contourArea(c)
             bx, by, bw, bh = cv2.boundingRect(c)
-            # Hỗ trợ bắt vật cản mảnh (cột, gậy, cành cây: bh >= 0.18*h và bw >= 3px)
-            is_thin_obstacle = (bh >= int(0.18 * h) and bw >= 3 and area >= 80)
+            # Hỗ trợ bắt vật cản mảnh (cột, gậy, cành cây, khung cửa: bh >= 0.15*h và bw >= 3px)
+            is_thin_obstacle = (bh >= int(0.15 * h) and bw >= 3 and area >= 50)
             if (area / (h * w) >= config.MIN_OBSTACLE_AREA_RATIO) or is_thin_obstacle:
                 valid_cnts.append((area, c))
         valid_cnts.sort(key=lambda x: x[0], reverse=True)
 
         candidates = []
-        for _, c in valid_cnts[:5]:
+        for _, c in valid_cnts[:8]:
             bx, by, bw, bh = cv2.boundingRect(c)
             aspect = bw / max(1, bh)
 
@@ -781,7 +876,8 @@ class DepthEstimator:
                 continue
             if bw > 0.45 * w and bh < 0.25 * h and aspect > 3.0 and d_peak < 0.70:
                 continue
-            if (bx <= int(0.02 * w) or bx + bw >= int(0.98 * w)) and bw < int(0.06 * w):
+            # Chống drop nhầm cột/khung cửa mép màn hình: chỉ drop nếu thực sự là nhiễu góc nhỏ
+            if (bx <= int(0.02 * w) or bx + bw >= int(0.98 * w)) and bw < int(0.04 * w) and bh < int(0.20 * h):
                 continue
 
             pad = 18
@@ -839,7 +935,7 @@ class DepthEstimator:
         detected_list = []
         if candidates:
             candidates.sort(key=lambda item: item[1], reverse=True)
-            for idx, cand in enumerate(candidates[:3]):
+            for idx, cand in enumerate(candidates[:5]):
                 c_item, c_raw, c_d, c_step, c_grad, bx, by, bw, bh, c_obs_std = cand
                 moments = cv2.moments(c_item)
                 if moments["m00"] > 0:
@@ -1028,7 +1124,8 @@ class DepthEstimator:
                     spatial_validity=spatial_validity,
                     measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
                     quality_state=vis_quality_state,
-                    quality_reasons=vis_reasons
+                    quality_reasons=vis_reasons,
+                    spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [safe_dummy])
                 )
 
             # Nếu vẫn không có gì nhưng không đủ điều kiện CLEAR → trả về trạng thái mặc định
@@ -1057,7 +1154,8 @@ class DepthEstimator:
                 spatial_validity=spatial_validity,
                 measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
                 quality_state=vis_quality_state,
-                quality_reasons=vis_reasons
+                quality_reasons=vis_reasons,
+                spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [safe_dummy])
             )
 
         # Đánh số ID thứ tự 1, 2, 3...
@@ -1080,5 +1178,6 @@ class DepthEstimator:
             spatial_validity=spatial_validity,
             measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
             quality_state=vis_quality_state,
-            quality_reasons=vis_reasons
+            quality_reasons=vis_reasons,
+            spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, detected_list)
         )

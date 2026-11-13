@@ -11,7 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from depth_engine import DepthEstimator, ObstacleDetectionResult, SingleObstacle, _verify_onnx_sha256
+from depth_engine import DepthEstimator, ObstacleDetectionResult, SingleObstacle, SpatialBin, _verify_onnx_sha256
 from motion_ttc import KinematicsEngine
 from auditory_budget import AuditoryBudgetManager
 from demo_runtime import DemoRuntime
@@ -73,8 +73,8 @@ def test_aspect_fit_and_button_geometry():
     scale, x, y = aspect_fit(640, 480, 480, 680)
     assert (scale, x, y) == (.75, 0, 160)
     view = DemoViewport()
-    assert view.render(np.zeros((480, 640, 3), np.uint8)).shape == (800, 480, 3)
-    assert view.button_hit(200, 740) and not view.button_hit(200, 100)
+    assert view.render(np.zeros((480, 640, 3), np.uint8)).shape == (720, 1280, 3)
+    assert view.button_hit(640, 640) and not view.button_hit(640, 100)
 
 def test_watchdog_remains_active_during_inference_and_stop_rejects_result():
     entered, release = threading.Event(), threading.Event()
@@ -435,4 +435,120 @@ def test_pause_resume_clears_heading_history():
     assert adv_paused.state == DirectionState.UNKNOWN
     assert adv_paused.angle_deg is None
     assert adv_paused.drawable_angle(10.1) is None
+
+
+def test_doorway_scenarios_1_to_6():
+    """Verify Section 8.1 Doorway Scenarios 1-6."""
+    def make_bins(distances, valids=None):
+        bins = []
+        n = len(distances)
+        for i, d in enumerate(distances):
+            ang_min = -32.5 + i * (65.0 / n)
+            ang_max = ang_min + (65.0 / n)
+            is_v = True if valids is None else valids[i]
+            bins.append(SpatialBin(
+                bin_id=i,
+                angle_min=ang_min,
+                angle_max=ang_max,
+                angle_center=(ang_min + ang_max) / 2.0,
+                valid_ratio=1.0 if is_v else 0.0,
+                depth_raw_p80=500.0,
+                dist_cm=d if is_v else float("nan"),
+                is_valid=is_v
+            ))
+        return bins
+
+    # Doorway 1: Centered doorway
+    # Left doorpost at -22 deg (60cm), Right doorpost at +22 deg (60cm), Center is open (220cm)
+    obs_post_l = SingleObstacle(1, 150, 240, (120, 100, 60, 280), -0.5, 0.8, 60.0, "DOORPOST_L", 0.1, False)
+    obs_post_r = SingleObstacle(2, 490, 240, (460, 100, 60, 280), 0.5, 0.8, 60.0, "DOORPOST_R", 0.1, False)
+    b_dists = [60.0]*7 + [220.0]*10 + [60.0]*7
+    bins1 = make_bins(b_dists)
+    res1 = ObstacleDetectionResult(
+        x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.2, dist_cm=220.0,
+        mode_text="DOORWAY_CENTER", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 60.0, "CENTER": 220.0, "RIGHT": 60.0},
+        all_obstacles=[obs_post_l, obs_post_r], is_valid=True,
+        spatial_bins=bins1
+    )
+    adv1 = estimate_directional_advisory(res1, threat="WARNING", now=10.0)
+    assert adv1.state == DirectionState.AVAILABLE
+    assert adv1.angle_deg == 0.0  # Preference 1: HOLD FORWARD
+
+    # Doorway 2: Offset toward right
+    obs_post_r2 = SingleObstacle(2, 420, 240, (390, 100, 60, 280), 0.3, 0.9, 55.0, "DOORPOST_R", 0.1, False)
+    b_dists2 = [220.0]*11 + [55.0]*13
+    bins2 = make_bins(b_dists2)
+    res2 = ObstacleDetectionResult(
+        x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.5, dist_cm=180.0,
+        mode_text="DOORWAY_RIGHT_OFFSET", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 220.0, "CENTER": 180.0, "RIGHT": 55.0},
+        all_obstacles=[obs_post_r2], is_valid=True,
+        spatial_bins=bins2
+    )
+    adv2 = estimate_directional_advisory(res2, threat="WARNING", now=10.0)
+    assert adv2.state == DirectionState.AVAILABLE
+    assert -12.5 <= adv2.angle_deg < 0.0  # Preference 2: SMALL CORRECTION LEFT
+
+    # Doorway 3: Offset toward left
+    obs_post_l3 = SingleObstacle(1, 220, 240, (190, 100, 60, 280), -0.3, 0.9, 55.0, "DOORPOST_L", 0.1, False)
+    b_dists3 = [55.0]*13 + [220.0]*11
+    bins3 = make_bins(b_dists3)
+    res3 = ObstacleDetectionResult(
+        x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.5, dist_cm=180.0,
+        mode_text="DOORWAY_LEFT_OFFSET", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 55.0, "CENTER": 180.0, "RIGHT": 220.0},
+        all_obstacles=[obs_post_l3], is_valid=True,
+        spatial_bins=bins3
+    )
+    adv3 = estimate_directional_advisory(res3, threat="WARNING", now=10.0)
+    assert adv3.state == DirectionState.AVAILABLE
+    assert 0.0 < adv3.angle_deg <= 12.5  # Preference 2: SMALL CORRECTION RIGHT
+
+    # Doorway 4: Passage visibly open but depth partially invalid at irrelevant image edge
+    b_valids4 = [False]*4 + [True]*20
+    b_dists4 = [float("nan")]*4 + [200.0]*20
+    bins4 = make_bins(b_dists4, b_valids4)
+    res4 = ObstacleDetectionResult(
+        x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.2, dist_cm=200.0,
+        mode_text="DOORWAY_EDGE_INVALID", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": float("nan"), "CENTER": 200.0, "RIGHT": 200.0},
+        all_obstacles=[], is_valid=True,
+        spatial_validity={"GLOBAL": 0.85, "LEFT": 0.50, "CENTER": 1.0, "RIGHT": 1.0, "CORRIDOR": 1.0},
+        spatial_bins=bins4
+    )
+    adv4 = estimate_directional_advisory(res4, threat="SAFE", now=10.0)
+    assert adv4.state == DirectionState.AVAILABLE
+    assert adv4.angle_deg == 0.0  # Center corridor valid: does NOT trigger false UNAVAILABLE!
+
+    # Doorway 5: Truly obstructed passage (obstacle directly in doorway at 35cm)
+    obs_block = SingleObstacle(3, 320, 240, (260, 100, 120, 280), 0.0, 1.0, 35.0, "BLOCK", 0.05, False)
+    b_dists5 = [50.0]*6 + [35.0]*12 + [50.0]*6
+    bins5 = make_bins(b_dists5)
+    res5 = ObstacleDetectionResult(
+        x=320, y=240, bbox=(260, 100, 120, 280), pan=0.0, proximity=1.0, dist_cm=35.0,
+        mode_text="DOORWAY_OBSTRUCTED", uncertainty_score=0.05, is_wall=False,
+        sector_dists={"LEFT": 50.0, "CENTER": 35.0, "RIGHT": 50.0},
+        all_obstacles=[obs_block, obs_post_l, obs_post_r], is_valid=True,
+        spatial_bins=bins5
+    )
+    adv5 = estimate_directional_advisory(res5, threat="CRITICAL", now=10.0)
+    assert adv5.state == DirectionState.STOP
+    assert adv5.angle_deg is None
+
+    # Doorway 6: Passage too narrow to validate (posts at -7 deg and +7 deg, gap too small for body)
+    post_tight_l = SingleObstacle(4, 290, 240, (260, 100, 60, 280), -0.1, 0.9, 45.0, "POST_TIGHT_L", 0.1, False)
+    post_tight_r = SingleObstacle(5, 350, 240, (320, 100, 60, 280), 0.1, 0.9, 45.0, "POST_TIGHT_R", 0.1, False)
+    b_dists6 = [45.0]*24
+    bins6 = make_bins(b_dists6)
+    res6 = ObstacleDetectionResult(
+        x=320, y=240, bbox=(260, 100, 120, 280), pan=0.0, proximity=0.9, dist_cm=45.0,
+        mode_text="DOORWAY_TOO_NARROW", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 45.0, "CENTER": 45.0, "RIGHT": 45.0},
+        all_obstacles=[post_tight_l, post_tight_r], is_valid=True,
+        spatial_bins=bins6
+    )
+    adv6 = estimate_directional_advisory(res6, threat="CRITICAL", now=10.0)
+    assert adv6.state in (DirectionState.STOP, DirectionState.UNAVAILABLE)
+    assert adv6.angle_deg is None
 

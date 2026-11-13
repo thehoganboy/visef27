@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import logging
 import threading
 import time
+import numpy as np
 from depth_engine import DepthEstimator
 from motion_ttc import KinematicsEngine
 from auditory_budget import AuditoryBudgetManager, BudgetDecision
@@ -20,6 +21,7 @@ class PipelineResult:
     advisory: object = None
     frame_id: int = 0
     inference_completed: float = 0.0
+    depth_viz: object = None  # Genuine normalized depth tensor from the SAME inference call
 
     @property
     def capture_timestamp(self) -> float:
@@ -118,9 +120,16 @@ class DemoRuntime:
                 else:
                     prev_angle = None
                 now_completed = self.clock()
+                depth_viz = norm.copy() if hasattr(norm, "copy") else norm
+                if isinstance(raw, np.ndarray):
+                    invalid_mask = np.isnan(raw) | np.isinf(raw) | (raw <= 0)
+                    if np.any(invalid_mask):
+                        depth_viz = depth_viz.copy()
+                        depth_viz[invalid_mask] = 0
                 result = PipelineResult(token, timestamp, obs, k, budget.coordinate(obs, k),
                                         frame, (now_completed - start) * 1000, adv,
-                                        frame_id=frame_id, inference_completed=now_completed)
+                                        frame_id=frame_id, inference_completed=now_completed,
+                                        depth_viz=depth_viz)
                 with self.lock:
                     if token == self.generation and self.active:
                         self.result, self.error = result, None
