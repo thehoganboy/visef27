@@ -7,9 +7,9 @@
 **Repository:** `https://github.com/thehoganboy/visef27`  
 **Working Branch:** `feature/demo-ready-unified-ux`  
 **Baseline Commit:** `d088a2d14e19d786c21a12d19a2c0c244a2ae612`  
-**Verification Commit:** `90bd3c6`  
+**Verification Commit:** `dd96c4a`  
 **Pull Request:** PR #1 (Draft — Strictly Not Merged to `main`)  
-**CI/CD Baseline:** Run #54 (macOS / Xcode / CoreML)  
+**CI/CD Baseline:** Run #56 (macOS / Xcode / CoreML)  
 
 ---
 
@@ -271,8 +271,8 @@ Command: `./gradlew testDebugUnitTest assembleDebug`
 
 - **Repository**: `thehoganboy/visef27`
 - **Branch**: `feature/demo-ready-unified-ux`
-- **Commit**: `90bd3c6`
-- **Workflow**: `.github/workflows/build_ios_ipa.yml` (Run #54)
+- **Commit**: `dd96c4a`
+- **Workflow**: `.github/workflows/build_ios_ipa.yml` (Run #56)
 - **Status**: Dispatched and executed on `macos-14` runner.
 - **Artifacts Produced**:
   - `VAMPIOR-unsigned.ipa` with bundle display name `VAMPIOR`.
