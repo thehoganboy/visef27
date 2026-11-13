@@ -166,8 +166,8 @@ final class DepthEngine: ObservableObject {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
 
-        // Step 0: Immediate Zero-Lux Blind check (Sensor Fault Mode)
-        if isZeroLuxBlind || meanLuma < 12 || meanLuma > 245 {
+        // Step 0: Immediate Zero-Lux Blind check (Sensor Fault Mode: absolute darkness / camera covered)
+        if isZeroLuxBlind || meanLuma < Config.luxZeroBlindThreshold || meanLuma > 250 {
             let blindResult = ObstacleDetectionResult(
                 x: width / 2, y: height / 2,
                 bbox: (x: width / 4, y: height / 4, w: width / 2, h: height / 2),
@@ -189,8 +189,7 @@ final class DepthEngine: ObservableObject {
 
         // Generate disparity map (via CoreML ANE Vision or Native Spatial Fallback)
         guard let rawDisparity = inferDisparity(pixelBuffer: pixelBuffer),
-              rawDisparity.count == gridW * gridH,
-              rawDisparity.allSatisfy({ $0.isFinite && $0 > 0 }) else {
+              rawDisparity.count == gridW * gridH else {
             return ObstacleDetectionResult(x: 0, y: 0, bbox: (0,0,0,0), pan: 0,
                 proximity: 0.4, distCM: .nan, modeText: "MODEL_UNAVAILABLE", uncertaintyScore: 1,
                 isWall: false, sectorDists: [:], allObstacles: [], isZeroLuxBlind: false,
@@ -198,7 +197,24 @@ final class DepthEngine: ObservableObject {
                 isValid: false, timestamp: sourceTimestamp)
         }
 
-        // Execute Spatial Engine v8 Rules
+        // Stage 1 — Model Integrity Check (Hard-reject completely invalid or catastrophic output)
+        var finitePositiveCount = 0
+        for val in rawDisparity {
+            if val.isFinite && val > 0 {
+                finitePositiveCount += 1
+            }
+        }
+        let validSampleRatio = Float(finitePositiveCount) / Float(rawDisparity.count)
+        if validSampleRatio < 0.20 {
+            // Catastrophic failure or completely nonfinite tensor
+            return ObstacleDetectionResult(x: 0, y: 0, bbox: (0,0,0,0), pan: 0,
+                proximity: 0.4, distCM: .nan, modeText: "MODEL_OUTPUT_INVALID", uncertaintyScore: 1,
+                isWall: false, sectorDists: [:], allObstacles: [], isZeroLuxBlind: false,
+                isOverheadHazard: false, isDropOffHazard: false, camWidth: width, camHeight: height,
+                isValid: false, timestamp: sourceTimestamp)
+        }
+
+        // Stage 2 — Local Observation Validity & Spatial Engine v8
         let result = evaluateSpatialEngineV8(
             rawDisparity: rawDisparity,
             w: width,
@@ -337,24 +353,30 @@ final class DepthEngine: ObservableObject {
 
         for y in activeY1..<activeY2 {
             for x in 0..<secW {
-                leftRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { leftRaws.append(v) }
             }
             for x in secW..<(2 * secW) {
-                centerRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { centerRaws.append(v) }
             }
             for x in (2 * secW)..<gridW {
-                rightRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { rightRaws.append(v) }
             }
         }
 
-        let rawL = Self.percentile(leftRaws, 0.80)
-        let rawC = Self.percentile(centerRaws, 0.80)
-        let rawR = Self.percentile(rightRaws, 0.80)
+        let totalExpectedPerSec = secW * (activeY2 - activeY1)
+        let minValidPerSec = max(4, Int(Float(totalExpectedPerSec) * 0.15))
 
-        let distL = pchip.interpolate(rawL)
-        let distC = pchip.interpolate(rawC)
-        let distR = pchip.interpolate(rawR)
-        let sectorDists: [String: Float] = ["LEFT": distL, "CENTER": distC, "RIGHT": distR]
+        let distL: Float = leftRaws.count >= minValidPerSec ? pchip.interpolate(Self.percentile(leftRaws, 0.80)) : .nan
+        let distC: Float = centerRaws.count >= minValidPerSec ? pchip.interpolate(Self.percentile(centerRaws, 0.80)) : .nan
+        let distR: Float = rightRaws.count >= minValidPerSec ? pchip.interpolate(Self.percentile(rightRaws, 0.80)) : .nan
+
+        var sectorDists: [String: Float] = [:]
+        if distL.isFinite && distL > 0 { sectorDists["LEFT"] = distL }
+        if distC.isFinite && distC > 0 { sectorDists["CENTER"] = distC }
+        if distR.isFinite && distR > 0 { sectorDists["RIGHT"] = distR }
 
         // Step 3: Overhead Hazard Check (top 15% ROI)
         var isOverhead = false
@@ -401,7 +423,7 @@ final class DepthEngine: ObservableObject {
         }
 
         // Step 5: Multi-Obstacle Blob Clustering (Connected-Component Search)
-        let peakRaw = rawDisparity.max() ?? 200.0
+        let peakRaw = rawDisparity.reduce(200.0 as Float) { $1.isFinite && $1 > $0 ? $1 : $0 }
         let clusterThresh = max(Config.baseActivationRaw, peakRaw - 160.0)
 
         var visited = [Bool](repeating: false, count: gridW * gridH)
@@ -410,7 +432,8 @@ final class DepthEngine: ObservableObject {
         for y in activeY1..<activeY2 {
             for x in 0..<gridW {
                 let idx = y * gridW + x
-                if !visited[idx] && rawDisparity[idx] >= clusterThresh {
+                let v = rawDisparity[idx]
+                if !visited[idx] && v.isFinite && v >= clusterThresh {
                     // BFS Flood fill
                     var q = [(x, y)]
                     visited[idx] = true
@@ -421,7 +444,10 @@ final class DepthEngine: ObservableObject {
                     while head < q.count {
                         let (cx, cy) = q[head]
                         head += 1
-                        cVals.append(rawDisparity[cy * gridW + cx])
+                        let qv = rawDisparity[cy * gridW + cx]
+                        if qv.isFinite && qv > 0 {
+                            cVals.append(qv)
+                        }
                         cMinX = min(cMinX, cx); cMaxX = max(cMaxX, cx)
                         cMinY = min(cMinY, cy); cMaxY = max(cMaxY, cy)
 
@@ -430,7 +456,8 @@ final class DepthEngine: ObservableObject {
                         for (nx, ny) in neighbors {
                             if nx >= 0 && nx < gridW && ny >= activeY1 && ny < activeY2 {
                                 let nIdx = ny * gridW + nx
-                                if !visited[nIdx] && rawDisparity[nIdx] >= clusterThresh {
+                                let nv = rawDisparity[nIdx]
+                                if !visited[nIdx] && nv.isFinite && nv >= clusterThresh {
                                     visited[nIdx] = true
                                     q.append((nx, ny))
                                 }
@@ -521,6 +548,8 @@ final class DepthEngine: ObservableObject {
         }
 
         let bins = computeSpatialBins(rawDisparity: rawDisparity, w: w, h: h, detectedObstacles: detectedObstacles)
+        let validBinsCount = bins.filter { $0.isValid }.count
+        let isResultValid = validBinsCount >= 3
 
         return ObstacleDetectionResult(
             x: primaryObs.x,
@@ -539,6 +568,7 @@ final class DepthEngine: ObservableObject {
             isDropOffHazard: isDropOff,
             camWidth: w,
             camHeight: h,
+            isValid: isResultValid,
             spatialBins: bins,
             timestamp: sourceTimestamp
         )
@@ -546,8 +576,9 @@ final class DepthEngine: ObservableObject {
 
     // ── Numerical Utilities ───────────────────────────────────────────────────
     private static func percentile(_ array: [Float], _ p: Float) -> Float {
-        guard !array.isEmpty else { return 0.0 }
-        let sorted = array.sorted()
+        let valid = array.filter { $0.isFinite && $0 > 0 }
+        guard !valid.isEmpty else { return 0.0 }
+        let sorted = valid.sorted()
         let idx = min(sorted.count - 1, max(0, Int(Float(sorted.count - 1) * p)))
         return sorted[idx]
     }

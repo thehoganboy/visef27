@@ -6,19 +6,22 @@ struct DirectionalAdvisory {
     var confidence: Double? = nil
     var observedAngularRange: ClosedRange<Double>? = nil
     var sourceTimestamp: Double = 0
+    var reasonCode: String = "UNSPECIFIED"
 
     init(
         state: String = "UNKNOWN",
         angleDeg: Double? = nil,
         confidence: Double? = nil,
         observedAngularRange: ClosedRange<Double>? = nil,
-        sourceTimestamp: Double = 0
+        sourceTimestamp: Double = 0,
+        reasonCode: String = "UNSPECIFIED"
     ) {
         self.state = state
         self.angleDeg = angleDeg
         self.confidence = confidence
         self.observedAngularRange = observedAngularRange
         self.sourceTimestamp = sourceTimestamp
+        self.reasonCode = reasonCode
     }
 
     func drawableAngle(now: Double) -> Double? {
@@ -37,11 +40,20 @@ func estimateDirectionalAdvisory(
     hfovDeg: Double = 65.0,
     prevAngle: Double? = nil
 ) -> DirectionalAdvisory {
-    if threat == "PAUSED" || threat == "INITIALIZING" || threat == "SENSOR_FAULT" || observation == nil || !(observation?.isValid ?? false) {
-        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now)
+    if threat == "PAUSED" {
+        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now, reasonCode: "PAUSED")
+    }
+    if threat == "INITIALIZING" {
+        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now, reasonCode: "INITIALIZING")
+    }
+    if threat == "SENSOR_FAULT" {
+        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now, reasonCode: "SENSOR_FAULT")
+    }
+    if observation == nil || !(observation?.isValid ?? false) {
+        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now, reasonCode: "MODEL_OUTPUT_INVALID")
     }
     guard let obs = observation, !obs.isZeroLuxBlind else {
-        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now)
+        return DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: now, reasonCode: "SENSOR_BLIND")
     }
 
     let halfFov = hfovDeg / 2.0
@@ -49,11 +61,11 @@ func estimateDirectionalAdvisory(
 
     // Spatial observation freshness check (reject missing, invalid, or stale observations > 750ms)
     guard obs.timestamp > 0 && !obs.timestamp.isNaN && !obs.timestamp.isInfinite else {
-        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: now)
+        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: now, reasonCode: "SOURCE_FRAME_STALE")
     }
     let age = now - obs.timestamp
     if age < -0.05 || age > 0.75 {
-        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: obs.timestamp)
+        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: obs.timestamp, reasonCode: "SOURCE_FRAME_STALE")
     }
     let advTs = obs.timestamp
 
@@ -83,18 +95,21 @@ func estimateDirectionalAdvisory(
             if finiteCDists.count == cBins.count && !finiteCDists.isEmpty && finiteCDists.allSatisfy({ $0 >= 75.0 }) {
                 // Central corridor is genuinely open with valid distance readings (doorway clearance)
             } else {
-                return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
+                return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CORRIDOR_OBSTRUCTED")
             }
         } else {
-            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CORRIDOR_OBSTRUCTED")
         }
     }
 
     // Overhead or drop-off hazard under CRITICAL threat forces immediate STOP
     let isOverhead = obs.isOverheadHazard || obs.modeText == "OVERHEAD" || obs.allObstacles.contains(where: { $0.modeText == "OVERHEAD" })
     let isDropOff = obs.isDropOffHazard || obs.modeText == "DROP_OFF" || obs.allObstacles.contains(where: { $0.modeText == "DROP_OFF" })
-    if threat == "CRITICAL" && (isOverhead || isDropOff) {
-        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
+    if threat == "CRITICAL" && isOverhead {
+        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "OVERHEAD_HAZARD")
+    }
+    if threat == "CRITICAL" && isDropOff {
+        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "DROP_OFF_HAZARD")
     }
 
     struct ObsProfile {
@@ -135,30 +150,56 @@ func estimateDirectionalAdvisory(
         profiles.append(ObsProfile(angCenter: angCenter, radius: totalRadius, weight: weight, zObs: zVal, isValidDist: isDistValid))
     }
 
-    if profiles.isEmpty && validC && zCenter < 150.0 {
-        let angCenter = Double(obs.pan) * halfFov
-        let weight = zCenter < 80.0 ? 15.0 : 5.0
-        profiles.append(ObsProfile(angCenter: angCenter, radius: 12.0, weight: weight, zObs: zCenter, isValidDist: true))
-    }
+    let bins = obs.spatialBins
 
-    // Clear frame with no detected obstacles
+    // Clear observation with no detected obstacles (P0-02)
     if profiles.isEmpty {
-        // Central corridor valid & clear: edge invalidity must NOT invalidate the center (P0-02/P0-03)
-        if validC && zCenter >= 150.0 {
-            var centerSupported = true
-            if !obs.spatialBins.isEmpty {
-                let cBins = obs.spatialBins.filter { abs(Double($0.angleCenter)) <= 5.0 }
-                let validCList = cBins.filter { $0.isValid }
-                if validCList.count < max(1, Int(Double(cBins.count) * 0.8)) {
-                    centerSupported = false
-                }
+        var centerSupported = false
+        var candDist = validC ? zCenter : Double.nan
+        if !bins.isEmpty {
+            let cBins = bins.filter { abs($0.angleCenter) <= 5.0 }
+            let validCList = cBins.filter { $0.isValid }
+            if validCList.count >= max(1, Int(Double(cBins.count) * 0.75)) {
+                centerSupported = true
+                let dists = validCList.compactMap { Double($0.estimatedDistanceCM) }.filter { $0.isFinite && $0 > 0 }
+                if !dists.isEmpty { candDist = dists.min() ?? Double.nan }
             }
-            if centerSupported {
-                let angOut = (prevAngle != nil && prevAngle!.isFinite) ? (0.3 * 0.0 + 0.7 * prevAngle!) : 0.0
-                return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: advTs)
-            }
+        } else if validC {
+            centerSupported = true
         }
-        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: advTs)
+
+        if centerSupported && (!candDist.isFinite || candDist >= 75.0) {
+            var angleOut = 0.0
+            if let pa = prevAngle, pa.isFinite {
+                angleOut = 0.3 * angleOut + 0.7 * pa
+            }
+            return DirectionalAdvisory(
+                state: "AVAILABLE",
+                angleDeg: (angleOut * 10.0).rounded() / 10.0,
+                confidence: 0.55,
+                observedAngularRange: obsRange,
+                sourceTimestampSeconds: advTs,
+                reasonCode: "AVAILABLE_FORWARD"
+            )
+        } else if centerSupported && candDist.isFinite && candDist < 40.0 {
+            return DirectionalAdvisory(
+                state: "STOP",
+                angleDeg: nil,
+                confidence: nil,
+                observedAngularRange: obsRange,
+                sourceTimestampSeconds: advTs,
+                reasonCode: "CRITICAL_OBSTACLE"
+            )
+        } else {
+            return DirectionalAdvisory(
+                state: "UNAVAILABLE",
+                angleDeg: nil,
+                confidence: nil,
+                observedAngularRange: obsRange,
+                sourceTimestampSeconds: advTs,
+                reasonCode: !centerSupported ? "CENTER_COVERAGE_INSUFFICIENT" : "NO_SUPPORTED_CANDIDATE"
+            )
+        }
     }
 
     // Step 5A: Generate all candidate headings across observed FOV
@@ -169,7 +210,7 @@ func estimateDirectionalAdvisory(
         aStep += 2.5
     }
 
-    // Step 5B: Determine eligibility for each candidate heading (P0-01 Hard Rejection)
+    // Step 5B: Determine eligibility for each candidate heading (P0-01 / P0-02 Evidence Evaluation)
     struct Candidate {
         let ang: Double
         let zSec: Double
@@ -177,8 +218,6 @@ func estimateDirectionalAdvisory(
     }
     var eligibleCandidates: [Candidate] = []
     var obstructedCount = 0
-
-    let bins = obs.spatialBins
     for cand in allCandidateAngles {
         var candSupported = false
         var candDist = Double.nan
@@ -216,8 +255,8 @@ func estimateDirectionalAdvisory(
             let corrRatio = validCorrCov / wCorr
             let coreRatio = validCoreCov / wCore
 
-            // P0-01 / P0-03: Candidate corridor must have >= 80% valid coverage and central load-bearing core must be valid
-            if corrRatio >= 0.80 && coreRatio >= 0.95 && !validDists.isEmpty {
+            // Candidate corridor requires >= 75% valid coverage and load-bearing central core >= 90%
+            if corrRatio >= 0.75 && coreRatio >= 0.90 && !validDists.isEmpty {
                 candSupported = true
                 candDist = validDists.min() ?? Double.nan
             }
@@ -288,13 +327,18 @@ func estimateDirectionalAdvisory(
     // Step 5C: Evaluate outcomes when no candidate is eligible
     if eligibleCandidates.isEmpty {
         if obstructedCount > 0 && (obstructedCount >= allCandidateAngles.count / 2 || (validC && zCenter < 50.0)) {
-            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CORRIDOR_OBSTRUCTED")
         } else {
-            return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: advTs)
+            // Check if center had invalid bins
+            let cBins = bins.filter { abs(Double($0.angleCenter)) <= 5.0 }
+            let centerValidCount = cBins.filter { $0.isValid }.count
+            let centerMissing = !bins.isEmpty && (centerValidCount < max(1, Int(Double(cBins.count) * 0.70)))
+            let code = centerMissing ? "CENTER_COVERAGE_INSUFFICIENT" : "NO_SUPPORTED_CANDIDATE"
+            return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: code)
         }
     }
 
-    // ── Step 6: Hierarchical Movement Policy (Directive Section 3) ──
+    // ── Step 6: Hierarchical Movement Policy (P0-02 Corridor Evidence) ──
 
     // Priority 1: HOLD FORWARD
     var fwdEligible = false
@@ -317,7 +361,7 @@ func estimateDirectionalAdvisory(
             angleOut = 0.35 * 0.0 + 0.65 * prev
             if abs(angleOut) < 1.0 { angleOut = 0.0 }
         }
-        return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angleOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: advTs)
+        return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angleOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_FORWARD")
     }
 
     // Priority 2: SMALL CORRECTION
@@ -331,7 +375,7 @@ func estimateDirectionalAdvisory(
             }
             scAngle = max(-halfFov, min(halfFov, scAngle))
             let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
-            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: scAngle, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs)
+            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: scAngle, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_CORRECTION")
         }
     }
 
@@ -350,17 +394,17 @@ func estimateDirectionalAdvisory(
     }
 
     if minCost > 30.0 {
-        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
+        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "NO_SAFE_PATH")
     }
 
     if threat == "CRITICAL" && validC {
         // Immediate frontal collision (< 25cm) forces emergency STOP
         if zCenter < 25.0 {
-            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CRITICAL_OBSTACLE")
         }
         // Constrained center hazard (< 40cm): allow alternative heading only if genuinely safe and has clearance
         if zCenter < 40.0 && (minCost > 15.0 || !eligibleCandidates.contains(where: { abs($0.ang - bestCand) < 1.5 && $0.zSec >= 60.0 })) {
-            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CRITICAL_OBSTACLE")
         }
     }
 
@@ -371,5 +415,5 @@ func estimateDirectionalAdvisory(
     }
     selected = max(-halfFov, min(halfFov, selected))
 
-    return DirectionalAdvisory(state: "AVAILABLE", angleDeg: selected, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs)
+    return DirectionalAdvisory(state: "AVAILABLE", angleDeg: selected, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_ALTERNATIVE")
 }

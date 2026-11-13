@@ -158,8 +158,8 @@ jobs:
               pl = plistlib.load(f)
           pl['CFBundleExecutable'] = 'HorusEyes'
           pl['CFBundleIdentifier'] = 'com.visef.horuseyes'
-          pl['CFBundleName'] = 'HorusEyes'
-          pl['CFBundleDisplayName'] = 'HorusEyes'
+          pl['CFBundleName'] = 'VAMPIOR'
+          pl['CFBundleDisplayName'] = 'VAMPIOR'
           pl['CFBundleDevelopmentRegion'] = 'en'
           pl['CFBundleShortVersionString'] = '2.0'
           pl['CFBundleVersion'] = '1'

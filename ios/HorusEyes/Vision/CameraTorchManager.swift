@@ -357,10 +357,26 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             let newState = !self.isTorchActive
-            self.isTorchForcedManual = newState
+            self.isTorchForcedManual = true // Lock manual choice for this running session
             self.setHardwareTorch(on: newState)
             self.aeSettleFramesRemaining = Config.flashAeSettleFrames
             self.onTorchToggled?(newState)
+        }
+    }
+
+    func resetManualTorchLock() {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.isTorchForcedManual = false
+        }
+    }
+
+    func forceTorchOff() {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.isTorchForcedManual = false
+            self.setHardwareTorch(on: false)
+            self.onTorchToggled?(false)
         }
     }
 }

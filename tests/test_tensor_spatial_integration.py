@@ -11,7 +11,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from depth_engine import compute_spatial_bins, ObstacleDetectionResult, SingleObstacle
-from directional_advisory import estimate_directional_advisory
+from directional_advisory import estimate_directional_advisory, advisory_for_risk
 
 
 def create_base_tensor(h=256, w=192, fill_val=200.0):
@@ -213,3 +213,38 @@ def test_10_entirely_invalid_tensor():
     )
     adv = estimate_directional_advisory(obs, threat="SENSOR_FAULT", now=10.0)
     assert adv.state == "UNKNOWN"
+
+
+def test_11_low_light_corridor_below_150cm():
+    """11. Low-light corridor (e.g. 110cm clearance) must be AVAILABLE, not UNAVAILABLE."""
+    tensor = create_base_tensor(fill_val=220.0) # ~110cm distance
+    bins = compute_spatial_bins(tensor, w=192, h=256, num_bins=24)
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(48, 64, 96, 128), pan=0.0, proximity=0.2, dist_cm=110.0,
+        mode_text="SAFE", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 110.0, "CENTER": 110.0, "RIGHT": 110.0},
+        all_obstacles=[], is_valid=True, spatial_bins=bins, timestamp=10.0
+    )
+    adv = estimate_directional_advisory(obs, threat="SAFE", now=10.0)
+    assert adv.state == "AVAILABLE"
+    assert adv.reason_code == "AVAILABLE_FORWARD"
+    assert abs(adv.angle_deg) <= 2.5
+
+
+def test_12_reason_codes_and_stale_rejection():
+    """12. Test diagnostic reason codes and stale frame rejection (>750ms)."""
+    # Stale observation
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(48, 64, 96, 128), pan=0.0, proximity=0.2, dist_cm=110.0,
+        mode_text="SAFE", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 110.0, "CENTER": 110.0, "RIGHT": 110.0},
+        all_obstacles=[], is_valid=True, spatial_bins=[], timestamp=10.0
+    )
+    adv_stale = estimate_directional_advisory(obs, threat="SAFE", now=11.0)
+    assert adv_stale.state == "UNAVAILABLE"
+    assert adv_stale.reason_code == "SOURCE_FRAME_STALE"
+
+    # Emergency stop advisory
+    adv_stop = advisory_for_risk("CRITICAL", 10.0)
+    assert adv_stop.state == "STOP"
+    assert adv_stop.reason_code == "CRITICAL_OBSTACLE"

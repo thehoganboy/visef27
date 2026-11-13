@@ -28,6 +28,16 @@ final class DemoController: ObservableObject {
     private var isAppeared: Bool = false
     private var lastAcceptedFrameId: UInt64 = 0
     private var lastAcceptedTimestamp: Double = 0.0
+    private struct ObservationSnapshot {
+        let frameId: UInt64
+        let timestamp: Double
+        let threat: String
+        let state: String
+        let angleDeg: Double?
+        let confidence: Double
+        let reasonCode: String
+    }
+    private var observationHistory: [ObservationSnapshot] = []
 
     func appear() {
         guard !isAppeared else { return }
@@ -55,7 +65,7 @@ final class DemoController: ObservableObject {
                     sourceTimestamp: capturedAt,
                     aeSettleFramesRemaining: settle,
                     meanLuma: luma,
-                    isZeroLuxBlind: luma < 10
+                    isZeroLuxBlind: luma < Config.luxZeroBlindThreshold
                 )
                 let risk = self.kin.compute(
                     obstacleResult: obs,
@@ -82,14 +92,72 @@ final class DemoController: ObservableObject {
                     self.result = obs.isValid ? obs : nil
                     self.sourceTimestamp = obs.timestamp
                     self.threat = risk.threatLevel
-                    let adv = estimateDirectionalAdvisory(
+                    let rawAdv = estimateDirectionalAdvisory(
                         observation: obs,
                         threat: risk.threatLevel,
                         now: consumedAt,
                         prevAngle: self.prevAngle
                     )
-                    self.advisory = adv
-                    self.prevAngle = adv.state == "AVAILABLE" ? adv.angleDeg : nil
+
+                    var finalAdv = rawAdv
+
+                    // Evidence-Aware Temporal Stability (P0-03)
+                    if risk.threatLevel == "CRITICAL" || rawAdv.state == "STOP" {
+                        // Critical hazard: immediate preemption with ZERO smoothing delay
+                        self.observationHistory.removeAll()
+                        finalAdv = rawAdv
+                    } else if risk.threatLevel == "SENSOR_FAULT" || rawAdv.state == "UNKNOWN" {
+                        self.observationHistory.removeAll()
+                        finalAdv = rawAdv
+                    } else if rawAdv.state == "AVAILABLE" {
+                        self.observationHistory.append(ObservationSnapshot(
+                            frameId: frameId,
+                            timestamp: obs.timestamp,
+                            threat: risk.threatLevel,
+                            state: rawAdv.state,
+                            angleDeg: rawAdv.angleDeg,
+                            confidence: rawAdv.confidence ?? 0.55,
+                            reasonCode: rawAdv.reasonCode
+                        ))
+                        if self.observationHistory.count > 4 {
+                            self.observationHistory.removeFirst()
+                        }
+                        finalAdv = rawAdv
+                    } else if rawAdv.state == "UNAVAILABLE" {
+                        // Check for transient 1-frame degradation over otherwise stable, fresh observation
+                        let recentValid = self.observationHistory.filter {
+                            $0.state == "AVAILABLE" && (consumedAt - $0.timestamp) <= 0.28
+                        }
+                        if recentValid.count >= 2, let lastValid = recentValid.last, let heldAngle = lastValid.angleDeg {
+                            // Bounded transient hold: maintain direction for this single frame
+                            finalAdv = DirectionalAdvisory(
+                                state: "AVAILABLE",
+                                angleDeg: heldAngle,
+                                confidence: lastValid.confidence * 0.85,
+                                observedAngularRange: rawAdv.observedAngularRange,
+                                sourceTimestamp: lastValid.timestamp,
+                                reasonCode: "TRANSIENT_HOLD"
+                            )
+                            self.observationHistory.append(ObservationSnapshot(
+                                frameId: frameId,
+                                timestamp: obs.timestamp,
+                                threat: risk.threatLevel,
+                                state: "TRANSIENT_HOLD",
+                                angleDeg: heldAngle,
+                                confidence: lastValid.confidence * 0.85,
+                                reasonCode: "TRANSIENT_HOLD"
+                            ))
+                            if self.observationHistory.count > 4 {
+                                self.observationHistory.removeFirst()
+                            }
+                        } else {
+                            self.observationHistory.removeAll()
+                            finalAdv = rawAdv
+                        }
+                    }
+
+                    self.advisory = finalAdv
+                    self.prevAngle = finalAdv.state == "AVAILABLE" ? finalAdv.angleDeg : nil
                     self.audio.update(decision: decision)
                 }
             }
@@ -110,7 +178,7 @@ final class DemoController: ObservableObject {
         // Expire directional advisory at 750ms
         if now-sourceTimestamp > 0.75 {
             if advisory.state == "AVAILABLE" {
-                advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: sourceTimestamp)
+                advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: sourceTimestamp, reasonCode: "SOURCE_FRAME_STALE")
             }
         }
     }
@@ -121,7 +189,8 @@ final class DemoController: ObservableObject {
     }
 
     private func fault() {
-        threat = "SENSOR_FAULT"; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
+        threat = "SENSOR_FAULT"; result = nil; advisory = DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: CACurrentMediaTime(), reasonCode: "SENSOR_FAULT"); prevAngle = nil
+        observationHistory.removeAll()
         audio.update(decision: BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
             ttc: .infinity, priorityScore: 99, volumeFactor: 0.35, safeDirection: "STOP",
             cueMode: "SYSTEM_FAULT_TONE", threatLevel: "SENSOR_FAULT", suppressedCount: 0))
@@ -132,6 +201,11 @@ final class DemoController: ObservableObject {
     func setActive(_ value: Bool) {
         lock.lock(); generation += 1; enabled = value; lock.unlock()
         active = value; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
+        observationHistory.removeAll()
+        camera.resetManualTorchLock()
+        if !value {
+            camera.forceTorchOff()
+        }
         lastAcceptedFrameId = 0; lastAcceptedTimestamp = 0.0
         started = CACurrentMediaTime(); sourceTimestamp = started
         threat = value ? "INITIALIZING" : "PAUSED"
@@ -144,6 +218,7 @@ final class DemoController: ObservableObject {
         guard isAppeared else { return }
         isAppeared = false
 
+        camera.forceTorchOff()
         setActive(false); timer?.invalidate(); timer = nil
         camera.stop(); imu.stopMotionTracking(); audio.stop()
     }
@@ -210,6 +285,40 @@ struct LiquidButtonStyle: ButtonStyle {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// MANUAL FLASHLIGHT BUTTON (P1-01)
+// ═══════════════════════════════════════════════════════════════════════════════
+struct FlashlightButton: View {
+    let isTorchActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color(white: 0.10).opacity(0.75))
+                    .overlay(
+                        Circle()
+                            .stroke(
+                                isTorchActive ?
+                                    Color(red: 1.0, green: 0.84, blue: 0.04).opacity(0.85) :
+                                    Color.white.opacity(0.22),
+                                lineWidth: 1.5
+                            )
+                    )
+                Image(systemName: isTorchActive ? "flashlight.on.fill" : "flashlight.off.fill")
+                    .font(.system(size: 22, weight: .semibold))
+                    .foregroundColor(isTorchActive ? Color(red: 1.0, green: 0.84, blue: 0.04) : Color.white.opacity(0.92))
+                    .shadow(color: isTorchActive ? Color.yellow.opacity(0.5) : Color.clear, radius: 6)
+            }
+            .frame(width: 52, height: 52)
+            .contentShape(Circle())
+        }
+        .accessibilityLabel(isTorchActive ? "Tắt đèn pin" : "Bật đèn pin")
+        .accessibilityHint("Nhấn để bật hoặc tắt đèn pin hỗ trợ môi trường thiếu sáng")
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // MAIN APPLICATION VIEW
 // ═══════════════════════════════════════════════════════════════════════════════
 struct ContentView: View {
@@ -218,9 +327,17 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Rounded Camera Preview Container (P1-01)
-            ZStack {
+            ZStack(alignment: .topTrailing) {
                 CameraPreviewView(session: model.camera.session)
                 TrackingOverlayView(result: model.result, threatLevel: model.threat)
+
+                // Top-Right Floating Flashlight Button (P1-01)
+                FlashlightButton(isTorchActive: model.camera.isTorchActive) {
+                    model.camera.toggleManualTorch()
+                }
+                .padding(.top, 14)
+                .padding(.trailing, 14)
+
                 VStack {
                     Spacer()
                     DirectionIndicator(advisory: model.advisory, threat: model.threat)

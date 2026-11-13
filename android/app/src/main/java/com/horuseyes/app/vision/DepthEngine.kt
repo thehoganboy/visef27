@@ -217,7 +217,16 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
             }
         }
 
-        require(rawDisparity.all { it.isFinite() && it > 0f }) { "Invalid MiDaS output" }
+        // Stage 1: Model Integrity Check (Hard-reject completely invalid or catastrophic output)
+        var finitePositiveCount = 0
+        for (i in 0 until totalPixels) {
+            val v = rawDisparity[i]
+            if (v.isFinite() && v > 0f) {
+                finitePositiveCount++
+            }
+        }
+        val validRatio = finitePositiveCount.toFloat() / totalPixels.toFloat()
+        require(validRatio >= 0.20f) { "Invalid MiDaS output: catastrophic tensor corruption" }
 
         // 3. Chuẩn hóa dNorm [0.0, 1.0] và đo đạc cực trị
         var dMin = Float.MAX_VALUE
@@ -227,13 +236,17 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
 
         for (i in 0 until totalPixels) {
             val v = rawDisparity[i]
-            if (v < dMin) dMin = v
-            if (v > dMax) dMax = v
+            if (v.isFinite() && v > 0f) {
+                if (v < dMin) dMin = v
+                if (v > dMax) dMax = v
+            }
         }
+        if (dMin > dMax) { dMin = 0f; dMax = 1f }
         val dRange = max(1e-6f, dMax - dMin)
         val dNorm = FloatArray(totalPixels)
         for (i in 0 until totalPixels) {
-            val n = (rawDisparity[i] - dMin) / dRange
+            val v = rawDisparity[i]
+            val n = if (v.isFinite() && v > 0f) (v - dMin) / dRange else 0f
             dNorm[i] = n
             sumNorm += n
             sumSqNorm += n * n
@@ -262,21 +275,27 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
             val offset = r * inW
             for (c in cx1 until (cx1 + secW)) {
                 val d = rawDisparity[offset + c]
-                secLSamples.add(d); corrSamples.add(d)
-                corrSum += d; corrSumSq += d * d
-                if (d >= 480.0f) corrHighCount++
+                if (d.isFinite() && d > 0f) {
+                    secLSamples.add(d); corrSamples.add(d)
+                    corrSum += d; corrSumSq += d * d
+                    if (d >= 480.0f) corrHighCount++
+                }
             }
             for (c in (cx1 + secW) until (cx1 + 2 * secW)) {
                 val d = rawDisparity[offset + c]
-                secCSamples.add(d); corrSamples.add(d)
-                corrSum += d; corrSumSq += d * d
-                if (d >= 480.0f) corrHighCount++
+                if (d.isFinite() && d > 0f) {
+                    secCSamples.add(d); corrSamples.add(d)
+                    corrSum += d; corrSumSq += d * d
+                    if (d >= 480.0f) corrHighCount++
+                }
             }
             for (c in (cx1 + 2 * secW) until cx2) {
                 val d = rawDisparity[offset + c]
-                secRSamples.add(d); corrSamples.add(d)
-                corrSum += d; corrSumSq += d * d
-                if (d >= 480.0f) corrHighCount++
+                if (d.isFinite() && d > 0f) {
+                    secRSamples.add(d); corrSamples.add(d)
+                    corrSum += d; corrSumSq += d * d
+                    if (d >= 480.0f) corrHighCount++
+                }
             }
         }
 

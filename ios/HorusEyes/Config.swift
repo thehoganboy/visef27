@@ -17,7 +17,7 @@ enum Config {
     static let flashHoldMinSeconds:    Float = 5.0
     static let flashAeSettleFrames:    Int   = 5
     static let luxEnhancementThreshold: Float = 45.0
-    static let luxZeroBlindThreshold:  Float = 10.0
+    static let luxZeroBlindThreshold:  Float = 3.5 // Calibrated: complete darkness / pocket (<3.5 luma), not sunset
     static let luxDarkConfirmFrames:   Int   = 8
 
     // ── PCHIP Calibration Nodes (11 knots — Monotonic Spline) ─────────────────

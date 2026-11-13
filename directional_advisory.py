@@ -24,6 +24,7 @@ class DirectionalAdvisory:
     confidence: float | None = None
     observed_angular_range: tuple[float, float] | None = None
     source_timestamp: float = 0.0
+    reason_code: str = "UNSPECIFIED"
 
     def drawable_angle(self, now: float, max_age: float = 0.50) -> float | None:
         if self.state != DirectionState.AVAILABLE or self.angle_deg is None:
@@ -43,9 +44,16 @@ class DirectionalAdvisory:
 
 def advisory_for_risk(threat: str, timestamp: float) -> DirectionalAdvisory:
     """Fallback advisory when no spatial obstacle perception data is available."""
-    state = (DirectionState.STOP if threat == "CRITICAL" else
-             DirectionState.UNAVAILABLE if threat in {"SAFE", "WARNING"} else DirectionState.UNKNOWN)
-    return DirectionalAdvisory(state=state, source_timestamp=timestamp)
+    if threat == "CRITICAL":
+        state = DirectionState.STOP
+        code = "CRITICAL_OBSTACLE"
+    elif threat in {"SAFE", "WARNING"}:
+        state = DirectionState.UNAVAILABLE
+        code = "LOCAL_DEPTH_MISSING"
+    else:
+        state = DirectionState.UNKNOWN
+        code = "UNSPECIFIED"
+    return DirectionalAdvisory(state=state, source_timestamp=timestamp, reason_code=code)
 
 
 def image_x_to_angle(x: float, cx: float, fx: float) -> float:
@@ -81,11 +89,12 @@ def estimate_directional_advisory(
     """
     # 1. Immediate invalidity and safety halts
     if threat == "PAUSED":
-        return DirectionalAdvisory(state=DirectionState.UNKNOWN, source_timestamp=now)
+        return DirectionalAdvisory(state=DirectionState.UNKNOWN, source_timestamp=now, reason_code="UNSPECIFIED")
     if threat in {"SENSOR_FAULT", "INITIALIZING"} or observation is None:
-        return DirectionalAdvisory(state=DirectionState.UNKNOWN, source_timestamp=now)
+        return DirectionalAdvisory(state=DirectionState.UNKNOWN, source_timestamp=now, reason_code="MODEL_OUTPUT_INVALID" if threat == "SENSOR_FAULT" else "UNSPECIFIED")
     if not getattr(observation, "is_valid", True) or getattr(observation, "is_zero_lux_blind", False):
-        return DirectionalAdvisory(state=DirectionState.UNKNOWN, source_timestamp=now)
+        code = "SENSOR_BLIND" if getattr(observation, "is_zero_lux_blind", False) else "MODEL_OUTPUT_INVALID"
+        return DirectionalAdvisory(state=DirectionState.UNKNOWN, source_timestamp=now, reason_code=code)
 
     # 1.1 Spatial observation freshness check (reject stale observations > 750ms)
     obs_ts = getattr(observation, "timestamp", None)
@@ -93,7 +102,7 @@ def estimate_directional_advisory(
     if obs_ts is not None and isinstance(obs_ts, (int, float)) and math.isfinite(obs_ts) and obs_ts > 0:
         adv_ts = obs_ts
         if now > 0 and (now - obs_ts > 0.75):
-            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, source_timestamp=obs_ts)
+            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, source_timestamp=obs_ts, reason_code="SOURCE_FRAME_STALE")
 
     # 2. Camera geometry and observed FOV limits
     cam_w = float(getattr(observation, "cam_width", 640) or 640)
@@ -210,42 +219,47 @@ def estimate_directional_advisory(
             weight = 12.0
             obstacle_profiles.append((ang_center, total_radius, weight, float("nan"), False))
 
-    # Single obstacle fallback when all_obstacles is empty
-    if not obstacle_profiles and status_c == "VALID" and z_center < 150.0:
-        pan = float(getattr(observation, "pan", 0.0) or 0.0)
-        ang_center = pan * half_fov
-        weight = 15.0 if z_center < 80.0 else 5.0
-        obstacle_profiles.append((ang_center, 12.0, weight, z_center, True))
-
-    # Clear observation with no detected obstacles
+    # Clear observation with no detected obstacles (P0-02)
     if not obstacle_profiles:
-        # Central corridor valid & clear: edge invalidity must NOT invalidate the center (P0-02/P0-03)
-        if status_c == "VALID" and z_center >= 150.0:
+        center_supported = False
+        cand_dist = z_center if status_c == "VALID" else float("nan")
+        if spatial_bins and len(spatial_bins) > 0:
+            c_bins = [b for b in spatial_bins if abs(getattr(b, "angle_center", 99.0)) <= 5.0]
+            valid_c = [b for b in c_bins if getattr(b, "is_valid", False)]
+            if len(valid_c) >= max(1, int(len(c_bins) * 0.75)):
+                center_supported = True
+                dists = [getattr(b, "dist_cm", float("nan")) for b in valid_c if math.isfinite(getattr(b, "dist_cm", float("nan")))]
+                if dists:
+                    cand_dist = min(dists)
+        elif status_c == "VALID":
             center_supported = True
-            if spatial_bins and len(spatial_bins) > 0:
-                c_bins = [b for b in spatial_bins if abs(getattr(b, "angle_center", 99.0)) <= 5.0]
-                valid_c = [b for b in c_bins if getattr(b, "is_valid", False)]
-                if len(valid_c) < max(1, int(len(c_bins) * 0.8)):
-                    center_supported = False
-            if center_supported:
-                angle_out = 0.0
-                if prev_angle is not None and math.isfinite(prev_angle):
-                    angle_out = 0.3 * angle_out + 0.7 * prev_angle
-                # Documented: 0.55 is a heuristic support score for an unobstructed corridor,
-                # NOT a calibrated probability of physical safety.
-                return DirectionalAdvisory(
-                    state=DirectionState.AVAILABLE,
-                    angle_deg=round(angle_out, 1),
-                    confidence=0.55,
-                    observed_angular_range=obs_range,
-                    source_timestamp=adv_ts
-                )
-        # If center is invalid / unobservable or below clearance with no detected obstacle to avoid
-        return DirectionalAdvisory(
-            state=DirectionState.UNAVAILABLE,
-            observed_angular_range=obs_range,
-            source_timestamp=adv_ts
-        )
+
+        if center_supported and (not math.isfinite(cand_dist) or cand_dist >= 75.0):
+            angle_out = 0.0
+            if prev_angle is not None and math.isfinite(prev_angle):
+                angle_out = 0.3 * angle_out + 0.7 * prev_angle
+            return DirectionalAdvisory(
+                state=DirectionState.AVAILABLE,
+                angle_deg=round(angle_out, 1),
+                confidence=0.55,
+                observed_angular_range=obs_range,
+                source_timestamp=adv_ts,
+                reason_code="AVAILABLE_FORWARD"
+            )
+        elif center_supported and math.isfinite(cand_dist) and cand_dist < 40.0:
+            return DirectionalAdvisory(
+                state=DirectionState.STOP,
+                observed_angular_range=obs_range,
+                source_timestamp=adv_ts,
+                reason_code="CRITICAL_OBSTACLE"
+            )
+        else:
+            return DirectionalAdvisory(
+                state=DirectionState.UNAVAILABLE,
+                observed_angular_range=obs_range,
+                source_timestamp=adv_ts,
+                reason_code="CENTER_COVERAGE_INSUFFICIENT" if not center_supported else "NO_SUPPORTED_CANDIDATE"
+            )
 
     # 5. Build candidate angles within observed FOV (step 2.5 degrees)
     # Step 5A: Generate candidate headings across observed FOV
@@ -299,9 +313,9 @@ def estimate_directional_advisory(
             corr_ratio = valid_corr_cov / w_corr
             core_ratio = valid_core_cov / w_core
 
-            # P0-03 Problem A: Corridor must have >= 80% valid angular coverage
-            # and central load-bearing core [theta - 2.5, theta + 2.5] must be valid
-            if corr_ratio >= 0.80 and core_ratio >= 0.95 and valid_dists:
+            # P0-02 / P0-03: Corridor must have >= 75% valid angular coverage
+            # and central load-bearing core [theta - 2.5, theta + 2.5] must be valid (>= 90%)
+            if corr_ratio >= 0.75 and core_ratio >= 0.90 and valid_dists:
                 cand_supported = True
                 cand_dist = min(valid_dists)
         else:
@@ -376,15 +390,13 @@ def estimate_directional_advisory(
     # Step 5C: Evaluate outcomes when no candidate is eligible
     if not eligible_candidates:
         if obstructed_count > 0 and (obstructed_count >= len(all_candidates) * 0.5 or (status_c == "VALID" and z_center < 50.0)):
-            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code="CRITICAL_OBSTACLE")
         else:
-            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, observed_angular_range=obs_range, source_timestamp=adv_ts)
+            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code="NO_SUPPORTED_CANDIDATE")
 
     # ── Step 6: Hierarchical Movement Policy (Directive Section 3) ──
 
     # Priority 1: HOLD FORWARD
-    # If the forward corridor is adequately supported, has acceptable clearance,
-    # and has no encroaching obstacles, maintain theta = 0.0 without chasing side advantages.
     fwd_eligible = False
     fwd_dist = float("nan")
     fwd_risk = float("inf")
@@ -403,7 +415,6 @@ def estimate_directional_advisory(
     if fwd_eligible and not fwd_encroached and fwd_dist >= 75.0 and fwd_risk <= 4.0:
         angle_out = 0.0
         if prev_angle is not None and math.isfinite(prev_angle):
-            # Smoothly decay any previous steering back to 0.0
             angle_out = 0.35 * 0.0 + 0.65 * prev_angle
             if abs(angle_out) < 1.0:
                 angle_out = 0.0
@@ -412,16 +423,14 @@ def estimate_directional_advisory(
             angle_deg=round(angle_out, 1),
             confidence=0.55,
             observed_angular_range=obs_range,
-            source_timestamp=adv_ts
+            source_timestamp=adv_ts,
+            reason_code="AVAILABLE_FORWARD"
         )
 
     # Priority 2: SMALL CORRECTION
-    # If lateral clearance shrinks (e.g. drifting toward doorpost or side boundary),
-    # recommend a small, restrained correction within [-12.5, +12.5] deg.
     small_candidates = [(c, d, r) for c, d, r in eligible_candidates if abs(c) <= 12.5]
     if small_candidates:
         best_sc = min(small_candidates, key=lambda x: x[2] + 0.08 * abs(x[0]))
-        # Favor small correction if it is safe and provides better clearance than center (or center is encroached/ineligible)
         if best_sc[2] < 20.0 and (not fwd_eligible or fwd_encroached or best_sc[2] < fwd_risk - 0.5):
             sc_angle = best_sc[0]
             if prev_angle is not None and math.isfinite(prev_angle):
@@ -433,11 +442,11 @@ def estimate_directional_advisory(
                 angle_deg=round(sc_angle, 1),
                 confidence=round(conf, 2),
                 observed_angular_range=obs_range,
-                source_timestamp=adv_ts
+                source_timestamp=adv_ts,
+                reason_code="AVAILABLE_CORRECTION"
             )
 
     # Priority 3: ALTERNATIVE HEADING
-    # Forward is blocked/compromised: evaluate candidate corridors across observed FOV.
     best_candidate = 0.0
     min_cost = float("inf")
     for cand, dist, r in eligible_candidates:
@@ -448,17 +457,14 @@ def estimate_directional_advisory(
             min_cost = total_cost
             best_candidate = cand
 
-    # P0-03 Problem D: Refined STOP vs Alternative Heading
     if min_cost > 30.0:
-        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code="CRITICAL_OBSTACLE")
 
     if threat == "CRITICAL" and status_c == "VALID":
-        # Immediate frontal collision (< 25cm) forces emergency STOP
         if z_center < 25.0:
-            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
-        # Constrained center hazard (< 40cm): allow alternative heading only if genuinely safe and has clearance
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code="CRITICAL_OBSTACLE")
         if z_center < 40.0 and (min_cost > 15.0 or not any(d >= 60.0 for c, d, r in eligible_candidates if abs(c - best_candidate) < 1.5)):
-            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts, reason_code="CRITICAL_OBSTACLE")
 
     confidence = max(0.30, min(0.55, 1.0 - (min_cost / 35.0)))
     selected_angle = best_candidate
@@ -471,5 +477,6 @@ def estimate_directional_advisory(
         angle_deg=round(selected_angle, 1),
         confidence=round(confidence, 2),
         observed_angular_range=obs_range,
-        source_timestamp=adv_ts
+        source_timestamp=adv_ts,
+        reason_code="AVAILABLE_ALTERNATIVE"
     )

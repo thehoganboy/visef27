@@ -30,6 +30,7 @@ import Foundation
         testSourceTimestampLifecycleAndFreshness()
         testTensorSpatialIntegration()
         testRawTensorToSpatialBins()
+        testLowLightRobustnessAndLocalDisparity()
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
@@ -500,5 +501,70 @@ import Foundation
         precondition(adv10.state == "UNKNOWN", "Tensor 10 failed")
 
         print("PASS Swift Tensor Spatial Integration (10/10)")
+    }
+
+    static func testLowLightRobustnessAndLocalDisparity() {
+        let engine = DepthEngine()
+        let halfFov: Float = 32.5
+        let binW: Float = 65.0 / 24.0
+
+        func makeBin(id: Int, dist: Float, isValid: Bool = true) -> SpatialBin {
+            let aMin = -halfFov + Float(id) * binW
+            let aMax = aMin + binW
+            let aCenter = (aMin + aMax) / 2.0
+            return SpatialBin(
+                binId: id, angleMin: aMin, angleMax: aMax, angleCenter: aCenter,
+                validRatio: isValid ? 1.0 : 0.0, rawDepthStatistic: 200.0,
+                distCM: isValid ? dist : .nan, isValid: isValid, hasObstacle: false,
+                bodyDistCM: isValid ? dist : .nan, groundDistCM: .nan, overheadDistCM: .nan
+            )
+        }
+
+        // Test 1: Isolated single invalid disparity sample on outer edge must not suppress guidance
+        var tensor1 = [Float](repeating: 200.0, count: 48 * 64)
+        tensor1[0] = Float.nan // Single NaN at top-left corner
+        let bins1 = engine.computeSpatialBins(rawDisparity: tensor1, w: 192, h: 256, detectedObstacles: [])
+        let obs1 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.1, distCM: 200.0,
+            modeText: "SAFE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 200.0, "CENTER": 200.0, "RIGHT": 200.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins1, timestamp: 10.0
+        )
+        let adv1 = estimateDirectionalAdvisory(observation: obs1, threat: "SAFE", now: 10.0)
+        precondition(adv1.state == "AVAILABLE" && abs(adv1.angleDeg ?? 99.0) <= 2.0, "Test 1 failed: Isolated NaN on edge must not suppress guidance")
+        precondition(adv1.reasonCode == "AVAILABLE_FORWARD", "Test 1 reason code expected AVAILABLE_FORWARD, got \(adv1.reasonCode)")
+
+        // Test 2: Corridor with valid local evidence but center distance below 150 cm (e.g. 110 cm)
+        let bins2 = (0..<24).map { makeBin(id: $0, dist: 110.0) }
+        let obs2 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.3, distCM: 110.0,
+            modeText: "SAFE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 110.0, "CENTER": 110.0, "RIGHT": 110.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins2, timestamp: 10.0
+        )
+        let adv2 = estimateDirectionalAdvisory(observation: obs2, threat: "SAFE", now: 10.0)
+        precondition(adv2.state == "AVAILABLE" && abs(adv2.angleDeg ?? 99.0) <= 2.0, "Test 2 failed: 110cm open corridor must be AVAILABLE")
+        precondition(adv2.reasonCode == "AVAILABLE_FORWARD", "Test 2 reason code expected AVAILABLE_FORWARD, got \(adv2.reasonCode)")
+
+        // Test 3: Genuine close central obstruction (< 40cm) forces STOP
+        let bins3 = (0..<24).map { makeBin(id: $0, dist: 30.0) }
+        let obs3 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 1.0, distCM: 30.0,
+            modeText: "WALL", uncertaintyScore: 0.1, isWall: true,
+            sectorDists: ["LEFT": 30.0, "CENTER": 30.0, "RIGHT": 30.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins3, timestamp: 10.0
+        )
+        let adv3 = estimateDirectionalAdvisory(observation: obs3, threat: "CRITICAL", now: 10.0)
+        precondition(adv3.state == "STOP", "Test 3 failed: 30cm obstruction must force STOP")
+
+        // Test 4: Stale timestamp (> 750ms) forces UNAVAILABLE
+        let adv4 = estimateDirectionalAdvisory(observation: obs2, threat: "SAFE", now: 11.0) // 1.0s age
+        precondition(adv4.state == "UNAVAILABLE", "Test 4 failed: Stale observation must be UNAVAILABLE")
+        precondition(adv4.reasonCode == "SOURCE_FRAME_STALE", "Test 4 reason code expected SOURCE_FRAME_STALE, got \(adv4.reasonCode)")
+
+        print("PASS Swift Low-Light Guidance Stability & Local Disparity (4 tests)")
     }
 }

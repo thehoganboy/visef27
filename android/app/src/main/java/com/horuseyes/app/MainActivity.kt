@@ -33,8 +33,10 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
     private var depth: DepthEngine? = null
     private var analyzer: CameraAnalyzer? = null
     private var provider: ProcessCameraProvider? = null
+    private var activeCamera: Camera? = null
     private var audio: SpatialAudioEngine? = null
     private var running = false
+    private var isTorchOn = false
     private var closed = false
     private var lastResult = 0L
     private var started = 0L
@@ -74,6 +76,17 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
             binding.btnStartStop.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
             setRunning(!running)
         }
+        binding.btnTorch.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> v.animate().scaleX(0.92f).scaleY(0.92f).setDuration(100).start()
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(140).start()
+            }
+            false
+        }
+        binding.btnTorch.setOnClickListener {
+            binding.btnTorch.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
+            toggleTorch()
+        }
         handler.post(watchdog)
         executor.execute {
             try { depth = DepthEngine(this) } catch (e: Exception) {
@@ -104,7 +117,10 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
                 android.util.Log.e("HorusEyes", "Audio unavailable", e)
                 binding.overlayView.setState("SENSOR_FAULT")
             }
-        } else audio?.setMuted(true)
+        } else {
+            audio?.setMuted(true)
+            forceTorchOff()
+        }
     }
     private fun bindCamera() {
         binding.previewView.post {
@@ -128,11 +144,35 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
                     val group = UseCaseGroup.Builder().addUseCase(preview).addUseCase(analysis)
                     binding.previewView.viewPort?.let { group.setViewPort(it) }
                     camera.unbindAll()
-                    camera.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, group.build())
+                    activeCamera = camera.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, group.build())
                 } catch (e: Exception) {
                     android.util.Log.e("HorusEyes", "Camera unavailable", e); showFault()
                 }
             }, ContextCompat.getMainExecutor(this))
+        }
+    }
+    private fun toggleTorch() {
+        val cam = activeCamera ?: return
+        if (cam.cameraInfo.hasFlashUnit()) {
+            isTorchOn = !isTorchOn
+            cam.cameraControl.enableTorch(isTorchOn)
+            updateTorchButton()
+        }
+    }
+    private fun forceTorchOff() {
+        if (isTorchOn) {
+            isTorchOn = false
+            activeCamera?.cameraControl?.enableTorch(false)
+            updateTorchButton()
+        }
+    }
+    private fun updateTorchButton() {
+        if (isTorchOn) {
+            binding.btnTorch.setColorFilter(Color.parseColor("#FFD60A"))
+            binding.btnTorch.contentDescription = "Tắt đèn pin hỗ trợ"
+        } else {
+            binding.btnTorch.setColorFilter(Color.WHITE)
+            binding.btnTorch.contentDescription = "Bật đèn pin hỗ trợ"
         }
     }
     private fun showFault() {
@@ -167,6 +207,7 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
     override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
     override fun onDestroy() {
         closed = true; handler.removeCallbacks(watchdog)
+        forceTorchOff()
         analyzer?.setActive(false); provider?.unbindAll(); audio?.stop()
         // Model closure is queued behind any in-flight inference.
         executor.execute { depth?.close() }; executor.shutdown()
