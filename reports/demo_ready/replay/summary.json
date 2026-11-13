@@ -1,44 +1,44 @@
 {
-  "source_sha": "3048115bbe9330d810c64e15c66de9f6d0786378",
+  "source_sha": "d7872be638a6c0d64e8614cc9f5b3f0dbfef6c82",
   "dirty": true,
   "platform": "Windows-11-10.0.26300-SP0",
   "processor": "Intel64 Family 6 Model 142 Stepping 12, GenuineIntel",
   "frames": 120,
   "input": "tests/fixtures/demo/manifest.json",
-  "elapsed_sec": 20.75,
+  "elapsed_sec": 17.875,
   "camera_to_audio": "NOT MEASURED: replay does not include camera or physical audio",
   "latency": {
     "inference_ms": {
-      "median": 69.00144999963231,
-      "p95": 141.9416700053261,
-      "worst": 230.1906999782659
+      "median": 64.06715002958663,
+      "p95": 149.32884998561346,
+      "worst": 227.47880005044863
     },
     "objects_ms": {
-      "median": 49.45844999747351,
-      "p95": 86.47984502022152,
-      "worst": 215.2009999845177
+      "median": 45.0445500027854,
+      "p95": 67.5753350398736,
+      "worst": 145.2807000023313
     },
     "risk_ms": {
-      "median": 0.20435004262253642,
-      "p95": 0.3110750374617055,
-      "worst": 1.353900006506592
+      "median": 0.1846000086516142,
+      "p95": 0.27523000026121736,
+      "worst": 0.44929998693987727
     },
     "budget_ms": {
-      "median": 0.06955000571906567,
-      "p95": 0.09769498719833791,
-      "worst": 1.0024000075645745
+      "median": 0.061400001868605614,
+      "p95": 0.09339995740447193,
+      "worst": 0.15080004232004285
     },
     "render_ms": {
-      "median": 7.459350017597899,
-      "p95": 12.298304965952408,
-      "worst": 33.191599999554455
+      "median": 6.7310000013094395,
+      "p95": 10.738920033327304,
+      "worst": 33.67590002017096
     },
     "total_ms": {
-      "median": 128.49385000299662,
-      "p95": 247.5138000183505,
-      "worst": 354.16950000217184
+      "median": 116.87575001269579,
+      "p95": 224.8959850199753,
+      "worst": 364.1514999908395
     }
   },
-  "processing_fps": 6.926110013017633,
+  "processing_fps": 8.045190532221833,
   "annotated_video": "reports\\demo_ready\\replay\\annotated_replay.mp4"
 }

@@ -1,7 +1,7 @@
 # BÁO CÁO THỰC NGHIỆM ĐỘNG HỌC & TRÁNH VA CHẠM THỜI GIAN THỰC (ViSEF 2027)
 ## Đề tài: Khung điều phối ngân sách thính giác nhận thức độ bất định phục vụ hỗ trợ tránh va chạm thời gian thực tại biên (HorusEyes 2.0)
 **Tập dữ liệu chuẩn**: TUM RGB-D Benchmark (`rgbd_dataset_freiburg3_walking_static`)  
-**Thời gian thực hiện**: 2026-11-13 09:04:46
+**Thời gian thực hiện**: 2026-11-13 09:40:48
 
 ---
 
@@ -24,7 +24,7 @@
 | **2. Tính đúng đắn của logic TTC** | Số vi phạm ($v_z \le 0$ nhưng gán TTC hữu hạn): **0**<br>Số khung hình TTC hữu hạn: **20 frames** | **0 vi phạm & Phát hiện tiếp cận dương** | **ĐẠT (PASS)** |
 | **3. Ổn định luồng Tracking & Kháng giằng co** | Tỷ lệ hoán đổi ID: **2.5%**<br>Số track ID duy trì: **3 IDs** | $\le 20.0\%$ (chống rung giật luồng) | **ĐẠT (PASS)** |
 | **4. Định vị không gian & Hướng né** | Cảnh báo mối nguy Trái/Phải: **106/4 frames**<br>Chỉ dẫn điều hướng khả dụng: **84 frames** | Định vị chính xác không phát lái tự động | **ĐẠT (PASS)** |
-| **5. Hiệu năng xử lý thời gian thực biên** | Độ trễ trung bình: **82.15 ms** (P95: **111.03 ms**)<br>Tốc độ xử lý: **12.2 FPS** | Đo đạc trung thực trên CPU | **ĐẠT (PASS)** |
+| **5. Hiệu năng xử lý thời gian thực biên** | Độ trễ trung bình: **106.69 ms** (P95: **159.26 ms**)<br>Tốc độ xử lý: **9.4 FPS** | Đo đạc trung thực trên CPU | **ĐẠT (PASS)** |
 
 ### KẾT LUẬN TỔNG QUAN: **CHƯA ĐẠT ĐẦY ĐỦ TIÊU CHUẨN**
 

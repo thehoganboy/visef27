@@ -54,16 +54,31 @@ def main():
             if audio:
                 audio.update_decision(decision)
                 audio.check_stream_health()
-            # Preview remains fluid at camera capture rate.
-            # Render obstacle overlay only when spatially and temporally compatible (within 250ms).
+            # Centralized Freshness Policy (Directive P0-02):
+            # 1. Preview: freshest camera frame displayed directly at native capture rate
             display = frame if healthy else None
             obs_to_render = None
-            if result and healthy and (now - result.timestamp <= 0.25):
-                obs_to_render = result.observation
+            adv_to_render = None
 
-            adv = getattr(result, "advisory", None) if result else None
+            if result and healthy:
+                result_age = max(0.0, now - result.timestamp)
+                # 2. Tracking overlay window: <= 250ms (never misalign onto moved camera view)
+                if result_age <= 0.250:
+                    obs_to_render = result.observation
+                # 3. Directional advisory window: <= 500ms
+                if result_age <= 0.500:
+                    adv_to_render = getattr(result, "advisory", None)
+
+            if not active or threat == "PAUSED":
+                adv_to_render = advisory_for_risk("PAUSED", now)
+            elif threat in {"SENSOR_FAULT", "UNKNOWN", "INITIALIZING"}:
+                adv_to_render = advisory_for_risk(threat, now)
+            elif adv_to_render is None:
+                # Stale observation (> 500ms): withdraw directional arrow immediately
+                adv_to_render = DirectionalAdvisory(state=DirectionState.UNAVAILABLE, source_timestamp=now)
+
             canvas = view.render(display, obs_to_render,
-                                 threat, args.mirror_display, now, advisory=adv)
+                                 threat, args.mirror_display, now, advisory=adv_to_render)
             cv2.imshow(title, canvas)
             key = cv2.waitKey(20) & 255
             if key in (27, ord('q')) or cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:

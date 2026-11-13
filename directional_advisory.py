@@ -28,7 +28,8 @@ class DirectionalAdvisory:
     def drawable_angle(self, now: float) -> float | None:
         if self.state != DirectionState.AVAILABLE or self.angle_deg is None:
             return None
-        if not math.isfinite(self.angle_deg) or not 0 <= now - self.source_timestamp <= 1.0:
+        # Max age for rendering directional guidance is strictly 500ms
+        if not math.isfinite(self.angle_deg) or not 0 <= now - self.source_timestamp <= 0.50:
             return None
         bounds = self.observed_angular_range
         if bounds is None or not all(math.isfinite(x) for x in bounds):
@@ -220,54 +221,95 @@ def estimate_directional_advisory(
             )
 
     # 5. Build candidate angles within observed FOV (step 2.5 degrees)
-    # Heading eligibility depends on sector data validity
-    candidates = []
+    # Step 5A: Generate candidate headings across observed FOV
+    all_candidates = []
     ang = -half_fov + 2.5
     while ang <= half_fov - 2.5 + 1e-5:
-        # Sector support requirement
-        if ang < -10.0:
-            if status_l == "VALID":
-                candidates.append((ang, z_left))
-        elif ang > 10.0:
-            if status_r == "VALID":
-                candidates.append((ang, z_right))
-        else:
-            if status_c == "VALID":
-                candidates.append((ang, z_center))
+        all_candidates.append(ang)
         ang += 2.5
 
-    # If no candidate heading has valid sector support, directional guidance is unavailable
-    if not candidates:
-        return DirectionalAdvisory(
-            state=DirectionState.UNAVAILABLE,
-            observed_angular_range=obs_range,
-            source_timestamp=adv_ts
-        )
+    # Step 5B: Determine eligibility for each candidate heading
+    # Hard rejection rules (P0-01):
+    # 1. Sector information for candidate is invalid, unobservable, or stale
+    # 2. Candidate intersects the angular footprint of an unknown-distance obstacle
+    # 3. Candidate intersects a confirmed hazardous obstacle's required clearance envelope
+    eligible_candidates = []
+    untrustworthy_sector_count = 0
+    obstructed_count = 0
 
+    for cand in all_candidates:
+        # 1. Sector support & validity requirement
+        if cand < -10.0:
+            sec_status, z_sec = status_l, z_left
+        elif cand > 10.0:
+            sec_status, z_sec = status_r, z_right
+        else:
+            sec_status, z_sec = status_c, z_center
+
+        if sec_status != "VALID":
+            untrustworthy_sector_count += 1
+            continue
+
+        # 2. Hard obstacle intersection checks
+        is_blocked = False
+        for ang_c, radius, weight, z_obs, is_valid_dist in obstacle_profiles:
+            d_ang = abs(cand - ang_c)
+            if not is_valid_dist:
+                # Unknown-distance obstacle: hard rejection if heading falls within angular footprint
+                if d_ang < radius:
+                    is_blocked = True
+                    break
+            else:
+                # Valid distance obstacle: hard rejection if hazardous proximity (z < 50cm) and heading intersects safety radius
+                if z_obs < 50.0 and d_ang < radius:
+                    is_blocked = True
+                    break
+                if z_obs < 35.0 and d_ang < (radius + 2.0):
+                    is_blocked = True
+                    break
+
+        if z_sec < 40.0:
+            is_blocked = True
+
+        if is_blocked:
+            obstructed_count += 1
+            continue
+
+        eligible_candidates.append((cand, z_sec))
+
+    # Step 5C: Evaluate outcomes when no candidate is eligible
+    if not eligible_candidates:
+        # If all candidates were rejected due to verified obstacle blockages, path is genuinely blocked -> STOP
+        # If candidates were rejected due to untrustworthy/missing sector data, evidence is insufficient -> UNAVAILABLE
+        if obstructed_count > 0 and (obstructed_count >= len(all_candidates) * 0.5 or (status_c == "VALID" and z_center < 50.0)):
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+        else:
+            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, observed_angular_range=obs_range, source_timestamp=adv_ts)
+
+    # Step 6: Score ONLY eligible candidates
     best_candidate = 0.0
     min_risk = float("inf")
 
-    for cand, z_sec in candidates:
+    for cand, z_sec in eligible_candidates:
         risk = 0.0
 
-        # Obstacle risk penalty
-        for ang_c, radius, weight, z_obs, is_valid in obstacle_profiles:
+        # Obstacle proximity risk penalties (soft repulsion for eligible candidates passing nearby obstacles)
+        for ang_c, radius, weight, z_obs, is_valid_dist in obstacle_profiles:
             d_ang = abs(cand - ang_c)
             if d_ang < radius:
-                # Deep penetration into obstacle safety envelope
+                # Penetration into obstacle safety envelope
                 penetration = 1.0 - (d_ang / radius)
                 risk += weight * (penetration ** 2) * 15.0
             else:
-                # Soft proximity tail
                 d_edge = d_ang - radius
                 if d_edge < 15.0:
                     risk += weight * math.exp(-(d_edge ** 2) / 40.0) * 2.0
 
         # Sector proximity penalty from verified sector distance
         if z_sec < 80.0:
-            risk += ((80.0 - z_sec) / 10.0) * 5.0
+            risk += ((80.0 - z_sec) / 10.0) * 4.0
         elif z_sec < 150.0:
-            risk += ((150.0 - z_sec) / 70.0) * 2.0
+            risk += ((150.0 - z_sec) / 70.0) * 1.5
 
         # Straightforward bias (small penalty for deviating from center)
         risk += 0.05 * abs(cand)
@@ -281,14 +323,12 @@ def estimate_directional_advisory(
             min_risk = risk
             best_candidate = cand
 
-    # 6. Safety boundary checks
-    # If all eligible candidates have extreme risk (> 30.0), path is blocked -> STOP
+    # Step 7: Safety boundary check on eligible candidates
     if min_risk > 30.0 or (threat == "CRITICAL" and status_c == "VALID" and z_center < 40.0):
         return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
 
-    # 7. Confidence & Temporal Smoothing
-    # Heuristic support score bounded in [0.30, 0.85]
-    confidence = max(0.30, min(0.85, 1.0 - (min_risk / 35.0)))
+    # Step 8: Confidence & Temporal Smoothing
+    confidence = max(0.30, min(0.55, 1.0 - (min_risk / 35.0)))
     selected_angle = best_candidate
     if prev_angle is not None and math.isfinite(prev_angle):
         selected_angle = 0.45 * selected_angle + 0.55 * prev_angle

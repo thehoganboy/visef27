@@ -271,6 +271,7 @@ def evaluate_telemetry(records, dataset_name):
     hazard_ttc_violations = 0
     track_ttc_violations = 0
     finite_ttcs = []
+    finite_ttc_events = []
     approaching_vzs = []
     first_finite_ttc_ts = None
 
@@ -285,6 +286,25 @@ def evaluate_telemetry(records, dataset_name):
             # Vi phạm nếu TTC có giá trị hữu hạn nhưng vz <= 0 từ cùng một nguồn active hazard
             if h_vz <= 0.0:
                 hazard_ttc_violations += 1
+
+            # P0-03: Auditable provenance logging for each finite TTC event
+            is_valid_provenance = bool(
+                h_vz > 0.0 and h_ttc > 0.0 and
+                r["active_id"] > 0 and
+                str(r.get("source_id", "")) == str(r["active_id"])
+            )
+            finite_ttc_events.append({
+                "idx": int(r["idx"]),
+                "timestamp": float(round(r["timestamp"], 4)),
+                "track_id": int(r["active_id"]),
+                "source_id": str(r.get("source_id", r["active_id"])),
+                "dist_cm": float(round(r["hazard_dist_cm"], 1)),
+                "vz": float(round(h_vz, 2)),
+                "ttc": float(round(h_ttc, 2)),
+                "pan": float(round(r["pan"], 2)),
+                "threat_level": str(r.get("threat_level", "NORMAL")),
+                "provenance_valid": is_valid_provenance
+            })
 
         t_vz = r["primary_track_vz"]
         t_ttc = r["primary_track_ttc"]
@@ -389,6 +409,7 @@ def evaluate_telemetry(records, dataset_name):
         "avg_budget": avg_budget,
         "ttc_violations": ttc_violations,
         "finite_ttc_count": len(finite_ttcs),
+        "finite_ttc_events": finite_ttc_events,
         "first_finite_ttc_ts": first_finite_ttc_ts,
         "min_ttc": float(np.min(finite_ttcs)) if finite_ttcs else float("inf"),
         "max_ttc": float(np.max(finite_ttcs)) if finite_ttcs else float("inf"),
@@ -511,6 +532,7 @@ def export_json_summary(a, json_path, dataset_dir):
         "hazard_right_count": a["hazard_right_count"],
         "dir_available_count": a["dir_available_count"],
         "dir_stop_count": a["dir_stop_count"],
+        "finite_ttc_events": a.get("finite_ttc_events", []),
         "overall_pass": a["overall_pass"]
     }
     with open(json_path, "w", encoding="utf-8") as f:

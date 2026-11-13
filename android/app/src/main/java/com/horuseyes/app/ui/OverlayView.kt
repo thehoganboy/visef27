@@ -64,7 +64,7 @@ fun estimateDirectionalAdvisory(
         return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
     }
 
-    data class ObsProfile(val angCenter: Float, val radius: Float, val weight: Float)
+    data class ObsProfile(val angCenter: Float, val radius: Float, val weight: Float, val zObs: Float, val isValidDist: Boolean)
     val profiles = mutableListOf<ObsProfile>()
 
     for (o in depth.allObstacles) {
@@ -77,81 +77,109 @@ fun estimateDirectionalAdvisory(
         val angHalfW = max(2f, (angRight - angLeft) / 2f)
         val totalRadius: Float
         val weight: Float
+        val zVal: Float
         if (isDistValid) {
-            val z = max(10f, o.distCm)
-            val marginDeg = min(22f, max(4f, Math.toDegrees(kotlin.math.atan2(20.0, z.toDouble())).toFloat()))
+            zVal = max(10f, o.distCm)
+            val marginDeg = min(22f, max(4f, Math.toDegrees(kotlin.math.atan2(20.0, zVal.toDouble())).toFloat()))
             totalRadius = angHalfW + marginDeg
             weight = when {
-                z < 50f -> 20f
-                z < 80f -> 10f
-                z < 150f -> 4f
+                zVal < 50f -> 20f
+                zVal < 80f -> 10f
+                zVal < 150f -> 4f
                 else -> 1f
             }
         } else {
             // Unknown-distance obstacle: retain image-space angular occupancy without fabricating 100cm
+            zVal = Float.NaN
             val marginDeg = 8f
             totalRadius = angHalfW + marginDeg
             weight = 12f
         }
-        profiles.add(ObsProfile(angCenter, totalRadius, weight))
+        profiles.add(ObsProfile(angCenter, totalRadius, weight, zVal, isDistValid))
     }
 
     if (profiles.isEmpty() && validC && zCenter < 150f) {
         val angCenter = depth.pan * halfFov
         val weight = if (zCenter < 80f) 15f else 5f
-        profiles.add(ObsProfile(angCenter, 12f, weight))
+        profiles.add(ObsProfile(angCenter, 12f, weight, zCenter, true))
     }
 
     // Clear frame with no detected obstacles: only permitted if ALL 3 sectors are valid & clear
     if (profiles.isEmpty()) {
         if (validC && validL && validR && zCenter >= 150f && zLeft >= 150f && zRight >= 150f) {
             val angOut = if (prevAngle != null && prevAngle.isFinite()) 0.3f * 0f + 0.7f * prevAngle else 0f
-            // Heuristic support score 0.55f, not 0.92f
             return DirectionalAdvisory("AVAILABLE", angOut, 0.55f, obsRange, nowNanos)
         } else if (!validC && !validL && !validR) {
             return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
         }
     }
 
-    // Evaluate candidate headings with required sector validity
+    // Step 5A: Generate all candidate headings across observed FOV
+    val allCandidateAngles = mutableListOf<Float>()
+    var aStep = -halfFov + 2.5f
+    while (aStep <= halfFov - 2.5f + 1e-4f) {
+        allCandidateAngles.add(aStep)
+        aStep += 2.5f
+    }
+
+    // Step 5B: Determine eligibility for each candidate heading (P0-01 Hard Rejection)
     data class Candidate(val ang: Float, val zSec: Float)
-    val candidates = mutableListOf<Candidate>()
-    var ang = -halfFov + 2.5f
-    while (ang <= halfFov - 2.5f + 1e-4f) {
-        if (ang < -10f) {
-            if (validL) candidates.add(Candidate(ang, zLeft))
-        } else if (ang > 10f) {
-            if (validR) candidates.add(Candidate(ang, zRight))
-        } else {
-            if (validC) candidates.add(Candidate(ang, zCenter))
+    val eligibleCandidates = mutableListOf<Candidate>()
+    var obstructedCount = 0
+
+    for (cand in allCandidateAngles) {
+        val (secValid, zSec) = when {
+            cand < -10f -> Pair(validL, zLeft)
+            cand > 10f -> Pair(validR, zRight)
+            else -> Pair(validC, zCenter)
         }
-        ang += 2.5f
+        if (!secValid) continue
+
+        var isBlocked = false
+        for (p in profiles) {
+            val dAng = abs(cand - p.angCenter)
+            if (!p.isValidDist) {
+                if (dAng < p.radius) { isBlocked = true; break }
+            } else {
+                if (p.zObs < 50f && dAng < p.radius) { isBlocked = true; break }
+                if (p.zObs < 35f && dAng < (p.radius + 2f)) { isBlocked = true; break }
+            }
+        }
+        if (zSec < 40f) isBlocked = true
+
+        if (isBlocked) {
+            obstructedCount++
+            continue
+        }
+        eligibleCandidates.add(Candidate(cand, zSec))
     }
 
-    if (candidates.isEmpty()) {
-        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
+    // Step 5C: Evaluate outcomes when no candidate is eligible
+    if (eligibleCandidates.isEmpty()) {
+        return if (obstructedCount > 0 && (obstructedCount >= allCandidateAngles.size / 2 || (validC && zCenter < 50f))) {
+            DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
+        } else {
+            DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
+        }
     }
 
+    // Step 6: Score ONLY eligible candidates
     var bestAngle = 0f
     var minRisk = Float.MAX_VALUE
 
-    for (cand in candidates) {
+    for (cand in eligibleCandidates) {
         var risk = 0f
         for (p in profiles) {
             val dAng = abs(cand.ang - p.angCenter)
-            if (dAng < p.radius) {
-                val pen = 1f - (dAng / p.radius)
-                risk += p.weight * (pen * pen) * 15f
-            } else {
-                val dEdge = dAng - p.radius
-                if (dEdge < 15f) {
-                    risk += p.weight * kotlin.math.exp(-((dEdge * dEdge) / 40f)).toFloat() * 2f
-                }
+            val dEdge = dAng - p.radius
+            if (dEdge < 15f) {
+                val clampedEdge = max(0f, dEdge)
+                risk += p.weight * kotlin.math.exp(-((clampedEdge * clampedEdge) / 40f)).toFloat() * 2.5f
             }
         }
 
-        if (cand.zSec < 80f) risk += ((80f - cand.zSec) / 10f) * 5f
-        else if (cand.zSec < 150f) risk += ((150f - cand.zSec) / 70f) * 2f
+        if (cand.zSec < 80f) risk += ((80f - cand.zSec) / 10f) * 4f
+        else if (cand.zSec < 150f) risk += ((150f - cand.zSec) / 70f) * 1.5f
 
         risk += 0.05f * abs(cand.ang)
 
@@ -170,7 +198,7 @@ fun estimateDirectionalAdvisory(
         return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
     }
 
-    val conf = max(0.30f, min(0.85f, 1f - (minRisk / 35f)))
+    val conf = max(0.30f, min(0.55f, 1f - (minRisk / 35f)))
     var selected = bestAngle
     if (prevAngle != null && prevAngle.isFinite()) {
         selected = 0.45f * selected + 0.55f * prevAngle

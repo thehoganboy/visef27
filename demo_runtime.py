@@ -18,6 +18,21 @@ class PipelineResult:
     frame: object
     latency_ms: float
     advisory: object = None
+    frame_id: int = 0
+    inference_completed: float = 0.0
+
+    @property
+    def capture_timestamp(self) -> float:
+        return self.timestamp
+
+    def age(self, now: float) -> float:
+        return max(0.0, now - self.timestamp)
+
+    def is_overlay_fresh(self, now: float, window: float = 0.250) -> bool:
+        return self.age(now) <= window
+
+    def is_advisory_fresh(self, now: float, window: float = 0.500) -> bool:
+        return self.age(now) <= window
 
 class DemoRuntime:
     def __init__(self, estimator_factory=DepthEstimator, clock=time.monotonic):
@@ -102,8 +117,10 @@ class DemoRuntime:
                     prev_angle = adv.angle_deg
                 else:
                     prev_angle = None
+                now_completed = self.clock()
                 result = PipelineResult(token, timestamp, obs, k, budget.coordinate(obs, k),
-                                        frame, (self.clock() - start) * 1000, adv)
+                                        frame, (now_completed - start) * 1000, adv,
+                                        frame_id=frame_id, inference_completed=now_completed)
                 with self.lock:
                     if token == self.generation and self.active:
                         self.result, self.error = result, None

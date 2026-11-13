@@ -359,3 +359,80 @@ def test_unknown_obstacle_distance_handling():
     adv_c = estimate_directional_advisory(obs_center, threat="WARNING", now=10.0)
     assert adv_c.state == DirectionState.AVAILABLE
     assert adv_c.angle_deg < -5.0  # Steers left away from center unknown obstacle and right hazard!
+
+
+def test_unknown_obstacle_hard_exclusion_and_eligibility():
+    """Verify candidate headings intersecting unknown-distance obstacles are hard-rejected before scoring."""
+    # Obstacle covering center (-10 deg to +10 deg) with unknown (NaN) distance
+    unk_obs = SingleObstacle(9, 320, 240, (280, 180, 80, 120), 0.0, 0.8, float("nan"), "UNKNOWN", 0.1, False)
+    # Left and right sectors blocked by close hazards (< 40cm)
+    obs_res = ObstacleDetectionResult(
+        x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.5, dist_cm=float("nan"),
+        mode_text="TEST", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 30.0, "CENTER": float("nan"), "RIGHT": 30.0},
+        all_obstacles=[unk_obs], is_valid=True
+    )
+    # Because center is blocked by unknown obstacle and sides are < 40cm, all candidates must be rejected -> STOP
+    adv = estimate_directional_advisory(obs_res, threat="CRITICAL", now=10.0)
+    assert adv.state == DirectionState.STOP
+    assert adv.angle_deg is None
+
+
+def test_narrow_gap_candidate_rejection():
+    """Verify tight gap between two obstacles does not produce an AVAILABLE heading intersecting either obstacle."""
+    # Two obstacles close to center: one at -5 deg (x=300), one at +5 deg (x=340), each width 80
+    obs_l = SingleObstacle(11, 300, 240, (260, 180, 80, 120), -0.1, 0.9, 45.0, "OBS_L", 0.1, False)
+    obs_r = SingleObstacle(12, 340, 240, (300, 180, 80, 120), 0.1, 0.9, 45.0, "OBS_R", 0.1, False)
+    # Both sides also restricted
+    obs_res = ObstacleDetectionResult(
+        x=320, y=240, bbox=(260, 180, 120, 120), pan=0.0, proximity=0.9, dist_cm=45.0,
+        mode_text="TEST", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 45.0, "CENTER": 45.0, "RIGHT": 45.0},
+        all_obstacles=[obs_l, obs_r], is_valid=True
+    )
+    adv = estimate_directional_advisory(obs_res, threat="CRITICAL", now=10.0)
+    assert adv.state == DirectionState.STOP
+    assert adv.angle_deg is None
+
+
+def test_stale_result_withdraws_directional_arrow():
+    """Verify drawable_angle withdraws when result age exceeds 0.50s (500ms)."""
+    adv = DirectionalAdvisory(DirectionState.AVAILABLE, 12.0, 0.85, (-30, 30), 10.0)
+    # Fresh within 500ms
+    assert adv.drawable_angle(10.20) == 12.0
+    assert adv.drawable_angle(10.50) == 12.0
+    # Stale after 500ms
+    assert adv.drawable_angle(10.51) is None
+    assert adv.drawable_angle(11.00) is None
+
+    # Verify PipelineResult helpers
+    from demo_runtime import PipelineResult
+    pr = PipelineResult(
+        generation=1, timestamp=10.0, observation=None, kinematics=None,
+        decision=None, frame=None, latency_ms=50.0, advisory=adv,
+        frame_id=1, inference_completed=10.05
+    )
+    assert pr.is_overlay_fresh(10.24) is True
+    assert pr.is_overlay_fresh(10.26) is False  # 250ms overlay threshold
+    assert pr.is_advisory_fresh(10.49) is True
+    assert pr.is_advisory_fresh(10.52) is False  # 500ms advisory threshold
+
+
+def test_pause_resume_clears_heading_history():
+    """Verify pause immediately clears advisory state and heading history."""
+    obs_res = ObstacleDetectionResult(
+        x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.5, dist_cm=200.0,
+        mode_text="TEST", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 250.0, "CENTER": 200.0, "RIGHT": 250.0},
+        all_obstacles=[], is_valid=True
+    )
+    # First active frame with previous angle
+    adv1 = estimate_directional_advisory(obs_res, threat="SAFE", now=10.0, prev_angle=15.0)
+    assert adv1.state == DirectionState.AVAILABLE
+
+    # Enter PAUSED state: advisory must become UNKNOWN and angle None
+    adv_paused = estimate_directional_advisory(obs_res, threat="PAUSED", now=10.1, prev_angle=adv1.angle_deg)
+    assert adv_paused.state == DirectionState.UNKNOWN
+    assert adv_paused.angle_deg is None
+    assert adv_paused.drawable_angle(10.1) is None
+

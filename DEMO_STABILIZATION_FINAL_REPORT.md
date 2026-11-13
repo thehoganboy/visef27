@@ -165,3 +165,4 @@ For the controlled presentation before the VISEF evaluation panel:
   1. Commit and push final codebase to branch `feature/demo-ready-unified-ux`.
   2. Sideload `HorusEyes_iPhone14Pro.ipa` (Run #33) and install `app-debug.apk` on physical demo devices.
   3. Keep PR #1 open for CTO sign-off; **do NOT merge into `main`**.
+
