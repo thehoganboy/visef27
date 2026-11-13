@@ -26,7 +26,7 @@ All targeted defects identified in the review of baseline `d7872be` have been re
 | **Preserve Production MiDaS Small** | **COMPLIANT** | Retained standard `MiDaS_small` ONNX model (`1x3x256x192`). Zero additional neural networks added. |
 | **Strictly Camera-Only (No LiDAR/ToF)** | **COMPLIANT** | Verified zero reliance on active depth sensors, LiDAR, or ultrasonic transducers. |
 | **Desktop / Android / iOS Code Parity** | **COMPLIANT** | Identical candidate eligibility rules and freshness windows across Python, Kotlin, and Swift. |
-| **iOS Physical Device Testing Policy** | **COMPLIANT** | **DEFERRED BY CTO**. Physical iPhone hardware runtime is explicitly classified as `NOT TESTED`. Swift codebase compiles cleanly in CI (GitHub Actions Run #32, #33, #34: 100% SUCCESS). |
+| **iOS Physical Device Testing Policy** | **COMPLIANT** | **DEFERRED BY CTO**. Physical iPhone hardware runtime is explicitly classified as `NOT TESTED`. Swift codebase compiles cleanly in CI (GitHub Actions Run #32, #33, #34, #35: 100% SUCCESS). |
 | **Branching Policy** | **COMPLIANT** | All commits are isolated to `feature/demo-ready-unified-ux`. **Strictly NO merge into `main`**. |
 | **Scientific Claim Integrity** | **COMPLIANT** | Corrected 6 core scientific claims. Benchmark `overall_pass = false` preserved honestly. |
 
@@ -186,7 +186,7 @@ Integration pipeline audit ([test_pipeline.py](file:///e:/visef27%20project/test
    - Candidate eligibility separation verified in [OverlayView.kt](file:///e:/visef27%20project/android/app/src/main/java/com/horuseyes/app/ui/OverlayView.kt#L231-L260).
 2. **iOS Application**:
    - Swift implementation in [ContentView.swift](file:///e:/visef27%20project/ios/HorusEyes/UI/ContentView.swift#L240-L270) verified for exact mathematical and logic parity with Python and Kotlin.
-   - GitHub Actions CI (Run #32, #33, #34) confirmed successful compilation and offline Core ML packaging.
+   - GitHub Actions CI (Run #32, #33, #34, and Run #35 [43353389481]) confirmed successful compilation, native Swift behavior regression pass, and offline Core ML packaging (100% SUCCESS).
    - **Hardware Validation Notice**: In strict adherence to CTO orders, physical iPhone device testing is deferred and classified as:
      $$\mathbf{iOS\ Physical\ Device\ Runtime:\ NOT\ TESTED}$$
 
@@ -266,3 +266,4 @@ The final corrective engineering package for HorusEyes 2.0 has successfully reso
 - **Classification**:
   $$\mathbf{DEMO\ CANDIDATE\ —\ HARDWARE\ VALIDATION\ PENDING}$$
   $$\mathbf{NOT\ CERTIFIED\ FOR\ INDEPENDENT\ MOBILITY}$$
+
