@@ -27,6 +27,8 @@ import Foundation
         print("PASS Swift: static TTC, active critical audio, rotation/loss, invalid model precedence")
 
         testGoldenDirectionalScenarios()
+        testSourceTimestampLifecycleAndFreshness()
+        testTensorSpatialIntegration()
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
@@ -182,5 +184,220 @@ import Foundation
             }
         }
         print("PASS Swift Golden Directional Scenarios (16/16)")
+    }
+
+    static func testSourceTimestampLifecycleAndFreshness() {
+        let now = 100.0
+        func makeObs(ts: Double) -> ObstacleDetectionResult {
+            return ObstacleDetectionResult(
+                x: 96, y: 128, bbox: (x: 48, y: 64, w: 96, h: 128),
+                pan: 0.0, proximity: 0.2, distCM: 200.0,
+                modeText: "SAFE", uncertaintyScore: 0.05, isWall: false,
+                sectorDists: ["LEFT": 200.0, "CENTER": 200.0, "RIGHT": 200.0],
+                allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+                camWidth: 192, camHeight: 256, isValid: true,
+                spatialBins: [], timestamp: ts
+            )
+        }
+
+        // Case 1: Fresh observation (age = 0.10s) -> AVAILABLE
+        let adv1 = estimateDirectionalAdvisory(observation: makeObs(ts: now - 0.10), threat: "SAFE", now: now)
+        precondition(adv1.state == "AVAILABLE", "Case 1 failed: fresh observation must be AVAILABLE")
+        precondition(adv1.sourceTimestamp == now - 0.10, "Case 1 failed: source timestamp must be preserved")
+
+        // Case 2: Borderline fresh (age = 0.74s) -> AVAILABLE
+        let adv2 = estimateDirectionalAdvisory(observation: makeObs(ts: now - 0.74), threat: "SAFE", now: now)
+        precondition(adv2.state == "AVAILABLE", "Case 2 failed: 0.74s old observation must be AVAILABLE")
+
+        // Case 3: Exact boundary (age = 0.75s) -> AVAILABLE
+        let adv3 = estimateDirectionalAdvisory(observation: makeObs(ts: now - 0.75), threat: "SAFE", now: now)
+        precondition(adv3.state == "AVAILABLE", "Case 3 failed: 0.75s old observation must be AVAILABLE")
+
+        // Case 4: Stale observation (age = 0.76s) -> UNAVAILABLE
+        let adv4 = estimateDirectionalAdvisory(observation: makeObs(ts: now - 0.76), threat: "SAFE", now: now)
+        precondition(adv4.state == "UNAVAILABLE", "Case 4 failed: 0.76s old observation must be UNAVAILABLE")
+
+        // Case 5: Extremely stale (age = 5.0s) -> UNAVAILABLE
+        let adv5 = estimateDirectionalAdvisory(observation: makeObs(ts: now - 5.0), threat: "SAFE", now: now)
+        precondition(adv5.state == "UNAVAILABLE", "Case 5 failed: 5.0s old observation must be UNAVAILABLE")
+
+        // Case 6: Negative age / future observation anomaly (age = -0.10s) -> UNAVAILABLE
+        let adv6 = estimateDirectionalAdvisory(observation: makeObs(ts: now + 0.10), threat: "SAFE", now: now)
+        precondition(adv6.state == "UNAVAILABLE", "Case 6 failed: future observation anomaly must be UNAVAILABLE")
+
+        // Case 7: Zero timestamp fallback (ts = 0.0) -> UNAVAILABLE
+        let adv7 = estimateDirectionalAdvisory(observation: makeObs(ts: 0.0), threat: "SAFE", now: now)
+        precondition(adv7.state == "UNAVAILABLE", "Case 7 failed: zero timestamp must be UNAVAILABLE")
+
+        // Case 8: NaN / Infinite timestamp -> UNAVAILABLE
+        let adv8 = estimateDirectionalAdvisory(observation: makeObs(ts: Double.nan), threat: "SAFE", now: now)
+        precondition(adv8.state == "UNAVAILABLE", "Case 8 failed: NaN timestamp must be UNAVAILABLE")
+
+        // Case 9: drawableAngle within 750ms -> returns angle
+        let advFresh = DirectionalAdvisory(state: "AVAILABLE", angleDeg: 12.0, confidence: 0.55, observedAngularRange: (-32.5, 32.5), sourceTimestamp: 10.0)
+        precondition(advFresh.drawableAngle(now: 10.20) == 12.0, "Case 9 failed: drawableAngle must return angle within freshness window")
+        precondition(advFresh.drawableAngle(now: 10.75) == 12.0, "Case 9 failed: drawableAngle must return angle at 0.75s boundary")
+
+        // Case 10: drawableAngle expired at > 750ms -> returns nil
+        precondition(advFresh.drawableAngle(now: 10.76) == nil, "Case 10 failed: drawableAngle must return nil after 0.75s")
+        precondition(advFresh.drawableAngle(now: 15.0) == nil, "Case 10 failed: drawableAngle must return nil for stale timestamp")
+
+        print("PASS Swift Source Timestamp Lifecycle & Freshness (10/10)")
+    }
+
+    static func testTensorSpatialIntegration() {
+        func makeBin(id: Int, dist: Float, isValid: Bool = true, bodyDist: Float = .nan, groundDist: Float = .nan, overheadDist: Float = .nan, hasObs: Bool = false) -> SpatialBin {
+            let halfFov: Float = 32.5
+            let binW: Float = 65.0 / 24.0
+            let aMin = -halfFov + Float(id) * binW
+            let aMax = aMin + binW
+            let aCenter = (aMin + aMax) / 2.0
+            let bDist = bodyDist.isNaN ? dist : bodyDist
+            return SpatialBin(
+                binId: id, angleMin: aMin, angleMax: aMax, angleCenter: aCenter,
+                validRatio: isValid ? 1.0 : 0.0, rawDepthStatistic: 200.0,
+                distCM: isValid ? dist : .nan, isValid: isValid, hasObstacle: hasObs,
+                bodyDistCM: bDist, groundDistCM: groundDist, overheadDistCM: overheadDist
+            )
+        }
+
+        // 1. Open central corridor
+        let bins1 = (0..<24).map { makeBin(id: $0, dist: 220.0) }
+        let obs1 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.0, distCM: 220.0,
+            modeText: "SAFE", uncertaintyScore: 0.05, isWall: false,
+            sectorDists: ["LEFT": 220.0, "CENTER": 220.0, "RIGHT": 220.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins1, timestamp: 10.0
+        )
+        let adv1 = estimateDirectionalAdvisory(observation: obs1, threat: "SAFE", now: 10.0)
+        precondition(adv1.state == "AVAILABLE" && abs(adv1.angleDeg ?? 999.0) <= 2.0, "Tensor 1 failed")
+
+        // 2. Near sidewalls (left & right 28cm, center 200cm)
+        let bins2 = (0..<24).map { id -> SpatialBin in
+            let d: Float = (id < 4 || id >= 20) ? 28.0 : 200.0
+            return makeBin(id: id, dist: d)
+        }
+        let obs2 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.2, distCM: 200.0,
+            modeText: "DOORWAY", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 28.0, "CENTER": 200.0, "RIGHT": 28.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins2, timestamp: 10.0
+        )
+        let adv2 = estimateDirectionalAdvisory(observation: obs2, threat: "SAFE", now: 10.0)
+        precondition(adv2.state == "AVAILABLE" && abs(adv2.angleDeg ?? 999.0) <= 3.0, "Tensor 2 failed")
+
+        // 3. Narrow opening below clearance requirement
+        let bins3 = (0..<24).map { id -> SpatialBin in
+            let d: Float = (id >= 10 && id <= 13) ? 200.0 : 28.0
+            return makeBin(id: id, dist: d)
+        }
+        let obsItemL = SingleObstacle(id: 1, x: 40, y: 108, bbox: (0, 51, 80, 115), pan: -0.5, proximity: 0.9, distCM: 28.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let obsItemR = SingleObstacle(id: 2, x: 152, y: 108, bbox: (112, 51, 80, 115), pan: 0.5, proximity: 0.9, distCM: 28.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let obs3 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.9, distCM: 28.0,
+            modeText: "WALL", uncertaintyScore: 0.1, isWall: true,
+            sectorDists: ["LEFT": 28.0, "CENTER": 28.0, "RIGHT": 28.0],
+            allObstacles: [obsItemL, obsItemR], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins3, timestamp: 10.0
+        )
+        let adv3 = estimateDirectionalAdvisory(observation: obs3, threat: "CRITICAL", now: 10.0)
+        precondition(adv3.state == "STOP", "Tensor 3 failed")
+
+        // 4. Central near obstruction (55cm) with supported side route
+        let bins4 = (0..<24).map { id -> SpatialBin in
+            let d: Float = (id >= 9 && id <= 14) ? 55.0 : 200.0
+            return makeBin(id: id, dist: d)
+        }
+        let obsItem4 = SingleObstacle(id: 1, x: 96, y: 108, bbox: (72, 51, 48, 115), pan: 0.0, proximity: 0.7, distCM: 55.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs4 = ObstacleDetectionResult(
+            x: 96, y: 108, bbox: (72, 51, 48, 115), pan: 0.0, proximity: 0.7, distCM: 55.0,
+            modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 200.0, "CENTER": 55.0, "RIGHT": 200.0],
+            allObstacles: [obsItem4], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins4, timestamp: 10.0
+        )
+        let adv4 = estimateDirectionalAdvisory(observation: obs4, threat: "WARNING", now: 10.0)
+        precondition(adv4.state == "AVAILABLE" && abs(adv4.angleDeg ?? 0.0) >= 5.0, "Tensor 4 failed")
+
+        // 5. Invalid outer bins: edge distortion/NaNs, center clear
+        let bins5 = (0..<24).map { id -> SpatialBin in
+            let valid = !(id < 3 || id >= 21)
+            return makeBin(id: id, dist: valid ? 180.0 : .nan, isValid: valid)
+        }
+        let obs5 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.2, distCM: 180.0,
+            modeText: "SAFE", uncertaintyScore: 0.2, isWall: false,
+            sectorDists: ["LEFT": .nan, "CENTER": 180.0, "RIGHT": .nan],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins5, timestamp: 10.0
+        )
+        let adv5 = estimateDirectionalAdvisory(observation: obs5, threat: "SAFE", now: 10.0)
+        precondition(adv5.state == "AVAILABLE" && abs(adv5.angleDeg ?? 999.0) <= 2.0, "Tensor 5 failed")
+
+        // 6. Invalid central bins: central region invalid -> UNAVAILABLE
+        let bins6 = (0..<24).map { id -> SpatialBin in
+            let valid = !(id == 11 || id == 12)
+            return makeBin(id: id, dist: valid ? 200.0 : .nan, isValid: valid)
+        }
+        let obs6 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.0, distCM: .nan,
+            modeText: "UNKNOWN", uncertaintyScore: 0.9, isWall: false,
+            sectorDists: ["LEFT": 200.0, "CENTER": .nan, "RIGHT": 200.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins6, timestamp: 10.0
+        )
+        let adv6 = estimateDirectionalAdvisory(observation: obs6, threat: "SAFE", now: 10.0)
+        precondition(adv6.state == "UNAVAILABLE", "Tensor 6 failed")
+
+        // 7. Upper hazard multi-band under CRITICAL threat -> STOP
+        let bins7 = (0..<24).map { makeBin(id: $0, dist: 180.0, overheadDist: 40.0) }
+        let obsItem7 = SingleObstacle(id: 1, x: 96, y: 20, bbox: (30, 0, 132, 40), pan: 0.0, proximity: 0.8, distCM: 40.0, modeText: "OVERHEAD", uncertaintyScore: 0.1, isWall: false)
+        let obs7 = ObstacleDetectionResult(
+            x: 96, y: 20, bbox: (30, 0, 132, 40), pan: 0.0, proximity: 0.8, distCM: 40.0,
+            modeText: "OVERHEAD", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 40.0, "CENTER": 40.0, "RIGHT": 40.0],
+            allObstacles: [obsItem7], isZeroLuxBlind: false, isOverheadHazard: true, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins7, timestamp: 10.0
+        )
+        let adv7 = estimateDirectionalAdvisory(observation: obs7, threat: "CRITICAL", now: 10.0)
+        precondition(adv7.state == "STOP", "Tensor 7 failed")
+
+        // 8. Low ground obstacle: ground band caught hazard
+        let bins8 = (0..<24).map { id -> SpatialBin in
+            let gDist: Float = (id >= 9 && id <= 14) ? 30.0 : .nan
+            return makeBin(id: id, dist: 180.0, groundDist: gDist)
+        }
+        precondition(bins8.contains(where: { !$0.groundDistCM.isNaN && $0.groundDistCM < 50.0 }), "Tensor 8 failed")
+
+        // 9. Partly visible lateral object at frame edge
+        let bins9 = (0..<24).map { id -> SpatialBin in
+            let d: Float = (id >= 20) ? 55.0 : 180.0
+            return makeBin(id: id, dist: d)
+        }
+        let obsItem9 = SingleObstacle(id: 1, x: 176, y: 108, bbox: (160, 51, 32, 115), pan: 0.8, proximity: 0.6, distCM: 55.0, modeText: "OBSTACLE", uncertaintyScore: 0.15, isWall: false)
+        let obs9 = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.3, distCM: 180.0,
+            modeText: "SAFE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 200.0, "CENTER": 180.0, "RIGHT": 55.0],
+            allObstacles: [obsItem9], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: bins9, timestamp: 10.0
+        )
+        let adv9 = estimateDirectionalAdvisory(observation: obs9, threat: "WARNING", now: 10.0)
+        precondition(adv9.state == "AVAILABLE" && abs(adv9.angleDeg ?? 999.0) <= 15.0, "Tensor 9 failed")
+
+        // 10. Entirely invalid tensor: all bins invalid -> UNKNOWN
+        let bins10 = (0..<24).map { makeBin(id: $0, dist: .nan, isValid: false) }
+        let obs10 = ObstacleDetectionResult(
+            x: 0, y: 0, bbox: (0, 0, 0, 0), pan: 0.0, proximity: 0.0, distCM: .nan,
+            modeText: "FAULT", uncertaintyScore: 1.0, isWall: false,
+            sectorDists: [:], allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 0, camHeight: 0, isValid: false, spatialBins: bins10, timestamp: 10.0
+        )
+        let adv10 = estimateDirectionalAdvisory(observation: obs10, threat: "SENSOR_FAULT", now: 10.0)
+        precondition(adv10.state == "UNKNOWN", "Tensor 10 failed")
+
+        print("PASS Swift Tensor Spatial Integration (10/10)")
     }
 }

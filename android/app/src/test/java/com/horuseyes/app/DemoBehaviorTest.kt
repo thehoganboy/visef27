@@ -52,7 +52,8 @@ class DemoBehaviorTest {
         // 1. Clear corridor -> 0 degrees
         val clearDepth = DepthResult(
             floatArrayOf(1f), 192, 256, 250f, 0f, 0f, 0.1f, false,
-            mapOf("LEFT" to 250f, "CENTER" to 250f, "RIGHT" to 250f), emptyList()
+            mapOf("LEFT" to 250f, "CENTER" to 250f, "RIGHT" to 250f), emptyList(),
+            timestampNanos = 100L
         )
         val clearAdv = estimateDirectionalAdvisory(clearDepth, "SAFE", 100L)
         assertEquals("AVAILABLE", clearAdv.state)
@@ -62,7 +63,8 @@ class DemoBehaviorTest {
         val rightObs = Obstacle(1, 150, 128, Rect(130, 98, 170, 158), 0.5f, 65f, 0.8f, 0.1f)
         val rightDepth = DepthResult(
             floatArrayOf(1f), 192, 256, 65f, 0.5f, 0.8f, 0.1f, false,
-            mapOf("LEFT" to 250f, "CENTER" to 180f, "RIGHT" to 65f), listOf(rightObs)
+            mapOf("LEFT" to 250f, "CENTER" to 180f, "RIGHT" to 65f), listOf(rightObs),
+            timestampNanos = 100L
         )
         val rightAdv = estimateDirectionalAdvisory(rightDepth, "WARNING", 100L)
         assertEquals("AVAILABLE", rightAdv.state)
@@ -72,7 +74,8 @@ class DemoBehaviorTest {
         val leftObs = Obstacle(2, 40, 128, Rect(20, 98, 60, 158), -0.5f, 65f, 0.8f, 0.1f)
         val leftDepth = DepthResult(
             floatArrayOf(1f), 192, 256, 65f, -0.5f, 0.8f, 0.1f, false,
-            mapOf("LEFT" to 65f, "CENTER" to 180f, "RIGHT" to 250f), listOf(leftObs)
+            mapOf("LEFT" to 65f, "CENTER" to 180f, "RIGHT" to 250f), listOf(leftObs),
+            timestampNanos = 100L
         )
         val leftAdv = estimateDirectionalAdvisory(leftDepth, "WARNING", 100L)
         assertEquals("AVAILABLE", leftAdv.state)
@@ -81,7 +84,8 @@ class DemoBehaviorTest {
         // 4. Completely obstructed -> STOP
         val blockedDepth = DepthResult(
             floatArrayOf(1f), 192, 256, 35f, 0f, 0.9f, 0.1f, false,
-            mapOf("LEFT" to 40f, "CENTER" to 35f, "RIGHT" to 45f), listOf(rightObs)
+            mapOf("LEFT" to 40f, "CENTER" to 35f, "RIGHT" to 45f), listOf(rightObs),
+            timestampNanos = 100L
         )
         val blockedAdv = estimateDirectionalAdvisory(blockedDepth, "CRITICAL", 100L)
         assertEquals("STOP", blockedAdv.state)

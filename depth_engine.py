@@ -276,6 +276,7 @@ class ObstacleDetectionResult:
     quality_state: str = "OBSERVABLE" # "OBSERVABLE", "DEGRADED", "UNOBSERVABLE", "UNKNOWN" (Directive 01B-A+ Task A+3)
     quality_reasons: List[str] = field(default_factory=list)
     spatial_bins: Optional[List[SpatialBin]] = None # 16-32 horizontal spatial occupancy bins
+    timestamp: float = 0.0 # Source capture timestamp in monotonic seconds
 
 
 def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, List[str], dict]:

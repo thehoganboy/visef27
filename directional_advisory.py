@@ -25,11 +25,11 @@ class DirectionalAdvisory:
     observed_angular_range: tuple[float, float] | None = None
     source_timestamp: float = 0.0
 
-    def drawable_angle(self, now: float) -> float | None:
+    def drawable_angle(self, now: float, max_age: float = 0.50) -> float | None:
         if self.state != DirectionState.AVAILABLE or self.angle_deg is None:
             return None
-        # Max age for rendering directional guidance is strictly 500ms
-        if not math.isfinite(self.angle_deg) or not 0 <= now - self.source_timestamp <= 0.50:
+        # Max age for rendering directional guidance is strictly max_age (default 500ms)
+        if not math.isfinite(self.angle_deg) or not 0 <= now - self.source_timestamp <= max_age:
             return None
         bounds = self.observed_angular_range
         if bounds is None or not all(math.isfinite(x) for x in bounds):
@@ -90,9 +90,9 @@ def estimate_directional_advisory(
     # 1.1 Spatial observation freshness check (reject stale observations > 750ms)
     obs_ts = getattr(observation, "timestamp", None)
     adv_ts = now
-    if obs_ts is not None and isinstance(obs_ts, (int, float)) and math.isfinite(obs_ts):
+    if obs_ts is not None and isinstance(obs_ts, (int, float)) and math.isfinite(obs_ts) and obs_ts > 0:
         adv_ts = obs_ts
-        if now > 0 and obs_ts > 0 and (now - obs_ts > 0.75):
+        if now > 0 and (now - obs_ts > 0.75):
             return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, source_timestamp=obs_ts)
 
     # 2. Camera geometry and observed FOV limits
@@ -149,6 +149,16 @@ def estimate_directional_advisory(
                 return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
         else:
             return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+
+    # Overhead hazard or drop-off hazard under CRITICAL threat forces immediate STOP
+    is_overhead = bool(getattr(observation, "overhead_hazard", False) or
+                       getattr(observation, "is_overhead_hazard", False) or
+                       getattr(observation, "mode_text", "") == "OVERHEAD")
+    is_drop_off = bool(getattr(observation, "drop_off_hazard", False) or
+                       getattr(observation, "is_drop_off_hazard", False) or
+                       getattr(observation, "mode_text", "") == "DROP_OFF")
+    if threat == "CRITICAL" and (is_overhead or is_drop_off):
+        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
 
     # 4. Map obstacles to angular span and risk weights
     # Remove remaining fabricated 100cm fallback: preserve unknown-distance obstacles by their angular bbox

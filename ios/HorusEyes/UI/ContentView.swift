@@ -26,16 +26,17 @@ final class DemoController: ObservableObject {
     private var yaw: Float = 0
     private var prevAngle: Double? = nil
     private var isAppeared: Bool = false
+    private var lastAcceptedFrameId: UInt64 = 0
+    private var lastAcceptedTimestamp: Double = 0.0
 
     func appear() {
         guard !isAppeared else { return }
         isAppeared = true
 
-        camera.onFrameProcessed = { [weak self] buffer, frameId, settle, luma in
+        camera.onFrameProcessed = { [weak self] buffer, frameId, settle, luma, capturedAt in
             guard let self = self else { return }
-            let now = CACurrentMediaTime()
             self.lock.lock()
-            self.lastFrame = now
+            self.lastFrame = capturedAt
             guard self.enabled && !self.busy else { self.lock.unlock(); return }
             self.busy = true
             let token = self.generation
@@ -48,21 +49,45 @@ final class DemoController: ObservableObject {
                     self.workerGeneration = token
                 }
                 if self.depth == nil { self.depth = DepthEngine() }
-                let obs = self.depth!.processFrame(pixelBuffer: buffer, frameId: frameId,
-                    aeSettleFramesRemaining: settle, meanLuma: luma, isZeroLuxBlind: luma < 10)
-                let risk = self.kin.compute(obstacleResult: obs, frameId: frameId,
-                    timestamp: now, aeSettleRemaining: settle, imuYawRateRadS: rate)
+                let obs = self.depth!.processFrame(
+                    pixelBuffer: buffer,
+                    frameId: frameId,
+                    sourceTimestamp: capturedAt,
+                    aeSettleFramesRemaining: settle,
+                    meanLuma: luma,
+                    isZeroLuxBlind: luma < 10
+                )
+                let risk = self.kin.compute(
+                    obstacleResult: obs,
+                    frameId: frameId,
+                    timestamp: capturedAt,
+                    aeSettleRemaining: settle,
+                    imuYawRateRadS: rate
+                )
                 let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk)
                 DispatchQueue.main.async {
+                    let consumedAt = CACurrentMediaTime()
                     self.lock.lock()
                     let current = self.enabled && self.generation == token
                     self.lock.unlock()
                     guard current else { return }
-                    guard CACurrentMediaTime()-now <= 1 else { self.fault(); return }
+
+                    let age = consumedAt - obs.timestamp
+                    guard obs.timestamp > 0 && !obs.timestamp.isNaN && !obs.timestamp.isInfinite else { return }
+                    guard age >= -0.05 && age <= 0.75 else { return }
+                    guard frameId > self.lastAcceptedFrameId && obs.timestamp >= self.lastAcceptedTimestamp else { return }
+
+                    self.lastAcceptedFrameId = frameId
+                    self.lastAcceptedTimestamp = obs.timestamp
                     self.result = obs.isValid ? obs : nil
-                    self.sourceTimestamp = now
+                    self.sourceTimestamp = obs.timestamp
                     self.threat = risk.threatLevel
-                    let adv = estimateDirectionalAdvisory(observation: obs, threat: risk.threatLevel, now: now, prevAngle: self.prevAngle)
+                    let adv = estimateDirectionalAdvisory(
+                        observation: obs,
+                        threat: risk.threatLevel,
+                        now: consumedAt,
+                        prevAngle: self.prevAngle
+                    )
                     self.advisory = adv
                     self.prevAngle = adv.state == "AVAILABLE" ? adv.angleDeg : nil
                     self.audio.update(decision: decision)
@@ -81,6 +106,12 @@ final class DemoController: ObservableObject {
         if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) { fault() }
         // Preview remains live; stale boxes must disappear independently of frames.
         if now-sourceTimestamp > 0.25 { result = nil }
+        // Expire directional advisory at 750ms
+        if now-sourceTimestamp > 0.75 {
+            if advisory.state == "AVAILABLE" {
+                advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: sourceTimestamp)
+            }
+        }
     }
     private func silentDecision() -> BudgetDecision {
         BudgetDecision(isActive: false, pan: 0, proximity: 0, distCM: .nan, ttc: .infinity,
@@ -96,10 +127,11 @@ final class DemoController: ObservableObject {
     func setActive(_ value: Bool) {
         lock.lock(); generation += 1; enabled = value; lock.unlock()
         active = value; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
+        lastAcceptedFrameId = 0; lastAcceptedTimestamp = 0.0
         started = CACurrentMediaTime(); sourceTimestamp = started
         threat = value ? "INITIALIZING" : "PAUSED"
         audio.update(decision: silentDecision())
-        if value { audio.start() }
+        if value { audio.start() } else { audio.stop() }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
     func disappear() {

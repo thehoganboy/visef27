@@ -157,6 +157,7 @@ final class DepthEngine: ObservableObject {
     func processFrame(
         pixelBuffer: CVPixelBuffer,
         frameId: UInt64,
+        sourceTimestamp: Double = CACurrentMediaTime(),
         aeSettleFramesRemaining: Int,
         meanLuma: Float,
         isZeroLuxBlind: Bool
@@ -179,7 +180,8 @@ final class DepthEngine: ObservableObject {
                 isOverheadHazard: false,
                 isDropOffHazard: false,
                 camWidth: width,
-                camHeight: height, isValid: false
+                camHeight: height, isValid: false,
+                timestamp: sourceTimestamp
             )
             DispatchQueue.main.async { self.lastResult = blindResult }
             return blindResult
@@ -193,7 +195,7 @@ final class DepthEngine: ObservableObject {
                 proximity: 0.4, distCM: .nan, modeText: "MODEL_UNAVAILABLE", uncertaintyScore: 1,
                 isWall: false, sectorDists: [:], allObstacles: [], isZeroLuxBlind: false,
                 isOverheadHazard: false, isDropOffHazard: false, camWidth: width, camHeight: height,
-                isValid: false)
+                isValid: false, timestamp: sourceTimestamp)
         }
 
         // Execute Spatial Engine v8 Rules
@@ -201,7 +203,8 @@ final class DepthEngine: ObservableObject {
             rawDisparity: rawDisparity,
             w: width,
             h: height,
-            meanLuma: meanLuma
+            meanLuma: meanLuma,
+            sourceTimestamp: sourceTimestamp
         )
 
         let elapsedMs = Float((CACurrentMediaTime() - startTime) * 1000.0)
@@ -273,7 +276,8 @@ final class DepthEngine: ObservableObject {
         rawDisparity: [Float],
         w: Int,
         h: Int,
-        meanLuma: Float
+        meanLuma: Float,
+        sourceTimestamp: Double = CACurrentMediaTime()
     ) -> ObstacleDetectionResult {
         // Step 1: Lens Saturation check (>25% center area >= 800.0 raw)
         let centerBoxX1 = Int(Double(gridW) * 0.25)
@@ -317,7 +321,8 @@ final class DepthEngine: ObservableObject {
                 isDropOffHazard: false,
                 camWidth: w,
                 camHeight: h,
-                spatialBins: satBins
+                spatialBins: satBins,
+                timestamp: sourceTimestamp
             )
         }
 
@@ -534,7 +539,8 @@ final class DepthEngine: ObservableObject {
             isDropOffHazard: isDropOff,
             camWidth: w,
             camHeight: h,
-            spatialBins: bins
+            spatialBins: bins,
+            timestamp: sourceTimestamp
         )
     }
 

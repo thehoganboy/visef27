@@ -22,7 +22,7 @@ data class DirectionalAdvisory(
     fun drawableAngle(now: Long): Float? {
         val a = angleDeg ?: return null
         val range = observedRange ?: return null
-        if (state != "AVAILABLE" || !a.isFinite() || now - sourceNanos !in 0..1_000_000_000L ||
+        if (state != "AVAILABLE" || !a.isFinite() || (now - sourceNanos) !in 0L..750_000_000L ||
             confidence == null || confidence <= 0 || confidence > 1 ||
             range.first < -90 || range.second > 90 || a < range.first || a > range.second) return null
         return a
@@ -43,14 +43,15 @@ fun estimateDirectionalAdvisory(
     val halfFov = hfovDeg / 2f
     val obsRange = Pair(-halfFov, halfFov)
 
-    // Spatial observation freshness check (reject stale observations > 750ms)
-    val advNanos = if (depth.timestampNanos > 0L) depth.timestampNanos else nowNanos
-    if (depth.timestampNanos > 0L && nowNanos > 0L) {
-        val ageSeconds = (nowNanos - depth.timestampNanos) / 1_000_000_000.0
-        if (ageSeconds > 0.75) {
-            return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = depth.timestampNanos)
-        }
+    // Spatial observation freshness check (reject missing, invalid, or stale observations > 750ms)
+    if (depth.timestampNanos <= 0L) {
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
     }
+    val ageSeconds = (nowNanos - depth.timestampNanos) / 1_000_000_000.0
+    if (ageSeconds < -0.05 || ageSeconds > 0.75) {
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = depth.timestampNanos)
+    }
+    val advNanos = depth.timestampNanos
 
     val camW = if (depth.width > 0) depth.width.toFloat() else 192f
     val cx = camW / 2f
@@ -83,6 +84,13 @@ fun estimateDirectionalAdvisory(
         } else {
             return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
         }
+    }
+
+    // Overhead or drop-off hazard under CRITICAL threat forces immediate STOP
+    val isOverhead = depth.overheadHazard || depth.modeText == "OVERHEAD" || depth.allObstacles.any { it.modeText == "OVERHEAD" }
+    val isDropOff = depth.dropOffHazard || depth.modeText == "DROP_OFF" || depth.allObstacles.any { it.modeText == "DROP_OFF" }
+    if (threat == "CRITICAL" && (isOverhead || isDropOff)) {
+        return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
     }
 
     data class ObsProfile(val angCenter: Float, val radius: Float, val weight: Float, val zObs: Float, val isValidDist: Boolean)
@@ -361,9 +369,9 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
         invalidate()
     }
 
-    fun update(result: DepthResult, state: String, sourceNanos: Long) {
-        depth = result; threat = state; timestamp = sourceNanos
-        advisory = estimateDirectionalAdvisory(result, state, sourceNanos, prevAngle = prevAngle)
+    fun update(result: DepthResult, state: String, nowNanos: Long = SystemClock.elapsedRealtimeNanos()) {
+        depth = result; threat = state; timestamp = result.timestampNanos
+        advisory = estimateDirectionalAdvisory(result, state, nowNanos, prevAngle = prevAngle)
         prevAngle = if (advisory.state == "AVAILABLE") advisory.angleDeg else null
         contentDescription = if (state == "CRITICAL") "Stop. Obstacle detected" else "Direction advisory"
         invalidate()

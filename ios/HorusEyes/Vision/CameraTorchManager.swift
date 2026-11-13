@@ -45,7 +45,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private let hapticGenerator = UIImpactFeedbackGenerator(style: .heavy)
 
     // Callbacks
-    var onFrameProcessed: ((_ pixelBuffer: CVPixelBuffer, _ frameId: UInt64, _ aeSettle: Int, _ luma: Float) -> Void)?
+    var onFrameProcessed: ((_ pixelBuffer: CVPixelBuffer, _ frameId: UInt64, _ aeSettle: Int, _ luma: Float, _ sourceTimestamp: Double) -> Void)?
     var onTorchToggled: ((_ isOn: Bool) -> Void)?
 
     // ── Health Watchdog ────────────────────────────────────────────────────────
@@ -238,7 +238,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             lastFpsTimestamp = now
         }
 
-        onFrameProcessed?(pixelBuffer, frameId, aeSettleFramesRemaining, luma)
+        onFrameProcessed?(pixelBuffer, frameId, aeSettleFramesRemaining, luma, now)
     }
 
     // ── Fast Plane 0 Luma Computation (Planar & Non-Planar Crash-Proof) ─────

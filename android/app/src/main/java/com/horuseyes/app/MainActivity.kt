@@ -127,9 +127,12 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
     override fun onResult(depth: DepthResult, risk: KinematicsResult, decision: BudgetDecision, sourceNanos: Long, generation: Long) {
         runOnUiThread {
             if (!running || generation != analyzer?.generation || closed) return@runOnUiThread
-            if (SystemClock.elapsedRealtimeNanos() - sourceNanos > 1_000_000_000L) { showFault(); return@runOnUiThread }
+            val now = SystemClock.elapsedRealtimeNanos()
+            val ageSec = (now - sourceNanos) / 1_000_000_000.0f
+            if (sourceNanos <= 0L || ageSec < -0.05f || ageSec > 0.75f) return@runOnUiThread
+            if (sourceNanos < lastResult) return@runOnUiThread
             lastResult = sourceNanos
-            binding.overlayView.update(depth, risk.threatLevel, sourceNanos)
+            binding.overlayView.update(depth, risk.threatLevel, now)
             audio?.updateState(decision)
         }
     }

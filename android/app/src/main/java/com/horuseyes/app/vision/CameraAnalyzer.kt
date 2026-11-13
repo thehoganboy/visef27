@@ -51,7 +51,7 @@ class CameraAnalyzer(private val depth: DepthEngine, private val listener: Telem
             val input = if (upright.width == depth.inW && upright.height == depth.inH) upright else {
                 Bitmap.createScaledBitmap(upright, depth.inW, depth.inH, true).also { bitmaps.add(it) }
             }
-            val result = depth.inferDepth(input).copy(sourceAspect = upright.width.toFloat() / upright.height)
+            val result = depth.inferDepth(input, sourceTimestampNanos = now).copy(sourceAspect = upright.width.toFloat() / upright.height)
             // Relative monotonic epoch avoids Float precision loss after long device uptime.
             val risk = kin.compute(result, (now - epoch) / 1_000_000_000f, yawRate)
             val decision = budget.coordinate(result, risk)

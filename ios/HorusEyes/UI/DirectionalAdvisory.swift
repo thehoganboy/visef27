@@ -25,7 +25,7 @@ struct DirectionalAdvisory {
         guard state == "AVAILABLE", let angle = angleDeg, angle.isFinite,
               let confidence = confidence, confidence > 0, confidence <= 1,
               let range = observedAngularRange, range.lowerBound >= -90, range.upperBound <= 90,
-              range.contains(angle), (0...1).contains(now - sourceTimestamp) else { return nil }
+              range.contains(angle), (0.0...0.75).contains(now - sourceTimestamp) else { return nil }
         return angle
     }
 }
@@ -47,11 +47,15 @@ func estimateDirectionalAdvisory(
     let halfFov = hfovDeg / 2.0
     let obsRange = (-halfFov)...halfFov
 
-    // Spatial observation freshness check (reject stale observations > 750ms)
-    let advTs = obs.timestamp > 0 ? obs.timestamp : now
-    if obs.timestamp > 0 && now > 0 && (now - obs.timestamp > 0.75) {
+    // Spatial observation freshness check (reject missing, invalid, or stale observations > 750ms)
+    guard obs.timestamp > 0 && !obs.timestamp.isNaN && !obs.timestamp.isInfinite else {
+        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: now)
+    }
+    let age = now - obs.timestamp
+    if age < -0.05 || age > 0.75 {
         return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: obs.timestamp)
     }
+    let advTs = obs.timestamp
 
     let camW = Double(obs.camWidth > 0 ? obs.camWidth : 192)
     let cx = camW / 2.0
@@ -84,6 +88,13 @@ func estimateDirectionalAdvisory(
         } else {
             return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
         }
+    }
+
+    // Overhead or drop-off hazard under CRITICAL threat forces immediate STOP
+    let isOverhead = obs.isOverheadHazard || obs.modeText == "OVERHEAD" || obs.allObstacles.contains(where: { $0.modeText == "OVERHEAD" })
+    let isDropOff = obs.isDropOffHazard || obs.modeText == "DROP_OFF" || obs.allObstacles.contains(where: { $0.modeText == "DROP_OFF" })
+    if threat == "CRITICAL" && (isOverhead || isDropOff) {
+        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs)
     }
 
     struct ObsProfile {

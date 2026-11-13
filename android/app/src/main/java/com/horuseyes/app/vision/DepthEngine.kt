@@ -3,6 +3,7 @@ package com.horuseyes.app.vision
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.SystemClock
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
@@ -64,7 +65,10 @@ data class DepthResult(
     val isValid: Boolean = true,
     val sourceAspect: Float = 0.75f,
     val spatialBins: List<SpatialBin> = emptyList(),
-    val timestampNanos: Long = 0L
+    val timestampNanos: Long = 0L,
+    val overheadHazard: Boolean = false,
+    val dropOffHazard: Boolean = false,
+    val modeText: String = ""
 )
 
 /**
@@ -130,8 +134,8 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
      * Suy luận độ sâu từ Bitmap (192x256 ARGB_8888 portrait).
      */
     @Synchronized
-    fun inferDepth(bitmap: Bitmap): DepthResult {
-        val frameTsNanos = System.nanoTime()
+    fun inferDepth(bitmap: Bitmap, sourceTimestampNanos: Long = 0L): DepthResult {
+        val frameTsNanos = if (sourceTimestampNanos > 0L) sourceTimestampNanos else SystemClock.elapsedRealtimeNanos()
         val scaledBitmap = if (bitmap.width != inW || bitmap.height != inH) {
             Bitmap.createScaledBitmap(bitmap, inW, inH, true)
         } else {
@@ -789,140 +793,145 @@ class DepthEngine(context: Context, modelAssetName: String = "midas_small.onnx")
         }
     }
 
-    private fun percentile(list: ArrayList<Float>, p: Float): Float {
-        list.sort()
-        val index = (p * (list.size - 1)).toInt().coerceIn(0, list.size - 1)
-        return list[index]
-    }
+    companion object {
+        private val defaultInterpolator = PchipInterpolator()
 
-    fun computeSpatialBins(
-        rawDisparity: FloatArray?,
-        scale: Float = 1.0f,
-        w: Int = 192,
-        h: Int = 256,
-        detectedList: List<Obstacle> = emptyList(),
-        numBins: Int = 24,
-        hfovDeg: Float = 65.0f
-    ): List<SpatialBin> {
-        val cx = w / 2.0f
-        val halfFov = hfovDeg / 2.0f
-        val fx = cx / kotlin.math.tan(Math.toRadians(halfFov.toDouble())).toFloat()
-
-        val cy1B = (0.20f * h).toInt()
-        val cy2B = (0.65f * h).toInt()
-        val cy1G = (0.65f * h).toInt()
-        val cy2G = (0.85f * h).toInt()
-        val cy1O = 0
-        val cy2O = (0.20f * h).toInt()
-
-        val binW = w.toFloat() / numBins.toFloat()
-        val hasDepth = rawDisparity != null && rawDisparity.size >= w * h
-
-        val bins = ArrayList<SpatialBin>(numBins)
-
-        for (i in 0 until numBins) {
-            val bx1 = kotlin.math.round(i * binW).toInt()
-            val bx2 = max(bx1 + 1, min(w, kotlin.math.round((i + 1) * binW).toInt()))
-
-            val angMin = Math.toDegrees(kotlin.math.atan2((bx1 - cx).toDouble(), fx.toDouble())).toFloat()
-            val angMax = Math.toDegrees(kotlin.math.atan2((bx2 - cx).toDouble(), fx.toDouble())).toFloat()
-            val angCenter = (angMin + angMax) / 2.0f
-
-            var validRatio = 0.0f
-            var rawP80 = Float.NaN
-            var bodyDistCm = Float.NaN
-            var groundDistCm = Float.NaN
-            var overheadDistCm = Float.NaN
-            var distCm = Float.NaN
-            var isValid = false
-
-            if (hasDepth) {
-                // 1. Body band [0.20h, 0.65h]
-                val bodySamples = ArrayList<Float>()
-                var totalBodyPixels = 0
-                for (y in cy1B until cy2B) {
-                    val rowOff = y * w
-                    for (x in bx1 until bx2) {
-                        totalBodyPixels++
-                        val v = rawDisparity!![rowOff + x]
-                        if (v.isFinite() && v > 0f) {
-                            bodySamples.add(v)
-                        }
-                    }
-                }
-                validRatio = if (totalBodyPixels > 0) bodySamples.size.toFloat() / totalBodyPixels.toFloat() else 0.0f
-                if (validRatio >= 0.35f && bodySamples.isNotEmpty()) {
-                    rawP80 = percentile(bodySamples, 0.80f)
-                    bodyDistCm = interpolator.interpolate(rawP80, scale)
-                    distCm = bodyDistCm
-                    isValid = bodyDistCm.isFinite() && bodyDistCm > 0f
-                }
-
-                // 2. Ground band [0.65h, 0.85h]
-                val groundSamples = ArrayList<Float>()
-                var totalGroundPixels = 0
-                for (y in cy1G until cy2G) {
-                    val rowOff = y * w
-                    for (x in bx1 until bx2) {
-                        totalGroundPixels++
-                        val v = rawDisparity!![rowOff + x]
-                        if (v.isFinite() && v > 0f) {
-                            groundSamples.add(v)
-                        }
-                    }
-                }
-                if (totalGroundPixels > 0 && groundSamples.size.toFloat() / totalGroundPixels.toFloat() >= 0.35f && groundSamples.isNotEmpty()) {
-                    val gP80 = percentile(groundSamples, 0.80f)
-                    groundDistCm = interpolator.interpolate(gP80, scale)
-                }
-
-                // 3. Overhead band [0.0h, 0.20h]
-                val overheadSamples = ArrayList<Float>()
-                var totalOverheadPixels = 0
-                for (y in cy1O until cy2O) {
-                    val rowOff = y * w
-                    for (x in bx1 until bx2) {
-                        totalOverheadPixels++
-                        val v = rawDisparity!![rowOff + x]
-                        if (v.isFinite() && v > 0f) {
-                            overheadSamples.add(v)
-                        }
-                    }
-                }
-                if (totalOverheadPixels > 0 && overheadSamples.size.toFloat() / totalOverheadPixels.toFloat() >= 0.35f && overheadSamples.isNotEmpty()) {
-                    val oP80 = percentile(overheadSamples, 0.80f)
-                    overheadDistCm = interpolator.interpolate(oP80, scale)
-                }
-            }
-
-            var hasObs = false
-            for (obs in detectedList) {
-                val ox1 = obs.bbox.left
-                val ox2 = obs.bbox.right
-                if (!(bx2 <= ox1 || bx1 >= ox2)) {
-                    hasObs = true
-                    break
-                }
-            }
-
-            bins.add(
-                SpatialBin(
-                    binId = i,
-                    angleMin = kotlin.math.round(angMin * 100f) / 100f,
-                    angleMax = kotlin.math.round(angMax * 100f) / 100f,
-                    angleCenter = kotlin.math.round(angCenter * 100f) / 100f,
-                    validRatio = kotlin.math.round(validRatio * 1000f) / 1000f,
-                    rawDepthStatistic = rawP80,
-                    estimatedDistanceCm = distCm,
-                    isValid = isValid,
-                    hasObstacle = hasObs,
-                    bodyDistCm = bodyDistCm,
-                    groundDistCm = groundDistCm,
-                    overheadDistCm = overheadDistCm
-                )
-            )
+        private fun percentile(list: ArrayList<Float>, p: Float): Float {
+            list.sort()
+            val index = (p * (list.size - 1)).toInt().coerceIn(0, list.size - 1)
+            return list[index]
         }
-        return bins
+
+        fun computeSpatialBins(
+            rawDisparity: FloatArray?,
+            scale: Float = 1.0f,
+            w: Int = 192,
+            h: Int = 256,
+            detectedList: List<Obstacle> = emptyList(),
+            numBins: Int = 24,
+            hfovDeg: Float = 65.0f,
+            interp: PchipInterpolator = defaultInterpolator
+        ): List<SpatialBin> {
+            val cx = w / 2.0f
+            val halfFov = hfovDeg / 2.0f
+            val fx = cx / kotlin.math.tan(Math.toRadians(halfFov.toDouble())).toFloat()
+
+            val cy1B = (0.20f * h).toInt()
+            val cy2B = (0.65f * h).toInt()
+            val cy1G = (0.65f * h).toInt()
+            val cy2G = (0.85f * h).toInt()
+            val cy1O = 0
+            val cy2O = (0.20f * h).toInt()
+
+            val binW = w.toFloat() / numBins.toFloat()
+            val hasDepth = rawDisparity != null && rawDisparity.size >= w * h
+
+            val bins = ArrayList<SpatialBin>(numBins)
+
+            for (i in 0 until numBins) {
+                val bx1 = kotlin.math.round(i * binW).toInt()
+                val bx2 = max(bx1 + 1, min(w, kotlin.math.round((i + 1) * binW).toInt()))
+
+                val angMin = Math.toDegrees(kotlin.math.atan2((bx1 - cx).toDouble(), fx.toDouble())).toFloat()
+                val angMax = Math.toDegrees(kotlin.math.atan2((bx2 - cx).toDouble(), fx.toDouble())).toFloat()
+                val angCenter = (angMin + angMax) / 2.0f
+
+                var validRatio = 0.0f
+                var rawP80 = Float.NaN
+                var bodyDistCm = Float.NaN
+                var groundDistCm = Float.NaN
+                var overheadDistCm = Float.NaN
+                var distCm = Float.NaN
+                var isValid = false
+
+                if (hasDepth) {
+                    // 1. Body band [0.20h, 0.65h]
+                    val bodySamples = ArrayList<Float>()
+                    var totalBodyPixels = 0
+                    for (y in cy1B until cy2B) {
+                        val rowOff = y * w
+                        for (x in bx1 until bx2) {
+                            totalBodyPixels++
+                            val v = rawDisparity!![rowOff + x]
+                            if (v.isFinite() && v > 0f) {
+                                bodySamples.add(v)
+                            }
+                        }
+                    }
+                    validRatio = if (totalBodyPixels > 0) bodySamples.size.toFloat() / totalBodyPixels.toFloat() else 0.0f
+                    if (validRatio >= 0.35f && bodySamples.isNotEmpty()) {
+                        rawP80 = percentile(bodySamples, 0.80f)
+                        bodyDistCm = interp.interpolate(rawP80, scale)
+                        distCm = bodyDistCm
+                        isValid = bodyDistCm.isFinite() && bodyDistCm > 0f
+                    }
+
+                    // 2. Ground band [0.65h, 0.85h]
+                    val groundSamples = ArrayList<Float>()
+                    var totalGroundPixels = 0
+                    for (y in cy1G until cy2G) {
+                        val rowOff = y * w
+                        for (x in bx1 until bx2) {
+                            totalGroundPixels++
+                            val v = rawDisparity!![rowOff + x]
+                            if (v.isFinite() && v > 0f) {
+                                groundSamples.add(v)
+                            }
+                        }
+                    }
+                    if (totalGroundPixels > 0 && groundSamples.size.toFloat() / totalGroundPixels.toFloat() >= 0.35f && groundSamples.isNotEmpty()) {
+                        val gP80 = percentile(groundSamples, 0.80f)
+                        groundDistCm = interp.interpolate(gP80, scale)
+                    }
+
+                    // 3. Overhead band [0.0h, 0.20h]
+                    val overheadSamples = ArrayList<Float>()
+                    var totalOverheadPixels = 0
+                    for (y in cy1O until cy2O) {
+                        val rowOff = y * w
+                        for (x in bx1 until bx2) {
+                            totalOverheadPixels++
+                            val v = rawDisparity!![rowOff + x]
+                            if (v.isFinite() && v > 0f) {
+                                overheadSamples.add(v)
+                            }
+                        }
+                    }
+                    if (totalOverheadPixels > 0 && overheadSamples.size.toFloat() / totalOverheadPixels.toFloat() >= 0.35f && overheadSamples.isNotEmpty()) {
+                        val oP80 = percentile(overheadSamples, 0.80f)
+                        overheadDistCm = interp.interpolate(oP80, scale)
+                    }
+                }
+
+                var hasObs = false
+                for (obs in detectedList) {
+                    val ox1 = obs.bbox.left
+                    val ox2 = obs.bbox.right
+                    if (!(bx2 <= ox1 || bx1 >= ox2)) {
+                        hasObs = true
+                        break
+                    }
+                }
+
+                bins.add(
+                    SpatialBin(
+                        binId = i,
+                        angleMin = kotlin.math.round(angMin * 100f) / 100f,
+                        angleMax = kotlin.math.round(angMax * 100f) / 100f,
+                        angleCenter = kotlin.math.round(angCenter * 100f) / 100f,
+                        validRatio = kotlin.math.round(validRatio * 1000f) / 1000f,
+                        rawDepthStatistic = rawP80,
+                        estimatedDistanceCm = distCm,
+                        isValid = isValid,
+                        hasObstacle = hasObs,
+                        bodyDistCm = bodyDistCm,
+                        groundDistCm = groundDistCm,
+                        overheadDistCm = overheadDistCm
+                    )
+                )
+            }
+            return bins
+        }
     }
 
     override fun close() {
