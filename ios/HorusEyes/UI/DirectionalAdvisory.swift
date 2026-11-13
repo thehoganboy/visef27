@@ -161,7 +161,7 @@ func estimateDirectionalAdvisory(
             let validCList = cBins.filter { $0.isValid }
             if validCList.count >= max(1, Int(Double(cBins.count) * 0.75)) {
                 centerSupported = true
-                let dists = validCList.compactMap { Double($0.estimatedDistanceCM) }.filter { $0.isFinite && $0 > 0 }
+                let dists = validCList.compactMap { Double($0.distCM) }.filter { $0.isFinite && $0 > 0 }
                 if !dists.isEmpty { candDist = dists.min() ?? Double.nan }
             }
         } else if validC {
