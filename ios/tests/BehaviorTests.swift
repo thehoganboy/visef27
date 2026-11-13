@@ -171,5 +171,4 @@ import Foundation
         }
         print("PASS Swift Golden Directional Scenarios (16/16)")
     }
-    }
 }
