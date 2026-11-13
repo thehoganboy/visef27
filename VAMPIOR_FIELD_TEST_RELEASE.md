@@ -4,6 +4,7 @@
 **Authorized by:** Chief Technology Officer (CTO)  
 **Repository:** https://github.com/thehoganboy/visef27  
 **Working Branch:** `feature/demo-ready-unified-ux`  
+**Verified Commit SHA:** `7686d0b15c575080e0002b2e095766fbd9cdc91e`  
 **Pull Request:** #1 (remains **Draft**, strictly unmerged to `main`)  
 **Work Package:** `VAMPIOR-FINAL-RELEASE-FREEZE`  
 **Date:** 2026-11-13  
@@ -75,8 +76,8 @@ This final engineering release freeze closes all remaining runtime synchronizati
 - **Android Debug APK**:  
   `android/app/build/outputs/apk/debug/app-debug.apk`
 - **iOS Sideloadly IPA**:  
-  Artifact Name: `HorusEyes-iPhone14Pro-Clean` (~62 MB)  
-  CI Run: [GitHub Actions Workflow Run](https://github.com/thehoganboy/visef27/actions)
+  Artifact Name: `HorusEyes-iPhone14Pro-Clean` (61,986,286 bytes)  
+  CI Run: [GitHub Actions Run #43438433443](https://github.com/thehoganboy/visef27/actions/runs/43438433443)  
 
 ---
 
@@ -93,3 +94,4 @@ This final engineering release freeze closes all remaining runtime synchronizati
 **DECISION: GO FOR PHYSICAL SMARTPHONE FIELD TEST**
 
 All P0 and P1 criteria from CTO and PM directives have been completely addressed, cross-platform parity is verified across 63 automated tests, and release binaries compile with zero warnings or errors. No further algorithm modifications or research iterations are permitted.
+
