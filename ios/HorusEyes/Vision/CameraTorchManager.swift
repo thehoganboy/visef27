@@ -97,10 +97,12 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
                 // Lock to 30 FPS safely if supported
                 do {
                     try device.lockForConfiguration()
-                    let targetFps = Int32(Config.defaultFPS)
-                    if device.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= Double(targetFps) }) {
-                        device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: targetFps)
-                        device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: targetFps)
+                    let targetFps = Double(Config.defaultFPS)
+                    if let range = device.activeFormat.videoSupportedFrameRateRanges.first(where: {
+                        $0.minFrameRate <= targetFps && targetFps <= $0.maxFrameRate
+                    }) {
+                        device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: Int32(targetFps))
+                        device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: Int32(targetFps))
                     }
                     if device.isLowLightBoostSupported {
                         device.automaticallyEnablesLowLightBoostWhenAvailable = true
@@ -115,8 +117,17 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
             let videoOutput = AVCaptureVideoDataOutput()
             videoOutput.alwaysDiscardsLateVideoFrames = true
+            let availableFormats = videoOutput.availableVideoPixelFormatTypes
+            var chosenFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            if !availableFormats.contains(chosenFormat) {
+                if availableFormats.contains(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+                    chosenFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+                } else if let first = availableFormats.first {
+                    chosenFormat = first
+                }
+            }
             videoOutput.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+                kCVPixelBufferPixelFormatTypeKey as String: Int(chosenFormat)
             ]
             videoOutput.setSampleBufferDelegate(self, queue: self.sessionQueue)
 
@@ -230,25 +241,40 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         onFrameProcessed?(pixelBuffer, frameId, aeSettleFramesRemaining, luma)
     }
 
-    // ── Fast Plane 0 Luma Computation ─────────────────────────────────────────
+    // ── Fast Plane 0 Luma Computation (Planar & Non-Planar Crash-Proof) ─────
     private func calculateMeanLuma(pixelBuffer: CVPixelBuffer) -> Float {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-        guard let yPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else {
+        let isPlanar = CVPixelBufferIsPlanar(pixelBuffer)
+        let planeCount = CVPixelBufferGetPlaneCount(pixelBuffer)
+        let baseAddr: UnsafeMutableRawPointer?
+        let width: Int
+        let height: Int
+        let bytesPerRow: Int
+
+        if isPlanar && planeCount > 0 {
+            baseAddr = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0)
+            width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
+            height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+            bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        } else {
+            baseAddr = CVPixelBufferGetBaseAddress(pixelBuffer)
+            width = CVPixelBufferGetWidth(pixelBuffer)
+            height = CVPixelBufferGetHeight(pixelBuffer)
+            bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        }
+
+        guard let buffer = baseAddr, width > 0, height > 0, bytesPerRow > 0 else {
             return 128.0
         }
 
-        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
-        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
-        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-
-        let bufferPtr = yPlane.assumingMemoryBound(to: UInt8.self)
+        let bufferPtr = buffer.assumingMemoryBound(to: UInt8.self)
         var sum: UInt64 = 0
         var samplesCount: UInt64 = 0
 
-        let stepX = 8
-        let stepY = 8
+        let stepX = max(4, width / 24)
+        let stepY = max(4, height / 32)
 
         for y in stride(from: 0, to: height, by: stepY) {
             let rowOffset = y * bytesPerRow

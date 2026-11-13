@@ -26,8 +26,12 @@ struct CameraPreviewView: UIViewRepresentable {
 
         func updateOrientation() {
             guard let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported else { return }
-            conn.videoOrientation = .portrait
-            if conn.isVideoMirroringSupported { conn.isVideoMirrored = false }
+            if conn.videoOrientation != .portrait {
+                conn.videoOrientation = .portrait
+            }
+            if conn.isVideoMirroringSupported && conn.isVideoMirrored {
+                conn.isVideoMirrored = false
+            }
         }
     }
 

@@ -6,19 +6,26 @@ struct TrackingOverlayView: View {
     var body: some View {
         Canvas { context, size in
             guard let result = result, result.isValid else { return }
+            guard result.camWidth > 0, result.camHeight > 0, size.width > 0, size.height > 0 else { return }
             let scale = min(size.width / CGFloat(result.camWidth), size.height / CGFloat(result.camHeight))
-            let ox = (size.width-CGFloat(result.camWidth)*scale)/2
-            let oy = (size.height-CGFloat(result.camHeight)*scale)/2
+            guard scale.isFinite, scale > 0 else { return }
+            let ox = (size.width - CGFloat(result.camWidth) * scale) / 2
+            let oy = (size.height - CGFloat(result.camHeight) * scale) / 2
+            guard ox.isFinite, oy.isFinite else { return }
             let color: Color = threatLevel == "CRITICAL" ? .red : threatLevel == "WARNING" ? .orange : .gray
             for obstacle in result.allObstacles {
                 let box = obstacle.bbox
-                let l = ox+CGFloat(box.x)*scale, t = oy+CGFloat(box.y)*scale
-                let r = l+CGFloat(box.w)*scale, b = t+CGFloat(box.h)*scale
-                let leg = min(18, min(r-l,b-t)/3)
+                let l = ox + CGFloat(box.x) * scale
+                let t = oy + CGFloat(box.y) * scale
+                let r = l + CGFloat(box.w) * scale
+                let b = t + CGFloat(box.h) * scale
+                guard l.isFinite, t.isFinite, r.isFinite, b.isFinite, r > l, b > t else { continue }
+                let leg = min(18, min(r - l, b - t) / 3)
                 var path = Path()
-                for (x,y,dx,dy) in [(l,t,CGFloat(1),CGFloat(1)),(r,t,-1,1),(l,b,1,-1),(r,b,-1,-1)] {
-                    path.move(to: CGPoint(x:x+dx*leg,y:y)); path.addLine(to: CGPoint(x:x,y:y))
-                    path.addLine(to: CGPoint(x:x,y:y+dy*leg))
+                for (x, y, dx, dy) in [(l, t, CGFloat(1), CGFloat(1)), (r, t, -1, 1), (l, b, 1, -1), (r, b, -1, -1)] {
+                    path.move(to: CGPoint(x: x + dx * leg, y: y))
+                    path.addLine(to: CGPoint(x: x, y: y))
+                    path.addLine(to: CGPoint(x: x, y: y + dy * leg))
                 }
                 context.stroke(path, with: .color(color), lineWidth: 3)
             }

@@ -152,6 +152,11 @@ jobs:
           pl['CFBundleDevelopmentRegion'] = 'en'
           pl['CFBundleShortVersionString'] = '2.0'
           pl['CFBundleVersion'] = '1'
+          pl['CFBundlePackageType'] = 'APPL'
+          pl['LSRequiresIPhoneOS'] = True
+          pl['MinimumOSVersion'] = '16.0'
+          pl['UIRequiredDeviceCapabilities'] = ['arm64']
+          pl['UILaunchScreen'] = {}
           pl['UISupportedInterfaceOrientations'] = ['UIInterfaceOrientationPortrait']
           pl['NSCameraUsageDescription'] = 'HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time.'
           pl['NSMicrophoneUsageDescription'] = 'HorusEyes requires audio session access for spatial sound feedback.'

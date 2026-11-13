@@ -23,7 +23,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        // Configure audio session safely without blocking options
+        // Configure audio session category safely without activating hardware prematurely
         configureAudioSession()
         UIApplication.shared.isIdleTimerDisabled = true
         return true
@@ -41,11 +41,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
                 mode: .default,
                 options: [.mixWithOthers, .allowBluetoothA2DP]
             )
-            // Note: In Apple AVFoundation, notifyOthersOnDeactivation can only be used when active is FALSE.
-            // When active is true, call setActive(true) with no options.
-            try session.setActive(true)
+            // Note: Do NOT call session.setActive(true) during app launch.
+            // Activating hardware audio before the UI is ready or when another app owns audio
+            // can cause immediate SIGABRT / termination on physical devices.
+            // Audio session is activated lazily when the user starts navigation in SpatialAudioEngine.
         } catch {
-            print("[HorusEyes] AudioSession startup notice: \(error.localizedDescription)")
+            print("[HorusEyes] AudioSession category setup notice: \(error.localizedDescription)")
         }
     }
 }

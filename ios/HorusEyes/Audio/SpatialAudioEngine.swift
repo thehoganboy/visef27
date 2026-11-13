@@ -306,6 +306,12 @@ final class SpatialAudioEngine: ObservableObject {
 
     func start() {
         guard !audioEngine.isRunning else { return }
+        // Activate hardware audio session lazily right before starting the audio engine
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("[HorusEyes] AudioSession setActive notice: \(error.localizedDescription)")
+        }
         setupAudioGraphIfNeeded()
         do {
             try audioEngine.start()
@@ -318,6 +324,12 @@ final class SpatialAudioEngine: ObservableObject {
     func stop() {
         if audioEngine.isRunning {
             audioEngine.stop()
+        }
+        // Deactivate audio session to release hardware and restore background media
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            // Non-critical cleanup
         }
     }
 

@@ -231,8 +231,12 @@ final class DemoController: ObservableObject {
     private var lastFrame: Double = 0
     private var yaw: Float = 0
     private var prevAngle: Double? = nil
+    private var isAppeared: Bool = false
 
     func appear() {
+        guard !isAppeared else { return }
+        isAppeared = true
+
         camera.onFrameProcessed = { [weak self] buffer, frameId, settle, luma in
             guard let self = self else { return }
             let now = CACurrentMediaTime()
@@ -305,6 +309,9 @@ final class DemoController: ObservableObject {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
     func disappear() {
+        guard isAppeared else { return }
+        isAppeared = false
+
         setActive(false); timer?.invalidate(); timer = nil
         camera.stop(); imu.stopMotionTracking(); audio.stop()
     }
@@ -312,7 +319,6 @@ final class DemoController: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var model = DemoController()
-    @Environment(\.scenePhase) private var scenePhase
     var body: some View {
         VStack(spacing: 0) {
             ZStack {
@@ -337,9 +343,6 @@ struct ContentView: View {
         .background(Color(white: 0.07))
         .onAppear { model.appear() }
         .onDisappear { model.disappear() }
-        .onChange(of: scenePhase) { phase in
-            if phase == .active { model.appear() } else { model.disappear() }
-        }
     }
 }
 
