@@ -336,6 +336,8 @@ class TensorSpatialIntegrationTest {
         assertEquals("CRITICAL", decision.threatLevel)
         assertTrue(decision.priorityScore >= 90.0f)
         assertEquals(1.0f, decision.proximity, 0.001f)
+        assertEquals(28.0f, decision.distCm, 0.001f)
+        assertEquals(0.6f, decision.ttc, 0.001f)
     }
 
     @Test
@@ -436,5 +438,112 @@ class TensorSpatialIntegrationTest {
         assertFalse(decisionPaused.isActive)
         assertEquals("MUTED", decisionPaused.cueMode)
         assertEquals("PAUSED", decisionPaused.threatLevel)
+    }
+
+    @Test
+    fun test19_criticalStopWithUnknownDistanceAndTtc() {
+        val depthUnknown = DepthResult(
+            rawDisparity = FloatArray(0), width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 1.0f, uncertaintyScore = 0.2f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to Float.NaN, "CENTER" to Float.NaN, "RIGHT" to Float.NaN),
+            allObstacles = emptyList(), isValid = true, spatialBins = emptyList(), timestampNanos = 10_000_000_000L
+        )
+        val kCritUnknown = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "STOP", isEvading = false, threatLevel = "CRITICAL",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val advCrit = com.horuseyes.app.ui.advisoryForRisk("CRITICAL", 10_000_000_000L)
+        assertEquals("STOP", advCrit.state)
+
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depthUnknown, kCritUnknown, advCrit)
+        assertTrue(decision.isActive)
+        assertEquals("STOP", decision.safeDirection)
+        assertEquals("SHARP_PING", decision.cueMode)
+        assertEquals("CRITICAL", decision.threatLevel)
+        assertTrue(decision.priorityScore >= 90.0f)
+        assertEquals(1.0f, decision.proximity, 0.001f)
+        assertTrue("Must NOT fabricate 30cm distance", decision.distCm.isNaN())
+        assertTrue("Must NOT fabricate 0.8s TTC", decision.ttc.isInfinite())
+    }
+
+    @Test
+    fun test20_staleObservationWithdrawsVisualAndAudioGuidance() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 200.0f,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 200.0f, "CENTER" to 200.0f, "RIGHT" to 200.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advFresh = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_200_000_000L)
+        assertEquals("AVAILABLE", advFresh.state)
+        assertNotNull(advFresh.drawableAngle(10_200_000_000L))
+
+        // Exceeds 750ms -> withdrawn
+        assertNull(advFresh.drawableAngle(10_800_000_000L))
+        val advStale = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_800_000_000L)
+        assertEquals("UNAVAILABLE", advStale.state)
+        assertEquals("SOURCE_FRAME_STALE", advStale.reasonCode)
+
+        val budget = AuditoryBudgetManager()
+        val kSafe = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "SAFE",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val decStale = budget.coordinate(depth, kSafe, advStale)
+        assertFalse(decStale.isActive)
+        assertEquals("MUTED", decStale.cueMode)
+        assertEquals("NONE", decStale.safeDirection)
+    }
+
+    @Test
+    fun test21_torchSessionLifecycleAndInvariants() {
+        class MockTorchManager {
+            var active = false
+            var torchOn = false
+            var forcedManual = false
+
+            fun setGuidanceActive(r: Boolean) {
+                active = r
+                if (!r) {
+                    torchOn = false
+                    forcedManual = false
+                }
+            }
+
+            fun toggleManual(): Boolean {
+                if (!active) return false
+                forcedManual = true
+                torchOn = !torchOn
+                return true
+            }
+
+            fun onFrameLuma(luma: Float) {
+                if (!active || forcedManual) return
+                if (luma < 40f) torchOn = true
+            }
+        }
+
+        val tm = MockTorchManager()
+        // 1. While paused, frame cannot trigger torch
+        tm.onFrameLuma(10f)
+        assertFalse(tm.torchOn)
+
+        // 2. While paused, manual toggle is rejected
+        assertFalse(tm.toggleManual())
+        assertFalse(tm.torchOn)
+
+        // 3. While running, auto-torch triggers on low luma
+        tm.setGuidanceActive(true)
+        tm.onFrameLuma(10f)
+        assertTrue(tm.torchOn)
+
+        // 4. Pausing forces torch OFF immediately
+        tm.setGuidanceActive(false)
+        assertFalse(tm.torchOn)
     }
 }

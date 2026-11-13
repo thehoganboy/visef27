@@ -178,10 +178,14 @@ final class DemoController: ObservableObject {
         if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) { fault() }
         // Preview remains live; stale boxes must disappear independently of frames.
         if now-sourceTimestamp > 0.25 { result = nil }
-        // Expire directional advisory at 750ms
+        // Expire directional advisory and guidance-dependent audio at 750ms
         if now-sourceTimestamp > 0.75 {
             if advisory.state == "AVAILABLE" {
                 advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: sourceTimestamp, reasonCode: "SOURCE_FRAME_STALE")
+                prevAngle = nil
+            }
+            if threat != "CRITICAL" && threat != "SENSOR_FAULT" {
+                audio.update(decision: silentDecision())
             }
         }
     }

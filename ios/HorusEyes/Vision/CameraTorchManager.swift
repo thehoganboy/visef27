@@ -27,6 +27,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private let sessionQueue = DispatchQueue(label: "com.visef.horuseyes.cameraQueue", qos: .userInitiated)
     private var isSessionConfigured: Bool = false
     private var sessionGeneration: Int = 0
+    private var guidanceActiveInternal: Bool = false
 
     // Watchdog & Timing
     private var lastFrameTimestamp: CFTimeInterval = 0.0
@@ -224,7 +225,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         }
 
         // 0-Lux Automatic Flash Safety State Machine (Evaluated only during active guidance session)
-        if isGuidanceActive {
+        if guidanceActiveInternal {
             processTorchLogic(meanY: luma, currentTime: now)
         } else {
             darkFrameCount = 0
@@ -371,13 +372,15 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         let now = CACurrentMediaTime()
         // P1-E: Debounce rapid repeated taps (250ms guard) to prevent desynchronization
         guard now - lastTorchToggleTime >= 0.25 else { return }
+        // Manual toggle is accepted only during an active guidance session
+        guard isGuidanceActive else { return }
         lastTorchToggleTime = now
         hapticGenerator.impactOccurred()
         let token = sessionGeneration
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
-            // Ensure manual torch action cannot race with session stop/restart
-            guard self.sessionGeneration == token else { return }
+            // Ensure manual torch action cannot race with session stop/restart and guidance remains active
+            guard self.sessionGeneration == token && self.guidanceActiveInternal else { return }
             let newState = !self.isTorchActive
             self.isTorchForcedManual = true // Lock manual choice for this running session
             self.setHardwareTorch(on: newState)
@@ -388,7 +391,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             self.sessionGeneration += 1
-            self.isGuidanceActive = active
+            self.guidanceActiveInternal = active
             self.darkFrameCount = 0
             self.blindFrameCount = 0
             if !active {
@@ -397,6 +400,9 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             } else {
                 // Restore automatic lighting policy on new CHẠY session
                 self.isTorchForcedManual = false
+            }
+            DispatchQueue.main.async {
+                self.isGuidanceActive = active
             }
         }
     }
@@ -412,8 +418,12 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
             self.sessionGeneration += 1
+            self.guidanceActiveInternal = false
             self.isTorchForcedManual = false
             self.setHardwareTorch(on: false)
+            DispatchQueue.main.async {
+                self.isGuidanceActive = false
+            }
         }
     }
 }

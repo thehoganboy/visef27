@@ -53,7 +53,19 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
                 val now = SystemClock.elapsedRealtimeNanos()
                 if (now - started > 1_000_000_000L &&
                     (analyzer == null || now - (analyzer?.lastFrameNanos ?: 0) > 1_000_000_000L ||
-                     now - lastResult > 1_000_000_000L)) showFault()
+                     now - lastResult > 1_000_000_000L)) {
+                    showFault()
+                } else if (now - lastResult > 750_000_000L) {
+                    // Observation exceeds 750ms guidance freshness window:
+                    // 1. Withdraw its unsupported arrow
+                    // 2. Invalidate its associated guidance-dependent audio decision
+                    if (binding.overlayView.advisory.state == "AVAILABLE") {
+                        binding.overlayView.withdrawStaleAdvisory()
+                    }
+                    if (binding.overlayView.getThreat() != "CRITICAL" && binding.overlayView.getThreat() != "SENSOR_FAULT") {
+                        audio?.updateState(silentDecision())
+                    }
+                }
             }
             handler.postDelayed(this, 250)
         }
@@ -158,6 +170,8 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
     }
     private fun toggleTorch() {
         val now = SystemClock.elapsedRealtime()
+        // Manual toggle is accepted only during an active guidance session
+        if (!running) return
         // P1-E: Debounce rapid repeated taps (250ms guard)
         if (now - lastTorchToggleTime < 250L) return
         lastTorchToggleTime = now
@@ -210,6 +224,12 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
         binding.overlayView.setState("SENSOR_FAULT")
         if (running) audio?.updateState(faultDecision())
     }
+    private fun silentDecision() = BudgetDecision(
+        isActive = false, pan = 0f, proximity = 0f, distCm = Float.NaN,
+        ttc = Float.POSITIVE_INFINITY, priorityScore = 0f, volumeFactor = 0f,
+        safeDirection = "NONE", cueMode = "MUTED", suppressedCount = 0,
+        activeObstacleId = 0, threatLevel = "UNKNOWN"
+    )
     override fun onResult(depth: DepthResult, risk: KinematicsResult, decision: BudgetDecision, sourceNanos: Long, generation: Long) {
         runOnUiThread {
             if (!running || generation != analyzer?.generation || closed) return@runOnUiThread

@@ -214,7 +214,7 @@ class AuditoryBudgetManager {
         if (allObs.isEmpty()) return faultDecision()
         val scoredList = ArrayList<Triple<Float, Obstacle, Float>>() // <effectiveScore, obs, ottc>
         for (o in allObs) {
-            val ottc = kinRes.obstacleTtcs[o.id] ?: Float.POSITIVE_INFINITY
+            val ottc = kinRes.obstacleTtcs[o.id] ?: (if (o.pan == depthRes.pan && o.distCm == depthRes.distCm) ttc else Float.POSITIVE_INFINITY)
             val rawScore = computeThreatScore(ottc, o.proximity, o.uncertaintyScore)
             val isCurrentActive = (currentActiveId != null && o.id == currentActiveId)
             val effectiveScore = if (isCurrentActive) rawScore * Config.HYSTERESIS_BOOST else rawScore

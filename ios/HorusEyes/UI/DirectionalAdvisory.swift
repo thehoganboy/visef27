@@ -33,6 +33,29 @@ struct DirectionalAdvisory {
     }
 }
 
+func advisoryForRisk(threat: String, timestamp: Double) -> DirectionalAdvisory {
+    let state: String
+    let code: String
+    switch threat {
+    case "CRITICAL":
+        state = "STOP"
+        code = "CRITICAL_OBSTACLE"
+    case "SAFE", "WARNING":
+        state = "UNAVAILABLE"
+        code = "LOCAL_DEPTH_MISSING"
+    case "PAUSED":
+        state = "UNKNOWN"
+        code = "PAUSED"
+    case "SENSOR_FAULT":
+        state = "UNKNOWN"
+        code = "SENSOR_FAULT"
+    default:
+        state = "UNKNOWN"
+        code = "UNSPECIFIED"
+    }
+    return DirectionalAdvisory(state: state, sourceTimestamp: timestamp, reasonCode: code)
+}
+
 func estimateDirectionalAdvisory(
     observation: ObstacleDetectionResult?,
     threat: String,

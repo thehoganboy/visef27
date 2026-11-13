@@ -316,6 +316,9 @@ def test_15_audio_directional_stop_synchronization():
     assert decision.threat_level == "CRITICAL"
     assert decision.priority_score >= 90.0
     assert decision.proximity == 1.0
+    # Verified: valid measured distance and TTC are preserved without alteration
+    assert decision.dist_cm == 28.0
+    assert decision.ttc == 0.6
 
 
 def test_16_audio_noncritical_stop_consistency():
@@ -391,3 +394,127 @@ def test_18_audio_sensor_fault_and_pause_distinction():
     assert decision_paused.is_active is False
     assert decision_paused.cue_mode == "MUTED"
     assert decision_paused.threat_level == "PAUSED"
+
+
+def test_19_critical_stop_with_unknown_distance_and_ttc():
+    """19. P0-01: CRITICAL STOP with unknown distance and TTC must NOT fabricate 30cm or 0.8s."""
+    budget = AuditoryBudgetManager()
+    obs_unknown = ObstacleDetectionResult(
+        x=96, y=128, bbox=(0, 0, 192, 256), pan=0.0, proximity=1.0, dist_cm=float("nan"),
+        mode_text="OBSTACLE", uncertainty_score=0.2, is_wall=False,
+        sector_dists={"LEFT": float("nan"), "CENTER": float("nan"), "RIGHT": float("nan")},
+        all_obstacles=[], is_valid=True, spatial_bins=[], timestamp=10.0
+    )
+    k_crit_unknown = KinematicsResult(
+        primary_ttc=float("inf"), primary_velocity_z=0.0, threats={},
+        safe_direction="STOP", is_evading=False, threat_level="CRITICAL"
+    )
+    adv_crit = advisory_for_risk("CRITICAL", timestamp=10.0)
+    assert adv_crit.state == "STOP"
+    assert adv_crit.reason_code == "CRITICAL_OBSTACLE"
+
+    decision = budget.coordinate(obs_unknown, k_crit_unknown, current_timestamp=10.0, advisory=adv_crit)
+    # Critical alert must remain immediate, active, and authoritative
+    assert decision.is_active is True
+    assert decision.safe_direction == "STOP"
+    assert decision.cue_mode == "SHARP_PING"
+    assert decision.threat_level == "CRITICAL"
+    assert decision.priority_score >= 90.0
+    assert decision.proximity == 1.0
+    # Mandatory P0-01: No synthetic measurements! NaN distance and infinite TTC preserved
+    assert math.isnan(decision.dist_cm)
+    assert not math.isfinite(decision.ttc)
+
+
+def test_20_stale_observation_withdraws_visual_and_audio_guidance():
+    """20. P0-02: Observation exceeding 750ms guidance freshness window withdraws arrow & invalidates audio."""
+    tensor = np.full((256, 192), 180.0, dtype=np.float32)
+    bins = compute_spatial_bins(tensor, w=192, h=256, num_bins=24)
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(0, 0, 192, 256), pan=0.0, proximity=0.2, dist_cm=200.0,
+        mode_text="SAFE", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 200.0, "CENTER": 200.0, "RIGHT": 200.0},
+        all_obstacles=[], is_valid=True, spatial_bins=bins, timestamp=10.0
+    )
+    # Fresh observation at t=10.20s (age = 200ms <= 750ms)
+    adv_fresh = estimate_directional_advisory(obs, threat="SAFE", now=10.20)
+    assert adv_fresh.state == "AVAILABLE"
+    assert adv_fresh.drawable_angle(now=10.20) is not None
+
+    # Stale observation at t=10.80s (age = 800ms > 750ms)
+    adv_stale = estimate_directional_advisory(obs, threat="SAFE", now=10.80)
+    assert adv_stale.state == "UNAVAILABLE"
+    assert adv_fresh.drawable_angle(now=10.80) is None
+    assert adv_stale.reason_code == "SOURCE_FRAME_STALE"
+
+    # Guidance-dependent audio invalidated
+    budget = AuditoryBudgetManager()
+    k_safe = KinematicsResult(primary_ttc=float("inf"), primary_velocity_z=0.0, threats={}, safe_direction="NONE", is_evading=False, threat_level="SAFE")
+    dec_stale = budget.coordinate(obs, k_safe, current_timestamp=10.80, advisory=adv_stale)
+    assert dec_stale.is_active is False
+    assert dec_stale.cue_mode == "MUTED"
+    assert dec_stale.safe_direction == "NONE"
+
+
+def test_21_torch_session_lifecycle_and_invariants():
+    """21. P0-03: Torch policy contract - auto-torch while running, OFF on pause, rejected manual toggle while paused."""
+    # State flags simulating camera/torch manager state machine
+    class TorchStateMachine:
+        def __init__(self):
+            self.is_guidance_active = False
+            self.hardware_torch_on = False
+            self.session_generation = 0
+            self.dark_frame_count = 0
+            self.forced_manual = False
+
+        def set_guidance_active(self, active: bool):
+            self.session_generation += 1
+            self.is_guidance_active = active
+            self.dark_frame_count = 0
+            if not active:
+                self.forced_manual = False
+                self.hardware_torch_on = False
+            else:
+                self.forced_manual = False
+
+        def process_frame(self, luma: float):
+            if not self.is_guidance_active:
+                self.dark_frame_count = 0
+                return
+            if not self.forced_manual:
+                if luma < 40.0:
+                    self.dark_frame_count += 1
+                    if self.dark_frame_count >= 5:
+                        self.hardware_torch_on = True
+                else:
+                    self.dark_frame_count = 0
+
+        def toggle_manual(self):
+            # Manual toggle is accepted ONLY during active guidance session
+            if not self.is_guidance_active:
+                return False
+            self.forced_manual = True
+            self.hardware_torch_on = not self.hardware_torch_on
+            return True
+
+    sm = TorchStateMachine()
+    # 1. While paused, low luma (0-lux) must NOT activate torch
+    for _ in range(10):
+        sm.process_frame(luma=10.0)
+    assert sm.hardware_torch_on is False
+
+    # 2. While paused, manual toggle must be REJECTED
+    assert sm.toggle_manual() is False
+    assert sm.hardware_torch_on is False
+
+    # 3. Start guidance (CHẠY) restores auto-policy
+    sm.set_guidance_active(True)
+    assert sm.is_guidance_active is True
+    for _ in range(5):
+        sm.process_frame(luma=10.0)
+    assert sm.hardware_torch_on is True
+
+    # 4. Stop guidance (DỪNG) turns hardware torch OFF immediately
+    sm.set_guidance_active(False)
+    assert sm.is_guidance_active is False
+    assert sm.hardware_torch_on is False

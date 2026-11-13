@@ -685,6 +685,31 @@ import Foundation
         precondition(decCrit.threatLevel == "CRITICAL", "Threat level must be CRITICAL")
         precondition(decCrit.priorityScore >= 90.0, "Priority score must be >= 90")
         precondition(decCrit.proximity == 1.0, "Proximity must be 1.0")
+        precondition(decCrit.distCM == 28.0, "Measured distance must be preserved")
+        precondition(decCrit.ttc == 0.6, "Measured TTC must be preserved")
+
+        // 1B. P0-01: CRITICAL STOP with unknown distance and TTC must NOT fabricate 30cm or 0.8s
+        let obsCritUnknown = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (0, 0, 192, 256), pan: 0.0, proximity: 1.0, distCM: .nan,
+            modeText: "OBSTACLE", uncertaintyScore: 0.2, isWall: false,
+            sectorDists: ["LEFT": .nan, "CENTER": .nan, "RIGHT": .nan],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: [], timestamp: 10.0
+        )
+        let kCritUnknown = KinematicsResult(
+            primaryTTC: .infinity, primaryVelocityZ: 0.0, threats: [:], safeDirection: "STOP",
+            isEvading: false, threatLevel: "CRITICAL", guidanceState: "HAZARD_BLOCKED",
+            hazardState: "OBSERVED_HAZARD", lostUnresolvedTimestamp: 0.0, timestamp: 10.0
+        )
+        let advCritFallback = advisoryForRisk(threat: "CRITICAL", timestamp: 10.0)
+        let decUnknown = budget.coordinate(obstacleResult: obsCritUnknown, kinematicsResult: kCritUnknown, advisory: advCritFallback)
+        precondition(decUnknown.isActive, "Audio must be active on critical STOP")
+        precondition(decUnknown.safeDirection == "STOP", "Audio safe direction must be STOP")
+        precondition(decUnknown.cueMode == "SHARP_PING", "Cue mode must be SHARP_PING")
+        precondition(decUnknown.threatLevel == "CRITICAL", "Threat level must be CRITICAL")
+        precondition(decUnknown.proximity == 1.0, "Proximity must be 1.0")
+        precondition(decUnknown.distCM.isNaN, "Must NOT fabricate 30cm distance")
+        precondition(decUnknown.ttc.isInfinite, "Must NOT fabricate 0.8s TTC")
 
         // 2. Non-critical STOP advisory (corridor obstructed) under WARNING threat
         let obsWarn = ObstacleDetectionResult(
@@ -764,6 +789,23 @@ import Foundation
         precondition(!decPaused.isActive, "Audio must be inactive on PAUSED")
         precondition(decPaused.cueMode == "MUTED", "Cue mode must be MUTED")
         precondition(decPaused.threatLevel == "PAUSED", "Threat level must be PAUSED")
+
+        // 5. Stale observation freshness check (> 750ms)
+        let binsClear = (0..<24).map { makeBin(id: $0, dist: 200.0) }
+        let obsClear = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (0, 0, 192, 256), pan: 0.0, proximity: 0.2, distCM: 200.0,
+            modeText: "SAFE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": 200.0, "CENTER": 200.0, "RIGHT": 200.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: binsClear, timestamp: 10.0
+        )
+        let advFresh = estimateDirectionalAdvisory(observation: obsClear, threat: "SAFE", now: 10.20)
+        precondition(advFresh.state == "AVAILABLE", "Must be AVAILABLE when fresh")
+        precondition(advFresh.drawableAngle(now: 10.20) != nil, "Must have drawable angle at age 200ms")
+        precondition(advFresh.drawableAngle(now: 10.80) == nil, "Must withdraw arrow at age 800ms (> 750ms)")
+        let advStale = estimateDirectionalAdvisory(observation: obsClear, threat: "SAFE", now: 10.80)
+        precondition(advStale.state == "UNAVAILABLE", "Must be UNAVAILABLE when stale")
+        precondition(advStale.reasonCode == "SOURCE_FRAME_STALE", "Reason code must be SOURCE_FRAME_STALE")
 
         print("PASS Swift Final Device Readiness Audio Sync Tests")
     }

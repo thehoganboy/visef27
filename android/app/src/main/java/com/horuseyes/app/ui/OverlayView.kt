@@ -30,6 +30,34 @@ data class DirectionalAdvisory(
     }
 }
 
+fun advisoryForRisk(threat: String, timestampNanos: Long = 0L): DirectionalAdvisory {
+    val state: String
+    val code: String
+    when (threat) {
+        "CRITICAL" -> {
+            state = "STOP"
+            code = "CRITICAL_OBSTACLE"
+        }
+        "SAFE", "WARNING" -> {
+            state = "UNAVAILABLE"
+            code = "LOCAL_DEPTH_MISSING"
+        }
+        "PAUSED" -> {
+            state = "UNKNOWN"
+            code = "PAUSED"
+        }
+        "SENSOR_FAULT" -> {
+            state = "UNKNOWN"
+            code = "SENSOR_FAULT"
+        }
+        else -> {
+            state = "UNKNOWN"
+            code = "UNSPECIFIED"
+        }
+    }
+    return DirectionalAdvisory(state, sourceNanos = timestampNanos, reasonCode = code)
+}
+
 fun estimateDirectionalAdvisory(
     depth: DepthResult?,
     threat: String,
@@ -414,6 +442,16 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     private var timestamp = 0L
     private var prevAngle: Float? = null
     var advisory = DirectionalAdvisory()
+
+    fun getThreat(): String = threat
+
+    fun withdrawStaleAdvisory() {
+        if (advisory.state == "AVAILABLE") {
+            advisory = DirectionalAdvisory(state = "UNAVAILABLE", sourceNanos = timestamp, reasonCode = "SOURCE_FRAME_STALE")
+            prevAngle = null
+            invalidate()
+        }
+    }
 
     fun setState(state: String) {
         threat = state; depth = null; advisory = DirectionalAdvisory(); prevAngle = null
