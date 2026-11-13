@@ -6,6 +6,7 @@ import cv2
 from video_capture import ThreadedCamera
 from demo_runtime import DemoRuntime
 from demo_ui import DemoViewport
+from directional_advisory import advisory_for_risk, DirectionalAdvisory, DirectionState
 
 
 def parse_args():
