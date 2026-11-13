@@ -7,9 +7,9 @@
 **Repository:** `https://github.com/thehoganboy/visef27`  
 **Working Branch:** `feature/demo-ready-unified-ux`  
 **Baseline Commit:** `d088a2d14e19d786c21a12d19a2c0c244a2ae612`  
-**Verification Commit:** `4386ac9`  
+**Verification Commit:** `ee5e604`  
 **Pull Request:** PR #1 (Draft — Strictly Not Merged to `main`)  
-**CI/CD Baseline:** Run #58 (macOS Latest / Xcode 16.1 / CoreML 100% SUCCESS)  
+**CI/CD Baseline:** Run #60 (macOS Latest / Xcode 16.1 / CoreML / Swift Behavior Regressions 100% SUCCESS)  
 
 ---
 
@@ -279,9 +279,9 @@ Command: `./gradlew testDebugUnitTest assembleDebug`
 
 - **Repository**: `thehoganboy/visef27`
 - **Branch**: `feature/demo-ready-unified-ux`
-- **Commit**: Latest Release Candidate Commit
-- **Workflow**: `.github/workflows/build_ios_ipa.yml`
-- **Status**: Verified in CI workflow (Run #58 & Run #59).
+- **Commit**: `ee5e604`
+- **Workflow**: `.github/workflows/build_ios_ipa.yml` (Run #60)
+- **Status**: Completed SUCCESS (All 17 workflow steps executed successfully).
 - **Execution Log Highlights**:
   - `Verify Default Xcode`: SUCCESS (Xcode 16.1, macOS 14.7.1)
   - `Install CoreML Exporter Dependencies`: SUCCESS
