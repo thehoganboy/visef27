@@ -19,6 +19,7 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
 import com.horuseyes.app.audio.SpatialAudioEngine
+import com.horuseyes.app.budget.AuditoryBudgetManager
 import com.horuseyes.app.budget.BudgetDecision
 import com.horuseyes.app.budget.faultDecision
 import com.horuseyes.app.databinding.ActivityMainBinding
@@ -146,6 +147,9 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
                     binding.previewView.viewPort?.let { group.setViewPort(it) }
                     camera.unbindAll()
                     activeCamera = camera.bindToLifecycle(this, CameraSelector.DEFAULT_BACK_CAMERA, group.build())
+                    val hasFlash = activeCamera?.cameraInfo?.hasFlashUnit() == true
+                    binding.btnTorch.isEnabled = hasFlash
+                    binding.btnTorch.alpha = if (hasFlash) 1.0f else 0.4f
                 } catch (e: Exception) {
                     android.util.Log.e("HorusEyes", "Camera unavailable", e); showFault()
                 }
@@ -161,20 +165,37 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
         val cam = activeCamera ?: return
         if (cam.cameraInfo.hasFlashUnit()) {
             val targetState = !isTorchOn
-            cam.cameraControl.enableTorch(targetState).addListener({
+            val expectedGen = analyzer?.generation ?: 0L
+            val future = cam.cameraControl.enableTorch(targetState)
+            future.addListener({
                 runOnUiThread {
-                    isTorchOn = targetState
+                    if (closed || !running || (analyzer?.generation ?: 0L) != expectedGen) {
+                        if (!running) forceTorchOff()
+                        return@runOnUiThread
+                    }
+                    try {
+                        future.get() // Checks for actual success or failure
+                        isTorchOn = targetState
+                    } catch (e: Exception) {
+                        android.util.Log.e("HorusEyes", "Failed to enable torch", e)
+                        isTorchOn = false
+                    }
                     updateTorchButton()
                 }
             }, ContextCompat.getMainExecutor(this))
         }
     }
     private fun forceTorchOff() {
-        if (isTorchOn) {
-            isTorchOn = false
-            activeCamera?.cameraControl?.enableTorch(false)
-            updateTorchButton()
+        isTorchOn = false
+        val cam = activeCamera
+        if (cam != null && cam.cameraInfo.hasFlashUnit()) {
+            try {
+                cam.cameraControl.enableTorch(false)
+            } catch (e: Exception) {
+                android.util.Log.e("HorusEyes", "Error disabling torch", e)
+            }
         }
+        updateTorchButton()
     }
     private fun updateTorchButton() {
         if (isTorchOn) {
@@ -198,7 +219,9 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
             if (sourceNanos < lastResult) return@runOnUiThread
             lastResult = sourceNanos
             binding.overlayView.update(depth, risk.threatLevel, now)
-            audio?.updateState(decision)
+            val advisory = binding.overlayView.advisory
+            val finalDecision = AuditoryBudgetManager.reconcileWithAdvisory(decision, advisory, risk.threatLevel)
+            audio?.updateState(finalDecision)
         }
     }
     override fun onFault(generation: Long) { runOnUiThread {
@@ -210,6 +233,7 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
     }
     override fun onPause() {
         setRunning(false)
+        forceTorchOff()
         sensors.unregisterListener(this)
         super.onPause()
     }

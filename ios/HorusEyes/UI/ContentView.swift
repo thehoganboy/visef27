@@ -74,7 +74,7 @@ final class DemoController: ObservableObject {
                     aeSettleRemaining: settle,
                     imuYawRateRadS: rate
                 )
-                let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk)
+
                 DispatchQueue.main.async {
                     let consumedAt = CACurrentMediaTime()
                     self.lock.lock()
@@ -158,6 +158,9 @@ final class DemoController: ObservableObject {
 
                     self.advisory = finalAdv
                     self.prevAngle = finalAdv.state == "AVAILABLE" ? finalAdv.angleDeg : nil
+
+                    // P0: Coordinate final authoritative advisory with auditory budget manager BEFORE updating audio
+                    let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk, advisory: finalAdv)
                     self.audio.update(decision: decision)
                 }
             }
@@ -202,7 +205,7 @@ final class DemoController: ObservableObject {
         lock.lock(); generation += 1; enabled = value; lock.unlock()
         active = value; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
         observationHistory.removeAll()
-        camera.resetManualTorchLock()
+        camera.setGuidanceActive(value)
         if !value {
             camera.forceTorchOff()
         }
@@ -218,6 +221,7 @@ final class DemoController: ObservableObject {
         guard isAppeared else { return }
         isAppeared = false
 
+        camera.setGuidanceActive(false)
         camera.forceTorchOff()
         setActive(false); timer?.invalidate(); timer = nil
         camera.stop(); imu.stopMotionTracking(); audio.stop()
@@ -329,7 +333,8 @@ struct ContentView: View {
             // Rounded Camera Preview Container (P1-01)
             ZStack {
                 CameraPreviewView(session: model.camera.session)
-                TrackingOverlayView(result: model.result, threatLevel: model.threat)
+                let isStop = (model.advisory.state == "STOP" || model.threat == "CRITICAL") && model.threat != "PAUSED"
+                TrackingOverlayView(result: model.result, threatLevel: model.threat, isStop: isStop)
 
                 // Centered Direction Indicator & Status Badge
                 VStack(spacing: 0) {

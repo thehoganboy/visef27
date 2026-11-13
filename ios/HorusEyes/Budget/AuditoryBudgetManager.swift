@@ -60,17 +60,18 @@ final class AuditoryBudgetManager {
 
     func coordinate(
         obstacleResult: ObstacleDetectionResult,
-        kinematicsResult: KinematicsResult
+        kinematicsResult: KinematicsResult,
+        advisory: DirectionalAdvisory? = nil
     ) -> BudgetDecision {
         let distCM = obstacleResult.distCM
         let ttc = kinematicsResult.primaryTTC
         let threatLevel = kinematicsResult.threatLevel
-        let safeDir = kinematicsResult.safeDirection
+        var safeDir = kinematicsResult.safeDirection
         _ = obstacleResult.uncertaintyScore
         let isEvading = kinematicsResult.isEvading
 
         // ── 0. Sensor Fault / 0-Lux Blind Override ────────────────────────────
-        if !obstacleResult.isValid || obstacleResult.isZeroLuxBlind || threatLevel == "SENSOR_FAULT" || threatLevel == "UNKNOWN" {
+        if !obstacleResult.isValid || obstacleResult.isZeroLuxBlind || threatLevel == "SENSOR_FAULT" || threatLevel == "UNKNOWN" || (advisory?.state == "UNKNOWN" && advisory?.reasonCode == "SENSOR_FAULT") {
             return BudgetDecision(
                 isActive: true,
                 pan: 0.0,
@@ -84,6 +85,87 @@ final class AuditoryBudgetManager {
                 threatLevel: "SENSOR_FAULT",
                 suppressedCount: 0
             )
+        }
+
+        if threatLevel == "PAUSED" || advisory?.reasonCode == "PAUSED" {
+            return BudgetDecision(
+                isActive: false,
+                pan: 0.0,
+                proximity: 0.0,
+                distCM: distCM,
+                ttc: .infinity,
+                priorityScore: 0.0,
+                volumeFactor: 0.0,
+                safeDirection: "NONE",
+                cueMode: "MUTED",
+                threatLevel: "PAUSED",
+                suppressedCount: 0
+            )
+        }
+
+        // ── 0A. Authoritative Directional STOP Audio Synchronization (P0) ─────
+        if let adv = advisory, adv.state == "STOP" {
+            currentActiveId = 1
+            activeHoldCounter = 1
+            pendingSwitchId = nil
+            pendingSwitchCounter = 0
+            currentCueMode = "SHARP_PING"
+
+            let isImmediateDanger = (threatLevel == "CRITICAL" ||
+                                     adv.reasonCode == "CRITICAL_OBSTACLE" ||
+                                     adv.reasonCode == "OVERHEAD_HAZARD" ||
+                                     adv.reasonCode == "DROP_OFF_HAZARD")
+
+            if isImmediateDanger {
+                return BudgetDecision(
+                    isActive: true,
+                    pan: 0.0,
+                    proximity: 1.0,
+                    distCM: distCM.isFinite ? distCM : 30.0,
+                    ttc: ttc.isFinite ? ttc : 0.8,
+                    priorityScore: 99.0,
+                    volumeFactor: 1.0,
+                    safeDirection: "STOP",
+                    cueMode: "SHARP_PING",
+                    threatLevel: "CRITICAL",
+                    suppressedCount: max(0, obstacleResult.allObstacles.count - 1)
+                )
+            } else {
+                // STOP caused by lack of supported continuation (e.g. CORRIDOR_OBSTRUCTED):
+                // Halt without falsely claiming an imminent collision (finite TTC not fabricated)
+                return BudgetDecision(
+                    isActive: true,
+                    pan: 0.0,
+                    proximity: 0.70,
+                    distCM: distCM.isFinite ? distCM : .nan,
+                    ttc: .infinity,
+                    priorityScore: 50.0,
+                    volumeFactor: 0.85,
+                    safeDirection: "STOP",
+                    cueMode: "SHARP_PING",
+                    threatLevel: "WARNING",
+                    suppressedCount: max(0, obstacleResult.allObstacles.count - 1)
+                )
+            }
+        }
+
+        if let adv = advisory, adv.state == "UNAVAILABLE" {
+            safeDir = "NONE"
+            if threatLevel == "SAFE" {
+                return BudgetDecision(
+                    isActive: false,
+                    pan: 0.0,
+                    proximity: 0.0,
+                    distCM: distCM,
+                    ttc: .infinity,
+                    priorityScore: 0.0,
+                    volumeFactor: 0.0,
+                    safeDirection: "NONE",
+                    cueMode: "MUTED",
+                    threatLevel: "SAFE",
+                    suppressedCount: max(1, obstacleResult.allObstacles.count)
+                )
+            }
         }
 
         if kinematicsResult.hazardState == "COASTING_HAZARD" {
@@ -232,8 +314,15 @@ final class AuditoryBudgetManager {
         }
 
         // ── 3. Direct Spatial Hazard Localization (FIX-M01 & TASK 01A-2) ──────
+        let finalSafeDir: String
+        if let adv = advisory, adv.state == "UNAVAILABLE" {
+            finalSafeDir = "NONE"
+        } else {
+            finalSafeDir = safeDir
+        }
+
         let outputPan: Float
-        if safeDir == "STOP" {
+        if finalSafeDir == "STOP" {
             outputPan = 0.0
         } else {
             outputPan = max(Float(-1.0), min(Float(1.0), winnerObs.pan))
@@ -264,7 +353,7 @@ final class AuditoryBudgetManager {
             ttc: winnerTtc,
             priorityScore: winnerScore,
             volumeFactor: volumeFactor,
-            safeDirection: safeDir,
+            safeDirection: finalSafeDir,
             cueMode: cueMode,
             threatLevel: threatLevel,
             suppressedCount: suppressedCount

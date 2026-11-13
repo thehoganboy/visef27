@@ -360,4 +360,58 @@ Following the PM corrective audit directive (authorized by CTO), five targeted c
   - State and UI icon update only after AVCaptureDevice hardware lock confirms torch mode change on iOS, or after `enableTorch()` future completion on Android CameraX.
 
 ---
-**STATUS: RELEASE CANDIDATE COMPLETE — AWAITING PM/CTO ACCEPTANCE**
+
+## 17. Final Device-Readiness Synchronization Hotfix Addendum (`VAMPIOR-DEVICE-READY-HOTFIX`)
+
+Following PM acceptance review and CTO authorization, final mobile runtime synchronization defects were resolved:
+
+### P0 — Synchronize Directional STOP With Audio
+- **Problem**: In previous implementations, `AuditoryBudgetManager.coordinate` was evaluated in background pipelines prior to final directional advisory determination. When directional logic escalated a `WARNING` or `SAFE` scene to `STOP` (e.g. `CORRIDOR_OBSTRUCTED` or frontal obstacle <40cm), the audio stream emitted the stale, uncoordinated kinematic sound rather than an authoritative halt cue.
+- **Resolution**:
+  - **Swift (`AuditoryBudgetManager.swift`, `ContentView.swift`)**:
+    - `AuditoryBudgetManager.coordinate(obstacleResult:kinematicsResult:advisory:)` reconciles the authoritative `advisory` state prior to committing audio.
+    - If `advisory.state == "STOP"` with immediate danger (`threatLevel == "CRITICAL"`, `CRITICAL_OBSTACLE`, `OVERHEAD_HAZARD`, or `DROP_OFF_HAZARD`), audio produces high-priority warning (`CRITICAL`, proximity 1.0, sharp ping, volume 1.0, priority 99).
+    - If `advisory.state == "STOP"` from lack of continuation (`CORRIDOR_OBSTRUCTED`), audio produces consistent halt signal (`WARNING`, proximity 0.70, volume 0.85, priority 50, infinite TTC) without falsely claiming imminent collision.
+    - If `advisory.state == "UNAVAILABLE"` under `SAFE` kinematics, audio is muted (`cueMode = "MUTED"`, `safeDirection = "NONE"`).
+    - Audio state is reconciled on the main thread immediately after `estimateDirectionalAdvisory` completes.
+  - **Android (`AuditoryBudgetManager.kt`, `MainActivity.kt`)**:
+    - Added `AuditoryBudgetManager.reconcileWithAdvisory(rawDecision, advisory, threatLevel)` and overloaded `coordinate(depthRes, kinRes, advisory)`.
+    - Mirroring Swift, immediate danger STOP yields `CRITICAL` 1.0 proximity ping; noncritical STOP yields `WARNING` 0.70 proximity ping with infinite TTC; `UNAVAILABLE` mutes forward sounds; `PAUSED` forces `MUTED`.
+    - `MainActivity.kt` reconciles via `AuditoryBudgetManager.reconcileWithAdvisory` on the UI thread before updating `audio?.updateState()`.
+  - **Python (`auditory_budget.py`, `demo_runtime.py`)**:
+    - Added `advisory: Optional[Any] = None` to `coordinate()`.
+    - Returns synchronized `CRITICAL_HALT` (score 99) or `CORRIDOR_STOP` (score 50, TTC inf) on STOP; mutes on `UNAVAILABLE` under `SAFE`.
+
+### P1 — Strict Torch Lifecycle and Concurrency Safety
+- **Problem**:
+  - Auto-torch fired continuously during paused state (`isGuidanceActive == false`) in dim environments because camera frames were processed unconditionally.
+  - Rapid pause/resume or backgrounding could race with asynchronous hardware torch toggles.
+  - Hardware device lacking flash unit or throwing configuration error was not safely guarded.
+- **Resolution**:
+  - **iOS (`CameraTorchManager.swift`, `ContentView.swift`)**:
+    - Added `@Published var isGuidanceActive: Bool = false` and generation counter `sessionGeneration`.
+    - `captureOutput` strictly gates `processTorchLogic` on `isGuidanceActive == true`; resets dark frame counters when paused.
+    - Added `setGuidanceActive(_ active: Bool)`: increments `sessionGeneration`, forces torch OFF and clears manual locks on pause (DỪNG), and restores automatic lighting policy on start (CHẠY).
+    - Guarded `toggleManualTorch()` against session generation races.
+    - Safely syncs `isTorchActive` with actual `videoDevice.torchMode == .on`.
+  - **Android (`MainActivity.kt`)**:
+    - Guarded CameraX `enableTorch()` callbacks against stale generation tokens (`(analyzer?.generation ?: 0L) != expectedGen`) and paused sessions (`!running`).
+    - Explicitly checks `activeCamera?.cameraInfo?.hasFlashUnit() == true` before enabling `btnTorch`.
+    - Forces hardware torch OFF on `onPause()` and session STOP (DỪNG).
+
+### P1 — Visual Parity and Layout Alignment
+- **Swift (`TrackingOverlayView.swift`, `ContentView.swift`)**:
+  - `TrackingOverlayView` accepts `isStop: Bool` and renders bounding brackets in bright red (`Color(red: 1.0, green: 0.23, blue: 0.19)`) when `isStop || threatLevel == "CRITICAL"`, matching Android's `OverlayView.kt`.
+  - iPhone portrait layout centers `DirectionIndicator` horizontally and vertically at the bottom overlay (`Spacer()` + `.frame(maxWidth: .infinity, alignment: .bottom)`).
+  - Floating flashlight button enlarged to Apple-standard 66×66 pt with 30 pt icon.
+- **Android (`activity_main.xml`, `ic_flashlight.xml`)**:
+  - Floating torch button enlarged to 66dp.
+
+### Verification Matrix
+- **Python**: 60 / 60 pytest cases passed (`test_tensor_spatial_integration.py` tests 15-18 for audio-directional sync, noncritical STOP, UNAVAILABLE suppression, SENSOR_FAULT/PAUSED distinction).
+- **Swift**: Behavior tests expanded with `testFinalDeviceReadinessAudioSync()` validating critical STOP, non-critical STOP, UNAVAILABLE muting, and SENSOR_FAULT/PAUSED states.
+- **Android**: `testDebugUnitTest` 100% PASSED (tests 15-18 in `TensorSpatialIntegrationTest.kt`, `DemoBehaviorTest.kt`, `DirectionalGoldenTest.kt`).
+- **Android APK Build**: `./gradlew assembleDebug` SUCCESSFUL.
+
+---
+**STATUS: HOTFIX COMPLETE — RELEASE CANDIDATE READY FOR FIELD RETEST**

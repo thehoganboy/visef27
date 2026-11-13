@@ -126,7 +126,7 @@ class DemoRuntime:
                     if np.any(invalid_mask):
                         depth_viz = depth_viz.copy()
                         depth_viz[invalid_mask] = 0
-                result = PipelineResult(token, timestamp, obs, k, budget.coordinate(obs, k),
+                result = PipelineResult(token, timestamp, obs, k, budget.coordinate(obs, k, advisory=adv),
                                         frame, (now_completed - start) * 1000, adv,
                                         frame_id=frame_id, inference_completed=now_completed,
                                         depth_viz=depth_viz)

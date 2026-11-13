@@ -17,8 +17,9 @@ HorusEyes 2.0 - Auditory Budget Coordinator Module (Hardened)
 """
 
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Any
 import time
+import math
 import numpy as np
 
 import config
@@ -96,11 +97,12 @@ class AuditoryBudgetManager:
         self,
         obs_res: ObstacleDetectionResult,
         kinematics_res: KinematicsResult,
-        current_timestamp: Optional[float] = None
+        current_timestamp: Optional[float] = None,
+        advisory: Optional[Any] = None
     ) -> BudgetDecision:
         """
         Quyết định cấp phát luồng âm thanh duy nhất dựa trên kết quả phát hiện và động học TTC.
-        Bao gồm cơ chế CRITICAL Preemption vượt quyền ngay lập tức.
+        Bao gồm cơ chế CRITICAL Preemption vượt quyền ngay lập tức và đồng bộ Directional Advisory.
         """
         dist_cm = obs_res.dist_cm
         ttc = kinematics_res.primary_ttc
@@ -126,13 +128,7 @@ class AuditoryBudgetManager:
                 )
             ]
 
-        # ── 1. Quy tắc Triệt tiêu thính giác (Suppression Filter) ──
-        # Im lặng tuyệt đối nếu:
-        # - Trạng thái SAFE
-        # - Hoặc khoảng cách >= DIST_SAFE_CM (250cm)
-        # - Hoặc nhãn SAFE (Clear Path)
-        # - Hoặc TTC > TTC_WARNING (2.5s) và khoảng cách >= DIST_ALERT_CM (200cm)
-        # Ngoại lệ: Không triệt tiêu nếu là lỗi cảm biến / suy giảm thị giác (SENSOR_FAULT / DEGRADED / UNOBSERVABLE) hoặc đang lưu vết trễ (Coasting)
+        # ── 0A. Sensor Fault & Guidance State ──
         is_sensor_fault = (
             obs_res.mode_text == "SENSOR_BLIND (0-Lux)"
             or not getattr(obs_res, "is_valid", True)
@@ -140,18 +136,91 @@ class AuditoryBudgetManager:
             or getattr(obs_res, "quality_state", "") in ["DEGRADED", "UNOBSERVABLE"]
             or getattr(kinematics_res, "threat_level", "") == "SENSOR_FAULT"
             or getattr(kinematics_res, "guidance_state", "") == "CAMERA_STALLED"
+            or (getattr(advisory, "state", None) == "UNKNOWN" and getattr(advisory, "reason_code", "") == "SENSOR_FAULT")
         )
         is_coasting = getattr(kinematics_res, "hazard_persistence_active", False)
         hazard_state = getattr(kinematics_res, "hazard_state", "OBSERVED_LOW_RISK")
 
+        now_ts = getattr(kinematics_res, "timestamp", 0.0) or (current_timestamp if current_timestamp is not None else time.perf_counter())
+
+        if threat_level == "PAUSED" or getattr(advisory, "reason_code", "") == "PAUSED":
+            return BudgetDecision(is_active=False, proximity=0.0, volume_factor=0.0,
+                                  dist_cm=dist_cm, cue_mode="MUTED", threat_level="PAUSED",
+                                  guidance_state="PAUSED", source_type="NONE", source_id="0",
+                                  source_timestamp=now_ts, measurement_validity="VALID")
+
         if is_sensor_fault or threat_level in {"SENSOR_FAULT", "UNKNOWN", "INITIALIZING"}:
-            now_ts = getattr(kinematics_res, "timestamp", 0.0) or (current_timestamp if current_timestamp is not None else time.perf_counter())
             return BudgetDecision(is_active=True, proximity=0.4, volume_factor=0.35,
                                   dist_cm=float("nan"), cue_mode="SYSTEM_FAULT_TONE",
                                   threat_level="SENSOR_FAULT" if is_sensor_fault else "UNKNOWN",
                                   guidance_state="PERCEPTION_UNAVAILABLE",
                                   source_type="NONE", source_id="0",
                                   source_timestamp=now_ts, measurement_validity="INVALID")
+
+        # ── 0B. Authoritative Advisory STOP Audio Synchronization (P0) ──
+        adv_state_str = str(getattr(advisory, "state", "") or "")
+        if getattr(advisory, "state", None) is not None and hasattr(advisory.state, "name"):
+            adv_state_str = advisory.state.name
+
+        if adv_state_str == "STOP":
+            reason = getattr(advisory, "reason_code", "")
+            is_immediate = (threat_level == "CRITICAL" or reason in ("CRITICAL_OBSTACLE", "OVERHEAD_HAZARD", "DROP_OFF_HAZARD"))
+            if is_immediate:
+                return BudgetDecision(
+                    is_active=True,
+                    proximity=1.0,
+                    volume_factor=1.0,
+                    pan=0.0,
+                    safe_direction="STOP",
+                    ttc=min(0.8, ttc) if math.isfinite(ttc) else 0.8,
+                    dist_cm=dist_cm if math.isfinite(dist_cm) else 30.0,
+                    cue_mode="SHARP_PING",
+                    threat_level="CRITICAL",
+                    guidance_state="CRITICAL_HALT",
+                    priority_score=99.0,
+                    source_type="OBSTACLE",
+                    source_id="1",
+                    source_timestamp=now_ts,
+                    measurement_validity="VALID"
+                )
+            else:
+                return BudgetDecision(
+                    is_active=True,
+                    proximity=0.70,
+                    volume_factor=0.85,
+                    pan=0.0,
+                    safe_direction="STOP",
+                    ttc=float("inf"),
+                    dist_cm=dist_cm if math.isfinite(dist_cm) else float("nan"),
+                    cue_mode="SHARP_PING",
+                    threat_level="WARNING",
+                    guidance_state="CORRIDOR_STOP",
+                    priority_score=50.0,
+                    source_type="OBSTACLE",
+                    source_id="1",
+                    source_timestamp=now_ts,
+                    measurement_validity="VALID"
+                )
+
+        if adv_state_str == "UNAVAILABLE":
+            safe_dir = "NONE"
+            if threat_level == "SAFE":
+                return BudgetDecision(
+                    is_active=False,
+                    proximity=0.0,
+                    volume_factor=0.0,
+                    pan=0.0,
+                    safe_direction="NONE",
+                    ttc=float("inf"),
+                    dist_cm=dist_cm,
+                    cue_mode="MUTED",
+                    threat_level="SAFE",
+                    guidance_state="CORRIDOR_UNAVAILABLE",
+                    source_type="NONE",
+                    source_id="0",
+                    source_timestamp=now_ts,
+                    measurement_validity="VALID"
+                )
 
         # ── Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if hazard_state == "LOST_UNRESOLVED" or threat_level == "UNRESOLVED_HAZARD":

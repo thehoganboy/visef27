@@ -32,6 +32,7 @@ import Foundation
         testRawTensorToSpatialBins()
         testLowLightRobustnessAndLocalDisparity()
         testLowLightReleaseCandidateCorrectiveAudit()
+        testFinalDeviceReadinessAudioSync()
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
@@ -644,5 +645,126 @@ import Foundation
         precondition(!depthResult.isDropOffHazard, "P1-D failed: All-NaN ground disparity must not trigger false isDropOffHazard")
 
         print("PASS Swift Low-Light Release Candidate Corrective Audit (P0-A, P0-B, P0-C, P1-D)")
+    }
+
+    static func testFinalDeviceReadinessAudioSync() {
+        let budget = AuditoryBudgetManager()
+
+        func makeBin(id: Int, dist: Float, isValid: Bool = true) -> SpatialBin {
+            let binW: Float = 65.0 / 24.0
+            let aMin = -32.5 + Float(id) * binW
+            let aMax = aMin + binW
+            let aCenter = (aMin + aMax) / 2.0
+            return SpatialBin(
+                binId: id, angleMin: aMin, angleMax: aMax, angleCenter: aCenter,
+                validRatio: isValid ? 1.0 : 0.0, rawDepthStatistic: 200.0,
+                distCM: dist, isValid: isValid, hasObstacle: false,
+                bodyDistCM: dist, groundDistCM: .nan, overheadDistCM: .nan
+            )
+        }
+
+        // 1. Critical STOP advisory under CRITICAL threat produces high-priority warning
+        let obsCrit = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (0, 0, 192, 256), pan: 0.0, proximity: 0.9, distCM: 28.0,
+            modeText: "WALL", uncertaintyScore: 0.1, isWall: true,
+            sectorDists: ["LEFT": 28.0, "CENTER": 28.0, "RIGHT": 28.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: (0..<24).map { makeBin(id: $0, dist: 28.0) }, timestamp: 10.0
+        )
+        let kCrit = KinematicsResult(
+            primaryTTC: 0.6, primaryVelocityZ: 50.0, threats: [:], safeDirection: "STOP",
+            isEvading: false, threatLevel: "CRITICAL", guidanceState: "HAZARD_BLOCKED",
+            hazardState: "OBSERVED_HAZARD", lostUnresolvedTimestamp: 0.0, timestamp: 10.0
+        )
+        let advCrit = estimateDirectionalAdvisory(observation: obsCrit, threat: "CRITICAL", now: 10.0)
+        precondition(advCrit.state == "STOP", "Must be STOP advisory")
+        let decCrit = budget.coordinate(obstacleResult: obsCrit, kinematicsResult: kCrit, advisory: advCrit)
+        precondition(decCrit.isActive, "Audio must be active on critical STOP")
+        precondition(decCrit.safeDirection == "STOP", "Audio safe direction must be STOP")
+        precondition(decCrit.cueMode == "SHARP_PING", "Cue mode must be SHARP_PING")
+        precondition(decCrit.threatLevel == "CRITICAL", "Threat level must be CRITICAL")
+        precondition(decCrit.priorityScore >= 90.0, "Priority score must be >= 90")
+        precondition(decCrit.proximity == 1.0, "Proximity must be 1.0")
+
+        // 2. Non-critical STOP advisory (corridor obstructed) under WARNING threat
+        let obsWarn = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (0, 0, 192, 256), pan: 0.0, proximity: 0.5, distCM: 28.0,
+            modeText: "WALL", uncertaintyScore: 0.1, isWall: true,
+            sectorDists: ["LEFT": 28.0, "CENTER": 28.0, "RIGHT": 28.0],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: (0..<24).map { makeBin(id: $0, dist: 28.0) }, timestamp: 10.0
+        )
+        let kWarn = KinematicsResult(
+            primaryTTC: .infinity, primaryVelocityZ: 0.0, threats: [:], safeDirection: "NONE",
+            isEvading: false, threatLevel: "WARNING", guidanceState: "HAZARD_BLOCKED",
+            hazardState: "OBSERVED_HAZARD", lostUnresolvedTimestamp: 0.0, timestamp: 10.0
+        )
+        let advWarnStop = estimateDirectionalAdvisory(observation: obsWarn, threat: "WARNING", now: 10.0)
+        precondition(advWarnStop.state == "STOP", "Must be STOP advisory")
+        let decWarn = budget.coordinate(obstacleResult: obsWarn, kinematicsResult: kWarn, advisory: advWarnStop)
+        precondition(decWarn.isActive, "Audio must be active on non-critical STOP")
+        precondition(decWarn.safeDirection == "STOP", "Audio safe direction must be STOP")
+        precondition(decWarn.cueMode == "SHARP_PING", "Cue mode must be SHARP_PING")
+        precondition(decWarn.threatLevel == "WARNING", "Threat level must be WARNING")
+        precondition(decWarn.ttc.isInfinite, "TTC must remain infinite (no fabricated imminent collision)")
+        precondition(decWarn.proximity == 0.70, "Proximity must be 0.70")
+        precondition(decWarn.priorityScore == 50.0, "Priority score must be 50.0")
+
+        // 3. UNAVAILABLE advisory under SAFE kinematics: muting and no forward sound
+        let obsSafe = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (48, 64, 96, 128), pan: 0.0, proximity: 0.2, distCM: .nan,
+            modeText: "SAFE", uncertaintyScore: 0.1, isWall: false,
+            sectorDists: ["LEFT": .nan, "CENTER": .nan, "RIGHT": .nan],
+            allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: (0..<24).map { makeBin(id: $0, dist: .nan, isValid: true) }, timestamp: 10.0
+        )
+        let kSafe = KinematicsResult(
+            primaryTTC: .infinity, primaryVelocityZ: 0.0, threats: [:], safeDirection: "NONE",
+            isEvading: false, threatLevel: "SAFE", guidanceState: "PATH_CLEAR",
+            hazardState: "OBSERVED_LOW_RISK", lostUnresolvedTimestamp: 0.0, timestamp: 10.0
+        )
+        let advUnavail = estimateDirectionalAdvisory(observation: obsSafe, threat: "SAFE", now: 10.0)
+        precondition(advUnavail.state == "UNAVAILABLE", "Must be UNAVAILABLE advisory")
+        let decSafe = budget.coordinate(obstacleResult: obsSafe, kinematicsResult: kSafe, advisory: advUnavail)
+        precondition(!decSafe.isActive, "Audio must be inactive under UNAVAILABLE with SAFE kinematics")
+        precondition(decSafe.cueMode == "MUTED", "Cue mode must be MUTED")
+        precondition(decSafe.safeDirection == "NONE", "Safe direction must be NONE")
+
+        // 4. Distinction between STOP, SENSOR_FAULT, and PAUSED
+        let obsFault = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (0, 0, 0, 0), pan: 0.0, proximity: 0.0, distCM: .nan,
+            modeText: "SENSOR_FAULT", uncertaintyScore: 1.0, isWall: false,
+            sectorDists: [:], allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: false, spatialBins: [], timestamp: 10.0
+        )
+        let kFault = KinematicsResult(
+            primaryTTC: .infinity, primaryVelocityZ: 0.0, threats: [:], safeDirection: "STOP",
+            isEvading: false, threatLevel: "SENSOR_FAULT", guidanceState: "PERCEPTION_UNAVAILABLE",
+            hazardState: "OBSERVED_LOW_RISK", lostUnresolvedTimestamp: 0.0, timestamp: 10.0
+        )
+        let advFault = estimateDirectionalAdvisory(observation: obsFault, threat: "SENSOR_FAULT", now: 10.0)
+        let decFault = budget.coordinate(obstacleResult: obsFault, kinematicsResult: kFault, advisory: advFault)
+        precondition(decFault.isActive, "Audio must be active on SENSOR_FAULT")
+        precondition(decFault.cueMode == "SYSTEM_FAULT_TONE", "Cue mode must be SYSTEM_FAULT_TONE")
+        precondition(decFault.threatLevel == "SENSOR_FAULT", "Threat level must be SENSOR_FAULT")
+
+        let obsPaused = ObstacleDetectionResult(
+            x: 96, y: 128, bbox: (0, 0, 0, 0), pan: 0.0, proximity: 0.0, distCM: .nan,
+            modeText: "PAUSED", uncertaintyScore: 0.0, isWall: false,
+            sectorDists: [:], allObstacles: [], isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+            camWidth: 192, camHeight: 256, isValid: true, spatialBins: [], timestamp: 10.0
+        )
+        let kPaused = KinematicsResult(
+            primaryTTC: .infinity, primaryVelocityZ: 0.0, threats: [:], safeDirection: "NONE",
+            isEvading: false, threatLevel: "PAUSED", guidanceState: "PAUSED",
+            hazardState: "OBSERVED_LOW_RISK", lostUnresolvedTimestamp: 0.0, timestamp: 10.0
+        )
+        let advPaused = estimateDirectionalAdvisory(observation: nil, threat: "PAUSED", now: 10.0)
+        let decPaused = budget.coordinate(obstacleResult: obsPaused, kinematicsResult: kPaused, advisory: advPaused)
+        precondition(!decPaused.isActive, "Audio must be inactive on PAUSED")
+        precondition(decPaused.cueMode == "MUTED", "Cue mode must be MUTED")
+        precondition(decPaused.threatLevel == "PAUSED", "Threat level must be PAUSED")
+
+        print("PASS Swift Final Device Readiness Audio Sync Tests")
     }
 }

@@ -16,6 +16,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     @Published var isZeroLuxBlind: Bool = false
     @Published var meanLuma: Float = 128.0
     @Published var fps: Float = 0.0
+    @Published var isGuidanceActive: Bool = false
 
     // Public access to capture session for SwiftUI preview layer
     var session: AVCaptureSession { captureSession }
@@ -25,6 +26,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private var videoDevice: AVCaptureDevice?
     private let sessionQueue = DispatchQueue(label: "com.visef.horuseyes.cameraQueue", qos: .userInitiated)
     private var isSessionConfigured: Bool = false
+    private var sessionGeneration: Int = 0
 
     // Watchdog & Timing
     private var lastFrameTimestamp: CFTimeInterval = 0.0
@@ -221,8 +223,12 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             self?.meanLuma = luma
         }
 
-        // 0-Lux Automatic Flash Safety State Machine
-        processTorchLogic(meanY: luma, currentTime: now)
+        // 0-Lux Automatic Flash Safety State Machine (Evaluated only during active guidance session)
+        if isGuidanceActive {
+            processTorchLogic(meanY: luma, currentTime: now)
+        } else {
+            darkFrameCount = 0
+        }
 
         if aeSettleFramesRemaining > 0 {
             aeSettleFramesRemaining -= 1
@@ -352,6 +358,11 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             }
         } catch {
             print("[HorusEyes] Error setting torch: \(error)")
+            // Hardware failure: do not report successful toggle; sync to physical state
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.isTorchActive = (self.videoDevice?.torchMode == .on)
+            }
         }
     }
 
@@ -362,11 +373,31 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
         guard now - lastTorchToggleTime >= 0.25 else { return }
         lastTorchToggleTime = now
         hapticGenerator.impactOccurred()
+        let token = sessionGeneration
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+            // Ensure manual torch action cannot race with session stop/restart
+            guard self.sessionGeneration == token else { return }
             let newState = !self.isTorchActive
             self.isTorchForcedManual = true // Lock manual choice for this running session
             self.setHardwareTorch(on: newState)
+        }
+    }
+
+    func setGuidanceActive(_ active: Bool) {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.sessionGeneration += 1
+            self.isGuidanceActive = active
+            self.darkFrameCount = 0
+            self.blindFrameCount = 0
+            if !active {
+                self.isTorchForcedManual = false
+                self.setHardwareTorch(on: false)
+            } else {
+                // Restore automatic lighting policy on new CHẠY session
+                self.isTorchForcedManual = false
+            }
         }
     }
 
@@ -380,6 +411,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     func forceTorchOff() {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+            self.sessionGeneration += 1
             self.isTorchForcedManual = false
             self.setHardwareTorch(on: false)
         }

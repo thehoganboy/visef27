@@ -2,6 +2,7 @@ package com.horuseyes.app.budget
 
 import com.horuseyes.app.Config
 import com.horuseyes.app.kinematics.KinematicsResult
+import com.horuseyes.app.ui.DirectionalAdvisory
 import com.horuseyes.app.vision.DepthResult
 import com.horuseyes.app.vision.Obstacle
 import kotlin.math.max
@@ -50,6 +51,71 @@ class AuditoryBudgetManager {
             val proxBias = 0.20f * proximity
             return kinetic + proxBias
         }
+
+        fun reconcileWithAdvisory(
+            rawDecision: BudgetDecision,
+            advisory: DirectionalAdvisory?,
+            threatLevel: String
+        ): BudgetDecision {
+            if (threatLevel in setOf("SENSOR_FAULT", "UNKNOWN", "INITIALIZING")) {
+                return faultDecision()
+            }
+            if (threatLevel == "PAUSED") {
+                return rawDecision.copy(isActive = false, cueMode = "MUTED", threatLevel = "PAUSED", safeDirection = "NONE")
+            }
+            if (advisory == null) return rawDecision
+
+            if (advisory.state == "STOP") {
+                val isImmediate = threatLevel == "CRITICAL" || advisory.reasonCode in setOf("CRITICAL_OBSTACLE", "OVERHEAD_HAZARD", "DROP_OFF_HAZARD")
+                return if (isImmediate) {
+                    rawDecision.copy(
+                        isActive = true,
+                        cueMode = "SHARP_PING",
+                        threatLevel = "CRITICAL",
+                        proximity = 1.0f,
+                        safeDirection = "STOP",
+                        priorityScore = 99f,
+                        volumeFactor = 1.0f,
+                        pan = 0f
+                    )
+                } else {
+                    // STOP caused by lack of supported continuation (e.g. CORRIDOR_OBSTRUCTED):
+                    // Represented consistently without falsely claiming an imminent collision
+                    rawDecision.copy(
+                        isActive = true,
+                        cueMode = "SHARP_PING",
+                        threatLevel = "WARNING",
+                        proximity = 0.70f,
+                        safeDirection = "STOP",
+                        priorityScore = 50f,
+                        volumeFactor = 0.85f,
+                        pan = 0f,
+                        ttc = Float.POSITIVE_INFINITY
+                    )
+                }
+            } else if (advisory.state == "UNAVAILABLE") {
+                return if (threatLevel == "SAFE") {
+                    rawDecision.copy(
+                        isActive = false,
+                        cueMode = "MUTED",
+                        safeDirection = "NONE",
+                        volumeFactor = 0f
+                    )
+                } else {
+                    rawDecision.copy(safeDirection = "NONE")
+                }
+            }
+            return rawDecision
+        }
+    }
+
+    fun coordinate(
+        depthRes: DepthResult,
+        kinRes: KinematicsResult,
+        advisory: DirectionalAdvisory? = null
+    ): BudgetDecision {
+        val baseDecision = coordinate(depthRes, kinRes)
+        return reconcileWithAdvisory(baseDecision, advisory, kinRes.threatLevel)
     }
 
     fun coordinate(depthRes: DepthResult, kinRes: KinematicsResult): BudgetDecision {

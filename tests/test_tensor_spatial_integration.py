@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from depth_engine import compute_spatial_bins, ObstacleDetectionResult, SingleObstacle
 from directional_advisory import estimate_directional_advisory, advisory_for_risk
+from auditory_budget import AuditoryBudgetManager
+from motion_ttc import KinematicsResult
 
 
 def create_base_tensor(h=256, w=192, fill_val=200.0):
@@ -292,3 +294,100 @@ def test_14_directional_stop_under_non_critical_threat():
     adv = estimate_directional_advisory(obs, threat="WARNING", now=10.0)
     assert adv.state == "STOP"
     assert adv.reason_code in ("CRITICAL_OBSTACLE", "CORRIDOR_OBSTRUCTED")
+
+
+def test_15_audio_directional_stop_synchronization():
+    """15. Audio budget must emit active STOP tone synchronized with directional STOP."""
+    budget = AuditoryBudgetManager()
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(0, 0, 192, 256), pan=0.0, proximity=0.9, dist_cm=28.0,
+        mode_text="WALL", uncertainty_score=0.1, is_wall=True,
+        sector_dists={"LEFT": 28.0, "CENTER": 28.0, "RIGHT": 28.0},
+        all_obstacles=[], is_valid=True, spatial_bins=[], timestamp=10.0
+    )
+    k_crit = KinematicsResult(primary_ttc=0.6, primary_velocity_z=50.0, threats={}, safe_direction="STOP", is_evading=False, threat_level="CRITICAL")
+    adv_crit = estimate_directional_advisory(obs, threat="CRITICAL", now=10.0)
+    assert adv_crit.state == "STOP"
+
+    decision = budget.coordinate(obs, k_crit, current_timestamp=10.0, advisory=adv_crit)
+    assert decision.is_active is True
+    assert decision.safe_direction == "STOP"
+    assert decision.cue_mode == "SHARP_PING"
+    assert decision.threat_level == "CRITICAL"
+    assert decision.priority_score >= 90.0
+    assert decision.proximity == 1.0
+
+
+def test_16_audio_noncritical_stop_consistency():
+    """16. Noncritical directional STOP (corridor blocked) must halt without claiming imminent collision."""
+    budget = AuditoryBudgetManager()
+    tensor = np.full((256, 192), 750.0, dtype=np.float32)
+    bins = compute_spatial_bins(tensor, w=192, h=256, num_bins=24)
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(0, 0, 192, 256), pan=0.0, proximity=0.5, dist_cm=28.0,
+        mode_text="WALL", uncertainty_score=0.1, is_wall=True,
+        sector_dists={"LEFT": 28.0, "CENTER": 28.0, "RIGHT": 28.0},
+        all_obstacles=[], is_valid=True, spatial_bins=bins, timestamp=10.0
+    )
+    # Kinematics classified as WARNING (or SAFE)
+    k_warn = KinematicsResult(primary_ttc=float("inf"), primary_velocity_z=0.0, threats={}, safe_direction="NONE", is_evading=False, threat_level="WARNING")
+    adv_stop = estimate_directional_advisory(obs, threat="WARNING", now=10.0)
+    assert adv_stop.state == "STOP"
+
+    decision = budget.coordinate(obs, k_warn, current_timestamp=10.0, advisory=adv_stop)
+    assert decision.is_active is True
+    assert decision.safe_direction == "STOP"
+    assert decision.cue_mode == "SHARP_PING"
+    assert decision.threat_level == "WARNING"
+    # Must NOT claim an imminent collision (TTC remains infinite)
+    assert not math.isfinite(decision.ttc)
+    assert decision.proximity == 0.70
+    assert decision.priority_score == 50.0
+
+
+def test_17_audio_unavailable_no_forward_sound():
+    """17. UNAVAILABLE advisory must never emit forward clearance audio."""
+    budget = AuditoryBudgetManager()
+    obs = ObstacleDetectionResult(
+        x=96, y=128, bbox=(48, 64, 96, 128), pan=0.0, proximity=0.2, dist_cm=float("nan"),
+        mode_text="SAFE", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": float("nan"), "CENTER": float("nan"), "RIGHT": float("nan")},
+        all_obstacles=[], is_valid=True, spatial_bins=[], timestamp=10.0
+    )
+    k_safe = KinematicsResult(primary_ttc=float("inf"), primary_velocity_z=0.0, threats={}, safe_direction="NONE", is_evading=False, threat_level="SAFE")
+    adv_unavail = estimate_directional_advisory(obs, threat="SAFE", now=10.0)
+    assert adv_unavail.state == "UNAVAILABLE"
+
+    decision = budget.coordinate(obs, k_safe, current_timestamp=10.0, advisory=adv_unavail)
+    assert decision.is_active is False
+    assert decision.cue_mode == "MUTED"
+    assert decision.safe_direction == "NONE"
+
+
+def test_18_audio_sensor_fault_and_pause_distinction():
+    """18. Distinguish STOP, SENSOR_FAULT, and PAUSED in audio states."""
+    budget = AuditoryBudgetManager()
+    obs_fault = ObstacleDetectionResult(
+        x=96, y=128, bbox=(0, 0, 0, 0), pan=0.0, proximity=0.0, dist_cm=float("nan"),
+        mode_text="SENSOR_FAULT", uncertainty_score=1.0, is_wall=False,
+        sector_dists={}, all_obstacles=[], is_valid=False, spatial_bins=[], timestamp=10.0
+    )
+    k_fault = KinematicsResult(primary_ttc=float("inf"), primary_velocity_z=0.0, threats={}, safe_direction="STOP", is_evading=False, threat_level="SENSOR_FAULT")
+    adv_fault = estimate_directional_advisory(obs_fault, threat="SENSOR_FAULT", now=10.0)
+    decision_fault = budget.coordinate(obs_fault, k_fault, current_timestamp=10.0, advisory=adv_fault)
+    assert decision_fault.is_active is True
+    assert decision_fault.cue_mode == "SYSTEM_FAULT_TONE"
+    assert decision_fault.threat_level == "SENSOR_FAULT"
+
+    # Paused state
+    obs_paused = ObstacleDetectionResult(
+        x=96, y=128, bbox=(0, 0, 0, 0), pan=0.0, proximity=0.0, dist_cm=float("nan"),
+        mode_text="PAUSED", uncertainty_score=0.0, is_wall=False,
+        sector_dists={}, all_obstacles=[], is_valid=True, spatial_bins=[], timestamp=10.0
+    )
+    k_paused = KinematicsResult(primary_ttc=float("inf"), primary_velocity_z=0.0, threats={}, safe_direction="NONE", is_evading=False, threat_level="PAUSED")
+    adv_paused = advisory_for_risk("PAUSED", timestamp=10.0)
+    decision_paused = budget.coordinate(obs_paused, k_paused, current_timestamp=10.0, advisory=adv_paused)
+    assert decision_paused.is_active is False
+    assert decision_paused.cue_mode == "MUTED"
+    assert decision_paused.threat_level == "PAUSED"

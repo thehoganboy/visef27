@@ -3,6 +3,7 @@ import SwiftUI
 struct TrackingOverlayView: View {
     let result: ObstacleDetectionResult?
     let threatLevel: String
+    var isStop: Bool = false
 
     var body: some View {
         Canvas { context, size in
@@ -14,7 +15,8 @@ struct TrackingOverlayView: View {
             let oy = (size.height - CGFloat(result.camHeight) * scale) / 2
             guard ox.isFinite, oy.isFinite else { return }
 
-            let primaryColor: Color = threatLevel == "CRITICAL" ? Color(red: 1.0, green: 0.23, blue: 0.19) :
+            let isEffectiveStop = isStop || threatLevel == "CRITICAL"
+            let primaryColor: Color = isEffectiveStop ? Color(red: 1.0, green: 0.23, blue: 0.19) :
                                       threatLevel == "WARNING" ? Color(red: 1.0, green: 0.58, blue: 0.0) :
                                       Color(red: 0.95, green: 0.95, blue: 0.97)
 

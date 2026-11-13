@@ -1,6 +1,8 @@
 package com.horuseyes.app
 
 import android.graphics.Rect
+import com.horuseyes.app.budget.AuditoryBudgetManager
+import com.horuseyes.app.kinematics.KinematicsResult
 import com.horuseyes.app.ui.DirectionalAdvisory
 import com.horuseyes.app.ui.estimateDirectionalAdvisory
 import com.horuseyes.app.vision.DepthEngine
@@ -305,5 +307,134 @@ class TensorSpatialIntegrationTest {
         val adv = estimateDirectionalAdvisory(depth, threat = "WARNING", nowNanos = 10_000_000_000L)
         assertEquals("STOP", adv.state)
         assertTrue(adv.reasonCode == "CRITICAL_OBSTACLE" || adv.reasonCode == "CORRIDOR_OBSTRUCTED")
+    }
+
+    @Test
+    fun test15_audioDirectionalStopSynchronization() {
+        val tensor = createBaseTensor(fillVal = 750.0f)
+        val obsWall = Obstacle(1, 96, 128, Rect(0, 0, 192, 256), 0.0f, 28.0f, 0.9f, 0.1f, isWall = true)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsWall), numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 28.0f,
+            pan = 0.0f, proximity = 0.9f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 28.0f, "RIGHT" to 28.0f),
+            allObstacles = listOf(obsWall), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advCrit = estimateDirectionalAdvisory(depth, threat = "CRITICAL", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", advCrit.state)
+
+        val kCrit = KinematicsResult(
+            primaryTtc = 0.6f, primaryVelocityZ = 50.0f, threats = emptyMap(),
+            safeDirection = "STOP", isEvading = false, threatLevel = "CRITICAL",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depth, kCrit, advCrit)
+        assertTrue(decision.isActive)
+        assertEquals("STOP", decision.safeDirection)
+        assertEquals("SHARP_PING", decision.cueMode)
+        assertEquals("CRITICAL", decision.threatLevel)
+        assertTrue(decision.priorityScore >= 90.0f)
+        assertEquals(1.0f, decision.proximity, 0.001f)
+    }
+
+    @Test
+    fun test16_audioNoncriticalStopConsistency() {
+        val tensor = createBaseTensor(fillVal = 750.0f)
+        val obsWall = Obstacle(1, 96, 128, Rect(0, 0, 192, 256), 0.0f, 28.0f, 0.5f, 0.1f, isWall = true)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsWall), numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 28.0f,
+            pan = 0.0f, proximity = 0.5f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 28.0f, "RIGHT" to 28.0f),
+            allObstacles = listOf(obsWall), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advStop = estimateDirectionalAdvisory(depth, threat = "WARNING", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", advStop.state)
+
+        val kWarn = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "WARNING",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depth, kWarn, advStop)
+        assertTrue(decision.isActive)
+        assertEquals("STOP", decision.safeDirection)
+        assertEquals("SHARP_PING", decision.cueMode)
+        assertEquals("WARNING", decision.threatLevel)
+        assertTrue(decision.ttc.isInfinite())
+        assertEquals(0.70f, decision.proximity, 0.001f)
+        assertEquals(50.0f, decision.priorityScore, 0.001f)
+    }
+
+    @Test
+    fun test17_audioUnavailableNoForwardSound() {
+        val corruptedBins = (0 until 24).map { idx ->
+            SpatialBin(
+                binId = idx, angleMin = -32.5f + idx * (65.0f / 24.0f),
+                angleMax = -32.5f + (idx + 1) * (65.0f / 24.0f),
+                angleCenter = -32.5f + (idx + 0.5f) * (65.0f / 24.0f),
+                validRatio = 1.0f, rawDepthStatistic = 200.0f,
+                estimatedDistanceCm = Float.NaN, isValid = true, hasObstacle = false
+            )
+        }
+        val depth = DepthResult(
+            rawDisparity = FloatArray(192 * 256) { 0f }, width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to Float.NaN, "CENTER" to Float.NaN, "RIGHT" to Float.NaN),
+            allObstacles = emptyList(), isValid = true, spatialBins = corruptedBins, timestampNanos = 10_000_000_000L
+        )
+        val advUnavail = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("UNAVAILABLE", advUnavail.state)
+
+        val kSafe = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "SAFE",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depth, kSafe, advUnavail)
+        assertFalse(decision.isActive)
+        assertEquals("MUTED", decision.cueMode)
+        assertEquals("NONE", decision.safeDirection)
+    }
+
+    @Test
+    fun test18_audioSensorFaultAndPauseDistinction() {
+        val depthFault = DepthResult(
+            rawDisparity = FloatArray(0), width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.0f, uncertaintyScore = 1.0f, isSaturated = false,
+            sectorDists = emptyMap(), allObstacles = emptyList(), isValid = false,
+            spatialBins = emptyList(), timestampNanos = 10_000_000_000L
+        )
+        val kFault = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "STOP", isEvading = false, threatLevel = "SENSOR_FAULT",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val advFault = estimateDirectionalAdvisory(depthFault, threat = "SENSOR_FAULT", nowNanos = 10_000_000_000L)
+        val budget = AuditoryBudgetManager()
+        val decisionFault = budget.coordinate(depthFault, kFault, advFault)
+        assertTrue(decisionFault.isActive)
+        assertEquals("SYSTEM_FAULT_TONE", decisionFault.cueMode)
+        assertEquals("SENSOR_FAULT", decisionFault.threatLevel)
+
+        val depthPaused = DepthResult(
+            rawDisparity = FloatArray(0), width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.0f, uncertaintyScore = 0.0f, isSaturated = false,
+            sectorDists = emptyMap(), allObstacles = emptyList(), isValid = true,
+            spatialBins = emptyList(), timestampNanos = 10_000_000_000L
+        )
+        val kPaused = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "PAUSED",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val advPaused = estimateDirectionalAdvisory(depthPaused, threat = "PAUSED", nowNanos = 10_000_000_000L)
+        val decisionPaused = budget.coordinate(depthPaused, kPaused, advPaused)
+        assertFalse(decisionPaused.isActive)
+        assertEquals("MUTED", decisionPaused.cueMode)
+        assertEquals("PAUSED", decisionPaused.threatLevel)
     }
 }
