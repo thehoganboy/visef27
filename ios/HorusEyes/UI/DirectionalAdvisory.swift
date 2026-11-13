@@ -1,13 +1,13 @@
 import Foundation
 
-public struct DirectionalAdvisory {
-    public var state: String = "UNKNOWN"
-    public var angleDeg: Double? = nil
-    public var confidence: Double? = nil
-    public var observedAngularRange: ClosedRange<Double>? = nil
-    public var sourceTimestamp: Double = 0
+struct DirectionalAdvisory {
+    var state: String = "UNKNOWN"
+    var angleDeg: Double? = nil
+    var confidence: Double? = nil
+    var observedAngularRange: ClosedRange<Double>? = nil
+    var sourceTimestamp: Double = 0
 
-    public init(
+    init(
         state: String = "UNKNOWN",
         angleDeg: Double? = nil,
         confidence: Double? = nil,
@@ -21,7 +21,7 @@ public struct DirectionalAdvisory {
         self.sourceTimestamp = sourceTimestamp
     }
 
-    public func drawableAngle(now: Double) -> Double? {
+    func drawableAngle(now: Double) -> Double? {
         guard state == "AVAILABLE", let angle = angleDeg, angle.isFinite,
               let confidence = confidence, confidence > 0, confidence <= 1,
               let range = observedAngularRange, range.lowerBound >= -90, range.upperBound <= 90,
@@ -30,7 +30,7 @@ public struct DirectionalAdvisory {
     }
 }
 
-public func estimateDirectionalAdvisory(
+func estimateDirectionalAdvisory(
     observation: ObstacleDetectionResult?,
     threat: String,
     now: Double,
