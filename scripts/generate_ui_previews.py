@@ -63,7 +63,7 @@ def render_vampior_mockup(state="RUNNING", threat="NORMAL", angle_deg=0.0, is_pr
         for (x, y, dx, dy) in corners:
             cam_draw.line([(x + dx * leg, y), (x, y), (x, y + dy * leg)], fill=color, width=4)
 
-    # Directional Guidance Arrow or Status Badge
+    # Directional Guidance Arrow or Status Badge (Centered Horizontally at cx = cam_w / 2)
     cx = cam_w / 2
     cy = cam_h * 0.86
 
@@ -117,6 +117,20 @@ def render_vampior_mockup(state="RUNNING", threat="NORMAL", angle_deg=0.0, is_pr
         )
         badge_text = "PAUSED" if state == "PAUSED" else ("STOP" if threat == "CRITICAL" else "UNAVAILABLE")
         cam_draw.text((cx - 24, cy - 8), badge_text, fill=(255, 59, 48) if threat == "CRITICAL" else (242, 242, 247))
+
+    # Top-Right Manual Flashlight Button (Enlarged 66x66 pt, P1-01)
+    torch_r = 33
+    torch_cx = cam_w - 16 - torch_r
+    torch_cy = 16 + torch_r
+    cam_draw.ellipse(
+        [torch_cx - torch_r, torch_cy - torch_r, torch_cx + torch_r, torch_cy + torch_r],
+        fill=(25, 28, 35, 215),
+        outline=(255, 255, 255, 70),
+        width=2
+    )
+    # Simple torch icon representation (head & body)
+    cam_draw.rectangle([torch_cx - 6, torch_cy - 4, torch_cx + 6, torch_cy + 12], fill=(240, 240, 245))
+    cam_draw.polygon([(torch_cx - 10, torch_cy - 12), (torch_cx + 10, torch_cy - 12), (torch_cx + 6, torch_cy - 4), (torch_cx - 6, torch_cy - 4)], fill=(240, 240, 245))
 
     # Mask camera scene into rounded rectangle
     mask = Image.new('L', (cam_w, cam_h), 0)

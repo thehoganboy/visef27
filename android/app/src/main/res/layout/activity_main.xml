@@ -44,11 +44,11 @@
             <!-- Top-Right Manual Flashlight Button (P1-01) -->
             <ImageButton
                 android:id="@+id/btnTorch"
-                android:layout_width="52dp"
-                android:layout_height="52dp"
+                android:layout_width="66dp"
+                android:layout_height="66dp"
                 android:layout_gravity="top|end"
-                android:layout_marginTop="14dp"
-                android:layout_marginEnd="14dp"
+                android:layout_marginTop="16dp"
+                android:layout_marginEnd="16dp"
                 android:background="@drawable/bg_torch_button"
                 android:src="@drawable/ic_torch"
                 android:contentDescription="Bật hoặc tắt đèn pin"

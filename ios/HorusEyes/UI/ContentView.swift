@@ -295,22 +295,22 @@ struct FlashlightButton: View {
         Button(action: action) {
             ZStack {
                 Circle()
-                    .fill(Color(white: 0.10).opacity(0.75))
+                    .fill(Color(white: 0.12).opacity(0.82))
                     .overlay(
                         Circle()
                             .stroke(
                                 isTorchActive ?
-                                    Color(red: 1.0, green: 0.84, blue: 0.04).opacity(0.85) :
-                                    Color.white.opacity(0.22),
-                                lineWidth: 1.5
+                                    Color(red: 1.0, green: 0.84, blue: 0.04).opacity(0.90) :
+                                    Color.white.opacity(0.28),
+                                lineWidth: 2.0
                             )
                     )
                 Image(systemName: isTorchActive ? "flashlight.on.fill" : "flashlight.off.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundColor(isTorchActive ? Color(red: 1.0, green: 0.84, blue: 0.04) : Color.white.opacity(0.92))
-                    .shadow(color: isTorchActive ? Color.yellow.opacity(0.5) : Color.clear, radius: 6)
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundColor(isTorchActive ? Color(red: 1.0, green: 0.84, blue: 0.04) : Color.white.opacity(0.95))
+                    .shadow(color: isTorchActive ? Color.yellow.opacity(0.6) : Color.clear, radius: 8)
             }
-            .frame(width: 52, height: 52)
+            .frame(width: 66, height: 66)
             .contentShape(Circle())
         }
         .accessibilityLabel(isTorchActive ? "Tắt đèn pin" : "Bật đèn pin")
@@ -327,22 +327,31 @@ struct ContentView: View {
     var body: some View {
         VStack(spacing: 0) {
             // Rounded Camera Preview Container (P1-01)
-            ZStack(alignment: .topTrailing) {
+            ZStack {
                 CameraPreviewView(session: model.camera.session)
                 TrackingOverlayView(result: model.result, threatLevel: model.threat)
 
-                // Top-Right Floating Flashlight Button (P1-01)
-                FlashlightButton(isTorchActive: model.camera.isTorchActive) {
-                    model.camera.toggleManualTorch()
-                }
-                .padding(.top, 14)
-                .padding(.trailing, 14)
-
-                VStack {
+                // Centered Direction Indicator & Status Badge
+                VStack(spacing: 0) {
                     Spacer()
                     DirectionIndicator(advisory: model.advisory, threat: model.threat)
-                        .padding(.bottom, 24)
+                        .padding(.bottom, 28)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+                // Top-Right Floating Flashlight Button (Enlarged)
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        Spacer()
+                        FlashlightButton(isTorchActive: model.camera.isTorchActive) {
+                            model.camera.toggleManualTorch()
+                        }
+                        .padding(.top, 16)
+                        .padding(.trailing, 16)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             .overlay(
@@ -377,7 +386,7 @@ struct DirectionIndicator: View {
     let threat: String
 
     var body: some View {
-        Group {
+        ZStack {
             let isStop = (advisory.state == "STOP" || threat == "CRITICAL") && threat != "PAUSED"
             let isPaused = threat == "PAUSED"
 
@@ -387,7 +396,7 @@ struct DirectionIndicator: View {
                 let lateralOffset = max(-35.0, min(35.0, visualAngle * 0.9))
 
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 80, weight: .heavy))
+                    .font(.system(size: 84, weight: .heavy))
                     .rotation3DEffect(.degrees(22), axis: (x: 1, y: 0, z: 0)) // 3D road perspective
                     .rotationEffect(.degrees(visualAngle))
                     .offset(x: lateralOffset)
@@ -408,7 +417,7 @@ struct DirectionIndicator: View {
                 Label(labelText, systemImage: iconName)
                     .font(.system(size: 22, weight: .bold))
                     .foregroundColor(isStop ? Color(red: 1.0, green: 0.23, blue: 0.19) : Color(red: 0.95, green: 0.95, blue: 0.97))
-                    .padding(.horizontal, 24)
+                    .padding(.horizontal, 28)
                     .padding(.vertical, 14)
                     .background(
                         RoundedRectangle(cornerRadius: 18, style: .continuous)
@@ -421,5 +430,6 @@ struct DirectionIndicator: View {
                     .accessibilityLabel(isStop ? "Stop. Obstacle detected" : (isPaused ? "Perception paused" : "Direction unavailable"))
             }
         }
+        .frame(maxWidth: .infinity)
     }
 }
