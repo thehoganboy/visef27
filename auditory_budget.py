@@ -43,6 +43,10 @@ class BudgetDecision:
     velocity_z: float = 0.0            # Vận tốc tiếp cận của mối nguy active (cm/s)
     active_obstacle_id: int = 1       # ID của vật cản được cấp ngân sách âm thanh duy nhất
     suppressed_obstacles: list = None # Danh sách các vật cản phụ bị triệt tiêu âm thanh
+    source_type: str = "NONE"          # "OBJECT", "SECTOR", "NONE"
+    source_id: str = "0"               # Track ID nếu OBJECT, tên sector nếu SECTOR
+    source_timestamp: float = 0.0      # Timestamp gốc của phép đo
+    measurement_validity: str = "VALID" # "VALID", "UNKNOWN", "INVALID"
 
 
 class AuditoryBudgetManager:
@@ -141,10 +145,13 @@ class AuditoryBudgetManager:
         hazard_state = getattr(kinematics_res, "hazard_state", "OBSERVED_LOW_RISK")
 
         if is_sensor_fault or threat_level in {"SENSOR_FAULT", "UNKNOWN", "INITIALIZING"}:
+            now_ts = getattr(kinematics_res, "timestamp", 0.0) or (current_timestamp if current_timestamp is not None else time.perf_counter())
             return BudgetDecision(is_active=True, proximity=0.4, volume_factor=0.35,
                                   dist_cm=float("nan"), cue_mode="SYSTEM_FAULT_TONE",
                                   threat_level="SENSOR_FAULT" if is_sensor_fault else "UNKNOWN",
-                                  guidance_state="PERCEPTION_UNAVAILABLE")
+                                  guidance_state="PERCEPTION_UNAVAILABLE",
+                                  source_type="NONE", source_id="0",
+                                  source_timestamp=now_ts, measurement_validity="INVALID")
 
         # ── Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
         if hazard_state == "LOST_UNRESOLVED" or threat_level == "UNRESOLVED_HAZARD":
@@ -176,7 +183,11 @@ class AuditoryBudgetManager:
                     cue_mode="CAUTION_REMINDER",
                     suppressed_count=0,
                     active_obstacle_id=0,
-                    suppressed_obstacles=[]
+                    suppressed_obstacles=[],
+                    source_type="NONE",
+                    source_id="0",
+                    source_timestamp=now_ts,
+                    measurement_validity="INVALID"
                 )
             else:
                 # Sau thời hạn 1.5s, chuyển sang standby im lặng, nhưng TUYỆT ĐỐI GIỮ NGUYÊN guidance_state là PATH_UNRESOLVED
@@ -195,7 +206,11 @@ class AuditoryBudgetManager:
                     cue_mode="STANDBY_UNRESOLVED",
                     suppressed_count=0,
                     active_obstacle_id=0,
-                    suppressed_obstacles=[]
+                    suppressed_obstacles=[],
+                    source_type="NONE",
+                    source_id="0",
+                    source_timestamp=now_ts,
+                    measurement_validity="INVALID"
                 )
 
         if threat_level == "SAFE" and not is_sensor_fault and not is_coasting and (
@@ -204,6 +219,7 @@ class AuditoryBudgetManager:
             or obs_res.mode_text.startswith("SAFE")
             or (dist_cm >= config.DIST_ALERT_CM and ttc > config.TTC_WARNING)
         ):
+            now_ts = getattr(kinematics_res, "timestamp", 0.0) or (current_timestamp if current_timestamp is not None else time.perf_counter())
             self.current_active_id = None
             self.active_hold_counter = 0
             self.pending_switch_id = None
@@ -222,7 +238,11 @@ class AuditoryBudgetManager:
                 cue_mode="MUTED",
                 suppressed_count=max(len(all_obs), 3),
                 active_obstacle_id=0,
-                suppressed_obstacles=all_obs
+                suppressed_obstacles=all_obs,
+                source_type="NONE",
+                source_id="0",
+                source_timestamp=now_ts,
+                measurement_validity="VALID"
             )
 
         # ── 2. Tính điểm ưu tiên (Priority Score) cho từng vật cản ──
@@ -324,6 +344,9 @@ class AuditoryBudgetManager:
             active_uncert = winner_obs.uncertainty_score
             best_ttc = winner_ttc
             best_score = winner_score
+            src_type = "OBJECT"
+            src_id = str(active_id)
+            meas_val = "VALID" if (np.isfinite(active_dist) and active_dist > 0) else "UNKNOWN"
         else:
             best_score = self._compute_threat_score(ttc, obs_res.proximity, dist_cm, uncert)
             best_ttc = ttc
@@ -335,6 +358,9 @@ class AuditoryBudgetManager:
             active_uncert = uncert
             self.current_active_id = active_id
             self.active_hold_counter = 1
+            src_type = "SECTOR"
+            src_id = "SECTOR_CENTER"
+            meas_val = "VALID" if (np.isfinite(dist_cm) and dist_cm > 0) else "UNKNOWN"
 
         priority_score = round(float(best_score), 2)
 
@@ -369,6 +395,8 @@ class AuditoryBudgetManager:
         if active_vz <= 0.0:
             best_ttc = float("inf")
 
+        now_ts = getattr(kinematics_res, "timestamp", 0.0) or (current_timestamp if current_timestamp is not None else time.perf_counter())
+
         return BudgetDecision(
             is_active=True,
             pan=pan,
@@ -384,5 +412,9 @@ class AuditoryBudgetManager:
             threat_level=threat_level,
             velocity_z=active_vz,
             active_obstacle_id=active_id,
-            suppressed_obstacles=suppressed_list
+            suppressed_obstacles=suppressed_list,
+            source_type=src_type,
+            source_id=src_id,
+            source_timestamp=now_ts,
+            measurement_validity=meas_val
         )

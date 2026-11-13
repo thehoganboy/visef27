@@ -157,6 +157,8 @@ def run_benchmark():
         adv = estimate_directional_advisory(obs_res, threat=kin_res.threat_level, now=ts, prev_angle=prev_angle)
         if adv.state == DirectionState.AVAILABLE:
             prev_angle = adv.angle_deg
+        else:
+            prev_angle = None
 
         t1 = time.perf_counter()
 
@@ -178,15 +180,25 @@ def run_benchmark():
                 "is_active": (o.id == decision.active_obstacle_id and decision.is_active)
             })
 
+        hazard_vz = decision.velocity_z if decision.is_active else 0.0
+        hazard_ttc = decision.ttc if decision.is_active else float("inf")
+
         rec = {
             "idx": idx,
             "timestamp": ts,
             "num_obstacles": len(obs_res.all_obstacles or []),
+            "source_type": getattr(decision, "source_type", "OBJECT" if decision.is_active else "NONE"),
+            "source_id": getattr(decision, "source_id", str(decision.active_obstacle_id) if decision.is_active else "0"),
             "active_id": decision.active_obstacle_id if decision.is_active else 0,
             "is_active": decision.is_active,
+            "hazard_dist_cm": decision.dist_cm if decision.is_active else obs_res.dist_cm,
+            "hazard_vz": hazard_vz,
+            "hazard_ttc": hazard_ttc,
+            "primary_track_vz": kin_res.primary_velocity_z,
+            "primary_track_ttc": kin_res.primary_ttc,
             "dist_cm": decision.dist_cm if decision.is_active else obs_res.dist_cm,
-            "vz": decision.velocity_z if decision.is_active else kin_res.primary_velocity_z,
-            "ttc": decision.ttc,
+            "vz": hazard_vz,
+            "ttc": hazard_ttc,
             "suppressed_count": decision.suppressed_count,
             "threat_level": kin_res.threat_level,
             "cue_mode": decision.cue_mode,
@@ -255,22 +267,31 @@ def evaluate_telemetry(records, dataset_name):
     avg_budget = float(np.mean(lat_budgets))
 
     # 2. Kiểm tra tính đúng đắn của logic TTC (Negative Correctness & Positive Detection)
-    ttc_violations = 0
+    # Strictly evaluate per source (no mixing of primary track TTC with another object's vz)
+    hazard_ttc_violations = 0
+    track_ttc_violations = 0
     finite_ttcs = []
     approaching_vzs = []
     first_finite_ttc_ts = None
 
     for r in records:
-        vz = r["vz"]
-        ttc = r["ttc"]
-        if ttc < float("inf"):
-            finite_ttcs.append(ttc)
-            approaching_vzs.append(vz)
+        h_vz = r["hazard_vz"]
+        h_ttc = r["hazard_ttc"]
+        if h_ttc < float("inf"):
+            finite_ttcs.append(h_ttc)
+            approaching_vzs.append(h_vz)
             if first_finite_ttc_ts is None:
                 first_finite_ttc_ts = r["timestamp"]
-            # Vi phạm nếu TTC có giá trị hữu hạn nhưng vz <= 0 (vật đứng yên hoặc đang lùi ra xa)
-            if vz <= 0.0:
-                ttc_violations += 1
+            # Vi phạm nếu TTC có giá trị hữu hạn nhưng vz <= 0 từ cùng một nguồn active hazard
+            if h_vz <= 0.0:
+                hazard_ttc_violations += 1
+
+        t_vz = r["primary_track_vz"]
+        t_ttc = r["primary_track_ttc"]
+        if t_ttc < float("inf") and t_vz <= 0.0:
+            track_ttc_violations += 1
+
+    ttc_violations = hazard_ttc_violations + track_ttc_violations
 
     # 3. Phân biệt Vật động vs Vật tĩnh (Dynamic vs Static)
     all_vzs = []

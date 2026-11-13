@@ -89,16 +89,22 @@ def main():
             d = budget.coordinate(obs, k)
             t4 = time.perf_counter()
 
-            # Continuous directional advisory
+            # Continuous directional advisory computed once per frame
             adv = estimate_directional_advisory(obs, threat=k.threat_level, now=pts, prev_angle=prev_angle)
             if adv.state == DirectionState.AVAILABLE:
                 prev_angle = adv.angle_deg
+            else:
+                prev_angle = None
 
-            canvas = view.render(frame, obs, k.threat_level, now=pts)
+            canvas = view.render(frame, obs, k.threat_level, now=pts, advisory=adv)
             t5 = time.perf_counter()
 
             if video_writer is not None:
                 video_writer.write(canvas)
+
+            # Strict provenance: hazard_vz and hazard_ttc strictly from the exact same source (d)
+            hazard_vz = d.velocity_z if d.is_active else 0.0
+            hazard_ttc = d.ttc if d.is_active else float("inf")
 
             rows.append(dict(
                 index=index,
@@ -109,11 +115,18 @@ def main():
                 budget_ms=(t4 - t3) * 1000.0,
                 render_ms=(t5 - t4) * 1000.0,
                 total_ms=(t5 - t0) * 1000.0,
+                source_type=getattr(d, "source_type", "OBJECT" if d.is_active else "NONE"),
+                source_id=getattr(d, "source_id", str(d.active_obstacle_id) if d.is_active else "0"),
                 active_id=d.active_obstacle_id if d.is_active else 0,
                 threat=k.threat_level,
-                dist_cm=obs.dist_cm,
-                vz=d.velocity_z if d.is_active else k.primary_velocity_z,
-                ttc=k.primary_ttc,
+                hazard_dist_cm=d.dist_cm if d.is_active else obs.dist_cm,
+                hazard_vz=hazard_vz,
+                hazard_ttc=hazard_ttc,
+                primary_track_vz=k.primary_velocity_z,
+                primary_track_ttc=k.primary_ttc,
+                dist_cm=d.dist_cm if d.is_active else obs.dist_cm,
+                vz=hazard_vz,
+                ttc=hazard_ttc,
                 direction_state=adv.state.value,
                 direction_angle=adv.angle_deg if adv.angle_deg is not None else float("nan"),
                 cue_mode=d.cue_mode,

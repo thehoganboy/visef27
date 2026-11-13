@@ -70,18 +70,28 @@ fun estimateDirectionalAdvisory(
     for (o in depth.allObstacles) {
         val l = if (o.bbox.right > o.bbox.left) o.bbox.left.toFloat() else (o.x - 20f)
         val r = if (o.bbox.right > o.bbox.left) o.bbox.right.toFloat() else (o.x + 20f)
-        val z = max(10f, if (o.distCm.isFinite() && o.distCm > 0f) o.distCm else if (validC) zCenter else 100f)
+        val isDistValid = o.distCm.isFinite() && o.distCm > 0f
         val angLeft = Math.toDegrees(kotlin.math.atan2((l - cx).toDouble(), fx.toDouble())).toFloat()
         val angRight = Math.toDegrees(kotlin.math.atan2((r - cx).toDouble(), fx.toDouble())).toFloat()
         val angCenter = (angLeft + angRight) / 2f
         val angHalfW = max(2f, (angRight - angLeft) / 2f)
-        val marginDeg = min(22f, max(4f, Math.toDegrees(kotlin.math.atan2(20.0, z.toDouble())).toFloat()))
-        val totalRadius = angHalfW + marginDeg
-        val weight = when {
-            z < 50f -> 20f
-            z < 80f -> 10f
-            z < 150f -> 4f
-            else -> 1f
+        val totalRadius: Float
+        val weight: Float
+        if (isDistValid) {
+            val z = max(10f, o.distCm)
+            val marginDeg = min(22f, max(4f, Math.toDegrees(kotlin.math.atan2(20.0, z.toDouble())).toFloat()))
+            totalRadius = angHalfW + marginDeg
+            weight = when {
+                z < 50f -> 20f
+                z < 80f -> 10f
+                z < 150f -> 4f
+                else -> 1f
+            }
+        } else {
+            // Unknown-distance obstacle: retain image-space angular occupancy without fabricating 100cm
+            val marginDeg = 8f
+            totalRadius = angHalfW + marginDeg
+            weight = 12f
         }
         profiles.add(ObsProfile(angCenter, totalRadius, weight))
     }

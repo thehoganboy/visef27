@@ -78,7 +78,8 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
         running = value
         started = SystemClock.elapsedRealtimeNanos(); lastResult = started
         analyzer?.setActive(value)
-        binding.btnStartStop.text = if (value) "STOP" else "START"
+        binding.btnStartStop.text = if (value) "DỪNG" else "CHẠY"
+        binding.btnStartStop.contentDescription = if (value) "Dừng nhận thức tránh va chạm" else "Bắt đầu nhận thức tránh va chạm"
         binding.overlayView.setState(if (value) "INITIALIZING" else "PAUSED")
         if (value) {
             try {

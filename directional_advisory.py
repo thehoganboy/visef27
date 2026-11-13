@@ -86,6 +86,14 @@ def estimate_directional_advisory(
     if not getattr(observation, "is_valid", True) or getattr(observation, "is_zero_lux_blind", False):
         return DirectionalAdvisory(state=DirectionState.UNKNOWN, source_timestamp=now)
 
+    # 1.1 Spatial observation freshness check (reject stale observations > 750ms)
+    obs_ts = getattr(observation, "timestamp", None)
+    adv_ts = now
+    if obs_ts is not None and isinstance(obs_ts, (int, float)) and math.isfinite(obs_ts):
+        adv_ts = obs_ts
+        if now > 0 and obs_ts > 0 and (now - obs_ts > 0.75):
+            return DirectionalAdvisory(state=DirectionState.UNAVAILABLE, source_timestamp=obs_ts)
+
     # 2. Camera geometry and observed FOV limits
     cam_w = float(getattr(observation, "cam_width", 640) or 640)
     cx = cam_w / 2.0
@@ -127,9 +135,10 @@ def estimate_directional_advisory(
     if (status_c == "VALID" and z_center < 50.0 and
             status_l == "VALID" and z_left < 60.0 and
             status_r == "VALID" and z_right < 60.0):
-        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=now)
+        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
 
     # 4. Map obstacles to angular span and risk weights
+    # Remove remaining fabricated 100cm fallback: preserve unknown-distance obstacles by their angular bbox
     all_obstacles = getattr(observation, "all_obstacles", []) or []
     obstacle_profiles = []
     for obs in all_obstacles:
@@ -137,9 +146,17 @@ def estimate_directional_advisory(
         if not bbox or len(bbox) < 4:
             continue
         bx, by, bw, bh = bbox[:4]
-        z_obs = float(getattr(obs, "dist_cm", z_center if status_c == "VALID" else 100.0))
-        if not math.isfinite(z_obs) or z_obs <= 0:
-            z_obs = 100.0
+        raw_dist = getattr(obs, "dist_cm", None)
+        is_dist_valid = False
+        z_obs = None
+        if raw_dist is not None:
+            try:
+                z_f = float(raw_dist)
+                if math.isfinite(z_f) and z_f > 0:
+                    z_obs = z_f
+                    is_dist_valid = True
+            except (ValueError, TypeError):
+                pass
 
         # Angular center and extent
         ang_left = image_x_to_angle(bx, cx, fx)
@@ -147,28 +164,35 @@ def estimate_directional_advisory(
         ang_center = (ang_left + ang_right) / 2.0
         ang_half_w = max(2.0, (ang_right - ang_left) / 2.0)
 
-        # Body-clearance lateral margin (20cm shoulder margin at distance z)
-        margin_deg = min(22.0, max(4.0, math.degrees(math.atan2(20.0, max(10.0, z_obs)))))
-        total_radius = ang_half_w + margin_deg
+        if is_dist_valid:
+            # Body-clearance lateral margin (20cm shoulder margin at distance z)
+            margin_deg = min(22.0, max(4.0, math.degrees(math.atan2(20.0, max(10.0, z_obs)))))
+            total_radius = ang_half_w + margin_deg
 
-        # Severity weight based on proximity
-        if z_obs < 50.0:
-            weight = 20.0
-        elif z_obs < 80.0:
-            weight = 10.0
-        elif z_obs < 150.0:
-            weight = 4.0
+            # Severity weight based on proximity
+            if z_obs < 50.0:
+                weight = 20.0
+            elif z_obs < 80.0:
+                weight = 10.0
+            elif z_obs < 150.0:
+                weight = 4.0
+            else:
+                weight = 1.0
+            obstacle_profiles.append((ang_center, total_radius, weight, z_obs, True))
         else:
-            weight = 1.0
-
-        obstacle_profiles.append((ang_center, total_radius, weight, z_obs))
+            # Unknown-distance obstacle: preserve image-space angular occupancy without fabricating 100cm
+            margin_deg = 8.0
+            total_radius = ang_half_w + margin_deg
+            # Reject candidate headings intersecting it without turning entire scene CRITICAL
+            weight = 12.0
+            obstacle_profiles.append((ang_center, total_radius, weight, float("nan"), False))
 
     # Single obstacle fallback when all_obstacles is empty
     if not obstacle_profiles and status_c == "VALID" and z_center < 150.0:
         pan = float(getattr(observation, "pan", 0.0) or 0.0)
         ang_center = pan * half_fov
         weight = 15.0 if z_center < 80.0 else 5.0
-        obstacle_profiles.append((ang_center, 12.0, weight, z_center))
+        obstacle_profiles.append((ang_center, 12.0, weight, z_center, True))
 
     # Clear observation with no detected obstacles
     # ONLY allowed when ALL three sectors are confirmed VALID and clear
@@ -185,14 +209,14 @@ def estimate_directional_advisory(
                     angle_deg=round(angle_out, 1),
                     confidence=0.55,
                     observed_angular_range=obs_range,
-                    source_timestamp=now
+                    source_timestamp=adv_ts
                 )
         elif status_c != "VALID" and status_l != "VALID" and status_r != "VALID":
             # No valid sector data at all -> cannot recommend any direction
             return DirectionalAdvisory(
                 state=DirectionState.UNAVAILABLE,
                 observed_angular_range=obs_range,
-                source_timestamp=now
+                source_timestamp=adv_ts
             )
 
     # 5. Build candidate angles within observed FOV (step 2.5 degrees)
@@ -217,7 +241,7 @@ def estimate_directional_advisory(
         return DirectionalAdvisory(
             state=DirectionState.UNAVAILABLE,
             observed_angular_range=obs_range,
-            source_timestamp=now
+            source_timestamp=adv_ts
         )
 
     best_candidate = 0.0
@@ -227,7 +251,7 @@ def estimate_directional_advisory(
         risk = 0.0
 
         # Obstacle risk penalty
-        for ang_c, radius, weight, z_obs in obstacle_profiles:
+        for ang_c, radius, weight, z_obs, is_valid in obstacle_profiles:
             d_ang = abs(cand - ang_c)
             if d_ang < radius:
                 # Deep penetration into obstacle safety envelope
@@ -260,7 +284,7 @@ def estimate_directional_advisory(
     # 6. Safety boundary checks
     # If all eligible candidates have extreme risk (> 30.0), path is blocked -> STOP
     if min_risk > 30.0 or (threat == "CRITICAL" and status_c == "VALID" and z_center < 40.0):
-        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=now)
+        return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
 
     # 7. Confidence & Temporal Smoothing
     # Heuristic support score bounded in [0.30, 0.85]
@@ -277,5 +301,5 @@ def estimate_directional_advisory(
         angle_deg=round(selected_angle, 1),
         confidence=round(confidence, 2),
         observed_angular_range=obs_range,
-        source_timestamp=now
+        source_timestamp=adv_ts
     )

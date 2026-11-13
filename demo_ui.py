@@ -72,12 +72,12 @@ class DemoViewport:
             tx = (self.width - text_size[0]) // 2
             cv2.putText(canvas, label, (tx, 608), cv2.FONT_HERSHEY_SIMPLEX, 0.75, color, 2, cv2.LINE_AA)
 
-        # Large bottom button (START / STOP)
+        # Large bottom button (START / STOP -> CHẠY / DỪNG)
         l, t, r, b = self.button
-        btn_color = (225, 225, 225) if threat == "PAUSED" else (235, 80, 80)
+        btn_color = (225, 225, 225) if threat == "PAUSED" else (80, 80, 235)
         text_color = (25, 25, 25) if threat == "PAUSED" else (255, 255, 255)
         cv2.rectangle(canvas, (l, t), (r, b), btn_color, -1)
-        btn_text = "START" if threat == "PAUSED" else "STOP"
+        btn_text = "CHAY" if threat == "PAUSED" else "DUNG"
         btn_size = cv2.getTextSize(btn_text, cv2.FONT_HERSHEY_SIMPLEX, 0.9, 2)[0]
         bx = (self.width - btn_size[0]) // 2
         by = t + (b - t + btn_size[1]) // 2

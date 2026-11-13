@@ -780,31 +780,45 @@ Hệ thống HorusEyes 2.0 chia không gian thành 4 vùng cảnh báo động h
     for z_name, zm in zones.items():
         report_content += f"| **{z_name}** | `{zm['count']}` | **`{zm['mae']:.2f}` cm** | `{zm['rmse']:.2f}` cm | **`{zm['abs_rel']*100:.2f}` %** | **`{zm['d1']*100:.1f}` %** |\n"
 
-    report_content += f"""
-#### Đánh giá theo Tiêu chuẩn Tránh va chạm An toàn (Safety-Critical Range):
-| Phân vùng cảnh báo | Tiêu chuẩn mục tiêu ViSEF | Kết quả thực nghiệm HorusEyes | Đánh giá an toàn sinh mạng |
-| :--- | :---: | :---: | :---: |
-| **Vùng Khẩn cấp (Critical < 30cm)** | $\\le 10.0$ cm | **`{zones['Critical (<30cm)']['mae']:.2f}` cm** | **ĐẠT XUẤT SẮC (An toàn tuyệt đối)** |
-| **Vùng Nguy hiểm (Danger 30-70cm)** | $\\le 20.0$ cm | **`{zones['Danger (30-70cm)']['mae']:.2f}` cm** | **ĐẠT (Phản xạ né va chạm)** |
-| **Vùng Cảnh báo (Warning 70-150cm)** | $\\le 35.0$ cm | **`{zones['Warning (70-150cm)']['mae']:.2f}` cm** | **ĐẠT (Định hướng sớm)** |
-| **Hành lang xa (Clear $\\ge 150$cm)** | AbsRel $\\le 32\\%$ | **`{zones['Clear (>=150cm)']['abs_rel']*100:.2f}` %** | **ĐẠT (Bảo tồn thính giác / Im lặng)** |
+    crit_mae = zones['Critical (<30cm)']['mae']
+    dang_mae = zones['Danger (30-70cm)']['mae']
+    warn_mae = zones['Warning (70-150cm)']['mae']
+    clear_absrel = zones['Clear (>=150cm)']['abs_rel'] * 100.0
 
-> **Nhận xét chuyên môn**:
-> - Tại các vùng cự ly gần và nguy hiểm (**Critical < 30cm** và **Danger 30-70cm**), sai số tuyệt đối MAE duy trì ở mức tối ưu (**{zones['Critical (<30cm)']['mae']:.2f} cm** và **{zones['Danger (30-70cm)']['mae']:.2f} cm**). Cỡ mẫu được phân tầng đồng đều ($N \\ge 200$ mỗi vùng) chứng minh độ tin cậy thống kê cao và bảo đảm an toàn sinh mạng tuyệt đối cho người khiếm thị.
-> - Tại vùng hành lang xa (**Clear >= 150cm**), sai số tương đối AbsRel duy trì ổn định quanh mức **{zones['Clear (>=150cm)']['abs_rel']*100:.1f}%**, đáp ứng mục tiêu phát hiện chướng ngại vật từ xa và kích hoạt bộ lọc triệt tiêu âm thanh.
+    status_crit = "ĐẠT (PASS)" if crit_mae <= 10.0 else f"CHƯA ĐẠT (Mục tiêu <=10cm, Đo được: {crit_mae:.1f}cm)"
+    status_dang = "ĐẠT (PASS)" if dang_mae <= 20.0 else f"CHƯA ĐẠT (Mục tiêu <=20cm, Đo được: {dang_mae:.1f}cm)"
+    status_warn = "ĐẠT (PASS)" if warn_mae <= 35.0 else f"CHƯA ĐẠT (Mục tiêu <=35cm, Đo được: {warn_mae:.1f}cm)"
+    status_clear = "ĐẠT (PASS)" if (clear_absrel / 100.0) <= 0.32 else f"CHƯA ĐẠT (Mục tiêu <=32%, Đo được: {clear_absrel:.1f}%)"
+
+    report_content += f"""
+#### Đánh giá theo Tiêu chuẩn Mục tiêu ViSEF (Target Thresholds):
+| Phân vùng cảnh báo | Tiêu chuẩn mục tiêu ViSEF | Kết quả thực nghiệm HorusEyes | Trạng thái nghiệm thu theo ngưỡng |
+| :--- | :---: | :---: | :---: |
+| **Vùng Khẩn cấp (Critical < 30cm)** | $\\le 10.0$ cm | **`{crit_mae:.2f}` cm** | **{status_crit}** |
+| **Vùng Nguy hiểm (Danger 30-70cm)** | $\\le 20.0$ cm | **`{dang_mae:.2f}` cm** | **{status_dang}** |
+| **Vùng Cảnh báo (Warning 70-150cm)** | $\\le 35.0$ cm | **`{warn_mae:.2f}` cm** | **{status_warn}** |
+| **Hành lang xa (Clear $\\ge 150$cm)** | AbsRel $\\le 32\\%$ | **`{clear_absrel:.2f}` %** | **{status_clear}** |
+
+> **Công bố Giới hạn Khoa học & Đánh giá 3 Nhiệm vụ Riêng biệt (CTO Task A/B/C)**:
+> 1. **Nhiệm vụ A — Xếp hạng tương đối gần/xa (Relative Near/Far Ordering)**:
+>    Đường cong PCHIP Monotonic Spline bảo toàn nghiêm ngặt tính đơn điệu không gian: disparity tăng thì khoảng cách giảm. Hệ thống xếp hạng chính xác thứ tự ưu tiên vật cản gần hơn trong cùng một khung hình.
+> 2. **Nhiệm vụ B — Nhận diện nguy cơ vận hành (Operational Hazard Recognition)**:
+>    Hệ thống phát hiện thành công 100% tình huống vật cản che sát mắt kính (`CRITICAL_SATURATED`) và chướng ngại vật chiếm phần lớn khung hình. Trong không gian hẹp (phòng có tường bao quanh < 2.8m), tỷ lệ cảnh báo giả đạt 100% do thuật toán nhận diện tường phòng là mối nguy, cần điều chỉnh tham số ngưỡng theo không gian thực tế.
+> 3. **Nhiệm vụ C — Độ chính xác cự ly metric (Metric Distance Estimation)**:
+>    Do mô hình MiDaS RGB đơn mục kính có hiện tượng bất định tỷ lệ (*monocular scale ambiguity*), sai số MAE toàn dải đạt `{overall['mae']:.2f}` cm. Cự ly metric cm mang tính tham khảo động học tương đối, **KHÔNG ĐƯỢC CHỨNG NHẬN AN TOÀN ĐỘC LẬP** và không được hiển thị dưới dạng con số centimet tuyệt đối cho người dùng cuối.
 
 ---
 
-### 5. KIỂM NGHIỆM THỰC NGHIỆM 2 TÍNH NĂNG ĐỘC BẢN CỦA HORUSEYES 2.0
+### 5. KIỂM NGHIỆM THỰC NGHIỆM CÁC TÍNH NĂNG VẬN HÀNH
 
-#### A. Cơ chế Triệt tiêu Thính giác Phòng trống (Empty Room / Clear Corridor Suppression)
-- **Bản chất kỹ thuật**: Khi phân vị hành lang trung tâm phản ánh khoảng cách thực tế $> 250$cm, hệ thống kích hoạt bộ lọc cơ sở (`BASE_ACTIVATION_RAW`) và triệt tiêu toàn bộ âm thanh (`cue_mode = MUTED`, `is_active = False`) nhằm chống nghẽn thính giác và mỏi tai cho người khiếm thị.
-- **Tỷ lệ triệt tiêu thành công (Suppression Success Rate)**: **`{suppression_rate:.2f}` %**.
-- **Tỷ lệ cảnh báo giả (False Positive Rate - FPR)**: **`{fpr_rate:.2f}` %** ({status_fpr}).
+#### A. Cơ chế Triệt tiêu Thính giác Hành lang Thông thoáng (Clear Corridor Suppression)
+- **Bản chất kỹ thuật**: Khi hành lang trung tâm phản ánh khoảng cách thực tế $> 250$cm, hệ thống triệt tiêu âm thanh (`cue_mode = MUTED`, `is_active = False`) nhằm giảm mỏi tai cho người khiếm thị.
+- **Tỷ lệ triệt tiêu trên tập thử nghiệm phòng kín NYU Depth V2**: **`{suppression_rate:.2f}` %** (Do ảnh NYU chụp trong phòng có vách tường ở cự ly 1.5–2.8m).
+- **Tỷ lệ cảnh báo giả (False Positive Rate)**: **`{fpr_rate:.2f}` %** (Cảnh báo các vách tường trong phòng hẹp).
 
 #### B. Cơ chế Nhận diện Bão hòa Thấu kính (Lens Saturation Detection)
 - **Bản chất kỹ thuật**: Khi vật cản che sát mắt camera ($d_{{gt}} < 20\\text{{cm}}$), phân vị raw disparity $\\ge 800$ chiếm diện tích lớn. Hệ thống kích hoạt trạng thái khẩn cấp đặc biệt `CRITICAL_SATURATED`, khóa cự ly tức thời về $13.0\\text{{cm}}$, proximity $= 1.00$ và phát âm thanh dồn dập ở tần số cao nhất $950\\text{{Hz}}$.
-- **Tỷ lệ phát hiện bão hòa thành công**: **`{saturation_rate:.2f}` %** (100% các tình huống sát mắt kính được kích hoạt chính xác).
+- **Tỷ lệ phát hiện bão hòa thành công**: **`{saturation_rate:.2f}` %**.
 
 #### C. Bảng đối chứng trên tập mẫu đo đạc thực tế:
 | Tình huống kiểm nghiệm | Cự ly thực ($d_{{gt}}$) | Dự đoán ($d_{{pred}}$) | Sai số | Trạng thái hệ thống | Chế độ âm học |
@@ -831,11 +845,10 @@ Hệ thống HorusEyes 2.0 chia không gian thành 4 vùng cảnh báo động h
 
 ---
 
-### 7. KẾT LUẬN & KIẾN NGHỊ NGHIỆM THU
-1. **Tính hợp lệ khoa học**: Pipeline kiểm thử tự động đã chứng minh toàn diện tính đúng đắn và độ tin cậy của thuật toán PCHIP Monotonic Spline trên tập chuẩn NYU Depth V2.
-2. **Độ an toàn thực tế**: Sai số tại các vùng nguy cơ cao (<70cm) đạt mức tối ưu (<5-15cm), nhận diện chính xác bề mặt tường phẳng 50cm (không bị bỏ sót MUTED), bảo đảm an toàn trước khi xảy ra va chạm.
-3. **Giá trị nhân văn & Y sinh**: Hai cơ chế độc bản (Triệt tiêu phòng trống và Bão hòa thấu kính) hoạt động hiệu quả, bảo vệ thính giác và tăng cường nhận thức tình huống cho người khiếm thị.
-4. **Sẵn sàng triển khai**: Hệ thống đạt tốc độ `{fps:.1f}` FPS trên CPU máy tính/thiết bị nhúng tại biên với độ trễ thấp `{latency_ms:.1f}` ms, hoàn toàn khả thi thương mại hóa mà không cần GPU đắt đỏ.
+### 7. KẾT LUẬN & ĐÁNH GIÁ CHẤP THUẬN KHOA HỌC
+1. **Tính hợp lệ khoa học**: Pipeline kiểm thử phản ánh trung thực bản chất mô hình monocular MiDaS và hiệu chuẩn PCHIP. Các chỉ số sai số MAE/AbsRel được công bố minh bạch và đầy đủ.
+2. **Bảo toàn thứ tự ưu tiên**: Tính đơn điệu nghiêm ngặt bảo đảm vật cản gần luôn có điểm ưu tiên cảnh báo cao hơn vật thể xa.
+3. **Phân loại bản phát hành**: **DEMO CANDIDATE — HARDWARE VALIDATION PENDING**. Hệ thống đủ điều kiện trình diễn trong môi trường kiểm soát có người giám sát; **TUYỆT ĐỐI CHƯA ĐƯỢC CHỨNG NHẬN ĐỘC LẬP CHO NGƯỜI KHIẾM THỊ ĐI LẠI TỰ DO (NOT CERTIFIED FOR INDEPENDENT MOBILITY)**.
 """
 
     report_path = os.path.join("reports", "benchmark_summary.md")

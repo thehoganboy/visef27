@@ -54,11 +54,16 @@ def main():
             if audio:
                 audio.update_decision(decision)
                 audio.check_stream_health()
-            # Draw brackets on their source frame, never misalign old detections
-            # with a newer moving camera frame at low processing frame rates.
-            display = result.frame if result else frame if healthy else None
-            canvas = view.render(display, result.observation if result else None,
-                                 threat, args.mirror_display, now)
+            # Preview remains fluid at camera capture rate.
+            # Render obstacle overlay only when spatially and temporally compatible (within 250ms).
+            display = frame if healthy else None
+            obs_to_render = None
+            if result and healthy and (now - result.timestamp <= 0.25):
+                obs_to_render = result.observation
+
+            adv = getattr(result, "advisory", None) if result else None
+            canvas = view.render(display, obs_to_render,
+                                 threat, args.mirror_display, now, advisory=adv)
             cv2.imshow(title, canvas)
             key = cv2.waitKey(20) & 255
             if key in (27, ord('q')) or cv2.getWindowProperty(title, cv2.WND_PROP_VISIBLE) < 1:

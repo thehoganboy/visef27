@@ -6,6 +6,7 @@ import time
 from depth_engine import DepthEstimator
 from motion_ttc import KinematicsEngine
 from auditory_budget import AuditoryBudgetManager, BudgetDecision
+from directional_advisory import estimate_directional_advisory, DirectionState
 
 @dataclass(frozen=True)
 class PipelineResult:
@@ -16,6 +17,7 @@ class PipelineResult:
     decision: BudgetDecision
     frame: object
     latency_ms: float
+    advisory: object = None
 
 class DemoRuntime:
     def __init__(self, estimator_factory=DepthEstimator, clock=time.monotonic):
@@ -25,6 +27,7 @@ class DemoRuntime:
         self.generation = 0
         self.active = self.closed = False
         self.pending = self.result = self.error = None
+        self.dropped_frames = 0
         self.started = clock()
         self.thread = threading.Thread(target=self._work, name="HorusInference", daemon=True)
         self.thread.start()
@@ -39,6 +42,8 @@ class DemoRuntime:
     def submit(self, frame, frame_id, timestamp, lighting):
         with self.lock:
             if self.active and not self.closed:
+                if self.pending is not None:
+                    self.dropped_frames += 1
                 self.pending = (self.generation, frame, frame_id, timestamp, lighting)
                 self.event.set()
 
@@ -65,6 +70,7 @@ class DemoRuntime:
 
     def _work(self):
         estimator, generation, last_id = None, -1, None
+        prev_angle = None
         while True:
             self.event.wait()
             with self.lock:
@@ -78,6 +84,7 @@ class DemoRuntime:
             if generation != token:
                 kin, budget = KinematicsEngine(), AuditoryBudgetManager()
                 generation, last_id = token, None
+                prev_angle = None
             if frame_id == last_id:
                 continue
             last_id = frame_id
@@ -90,8 +97,13 @@ class DemoRuntime:
                     lighting_status=lighting, is_zero_lux=lighting.get("is_zero_lux_blind", False))
                 k = kin.compute(obs, timestamp, frame_id=frame_id,
                                 ae_settle_counter=lighting.get("ae_settle_counter", 0))
+                adv = estimate_directional_advisory(obs, threat=k.threat_level, now=timestamp, prev_angle=prev_angle)
+                if adv.state == DirectionState.AVAILABLE:
+                    prev_angle = adv.angle_deg
+                else:
+                    prev_angle = None
                 result = PipelineResult(token, timestamp, obs, k, budget.coordinate(obs, k),
-                                        frame, (self.clock() - start) * 1000)
+                                        frame, (self.clock() - start) * 1000, adv)
                 with self.lock:
                     if token == self.generation and self.active:
                         self.result, self.error = result, None

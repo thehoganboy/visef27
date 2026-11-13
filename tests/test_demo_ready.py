@@ -268,3 +268,94 @@ def test_continuous_180_directional_guidance():
     adv_favors_prev_left = estimate_directional_advisory(obs_symmetric, threat='SAFE', now=10.0, prev_angle=-5.0)
     assert adv_favors_prev_left.state == DirectionState.AVAILABLE
     assert adv_favors_prev_left.angle_deg < 0.0
+
+
+def test_provenance_and_decision_source_contract():
+    """Checkpoint 1 Acceptance: Decision-source contract & source-consistent TTC/velocity."""
+    kin = KinematicsEngine()
+    budget = AuditoryBudgetManager()
+
+    # Case 1: Approaching object -> positive velocity and finite TTC
+    obs1 = SingleObstacle(1, 320, 240, (280, 180, 80, 120), 0.0, 0.8, 150.0, "OBSTACLE", 0.1, False)
+    res1 = ObstacleDetectionResult(320, 240, obs1.bbox, 0.0, 0.8, 150.0, "OBSTACLE", 0.1, False,
+                                  {"LEFT": 250.0, "CENTER": 150.0, "RIGHT": 250.0}, [obs1], is_valid=True)
+    k1 = kin.compute(res1, 1.0, frame_id=1)
+
+    # Frame 2 with obstacle closer (approach motion)
+    obs2 = SingleObstacle(1, 320, 240, (280, 180, 80, 120), 0.0, 0.9, 100.0, "OBSTACLE", 0.1, False)
+    res2 = ObstacleDetectionResult(320, 240, obs2.bbox, 0.0, 0.9, 100.0, "OBSTACLE", 0.1, False,
+                                  {"LEFT": 250.0, "CENTER": 100.0, "RIGHT": 250.0}, [obs2], is_valid=True)
+    k2 = kin.compute(res2, 1.5, frame_id=2)
+    d2 = budget.coordinate(res2, k2)
+
+    assert d2.source_type == "OBJECT"
+    assert d2.source_id == "1"
+    assert d2.velocity_z > 0.0
+    assert math.isfinite(d2.ttc)
+    assert d2.measurement_validity == "VALID"
+
+    # Case 2: Stationary hazard -> infinite TTC and vz <= 0 from same source
+    kin_static = KinematicsEngine()
+    budget_static = AuditoryBudgetManager()
+    obs_s1 = SingleObstacle(2, 320, 240, (280, 180, 80, 120), 0.0, 0.9, 35.0, "OBSTACLE", 0.1, False)
+    res_s1 = ObstacleDetectionResult(320, 240, obs_s1.bbox, 0.0, 0.9, 35.0, "OBSTACLE", 0.1, False,
+                                    {"LEFT": 250.0, "CENTER": 35.0, "RIGHT": 250.0}, [obs_s1], is_valid=True)
+    _ = kin_static.compute(res_s1, 1.0, frame_id=1)
+    k_s2 = kin_static.compute(res_s1, 1.1, frame_id=2)
+    d_s2 = budget_static.coordinate(res_s1, k_s2)
+
+    assert d_s2.threat_level == "CRITICAL"
+    assert d_s2.velocity_z <= 0.0
+    assert math.isinf(d_s2.ttc)
+    assert d_s2.source_type == "OBJECT"
+    assert d_s2.source_id == str(res_s1.all_obstacles[0].id)
+    assert d_s2.active_obstacle_id == res_s1.all_obstacles[0].id
+
+    # Case 3: Multiple simultaneous hazards - selected object TTC belongs strictly to selected object
+    obs_close_static = SingleObstacle(10, 320, 240, (280, 180, 80, 120), 0.0, 0.95, 25.0, "CRIT_STATIC", 0.1, False)
+    obs_far_dynamic = SingleObstacle(20, 480, 240, (440, 180, 80, 120), 0.5, 0.7, 120.0, "DYN_APPROACH", 0.1, False)
+    res_multi = ObstacleDetectionResult(320, 240, obs_close_static.bbox, 0.0, 0.95, 25.0, "OBSTACLE", 0.1, False,
+                                        {"LEFT": 250.0, "CENTER": 25.0, "RIGHT": 120.0},
+                                        [obs_close_static, obs_far_dynamic], is_valid=True)
+    k_multi = kin.compute(res_multi, 2.0, frame_id=3)
+    d_multi = budget.coordinate(res_multi, k_multi)
+
+    # Active winner is the critical obstacle 10 (tracked as res_multi.all_obstacles[0].id)
+    assert d_multi.active_obstacle_id == res_multi.all_obstacles[0].id
+    assert d_multi.source_type == "OBJECT"
+    assert d_multi.source_id == str(res_multi.all_obstacles[0].id)
+    # Provenance invariant: velocity_z and ttc belong strictly to the active obstacle
+    expected_vz = k_multi.obstacle_vzs.get(d_multi.active_obstacle_id, k_multi.primary_velocity_z)
+    assert d_multi.velocity_z == expected_vz
+    if d_multi.velocity_z <= 0.0:
+        assert math.isinf(d_multi.ttc)
+    else:
+        assert d_multi.ttc == k_multi.obstacle_ttcs.get(d_multi.active_obstacle_id, float("inf"))
+
+
+def test_unknown_obstacle_distance_handling():
+    """Checkpoint 2 Acceptance: Unknown distance obstacles preserve bbox and steer away without fabricating 100cm."""
+    # Obstacle with NaN distance on left side (x=160)
+    unk_left_obs = SingleObstacle(7, 160, 240, (120, 180, 80, 120), -0.5, 0.8, float("nan"), "UNKNOWN_DIST_OBS", 0.1, False)
+    obs_res = ObstacleDetectionResult(
+        x=320, y=240, bbox=(120, 180, 80, 120), pan=-0.5, proximity=0.5, dist_cm=180.0,
+        mode_text="TEST", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 70.0, "CENTER": 200.0, "RIGHT": 250.0},
+        all_obstacles=[unk_left_obs], is_valid=True
+    )
+    adv = estimate_directional_advisory(obs_res, threat="WARNING", now=10.0)
+    # The unknown distance obstacle occupies left: candidate steering into it must be rejected!
+    assert adv.state == DirectionState.AVAILABLE
+    assert adv.angle_deg > 0.0  # Steers right, avoiding unknown obstacle on left!
+
+    # Center unknown obstacle blocking center, with clear left sector
+    unk_center_obs = SingleObstacle(8, 320, 240, (280, 180, 80, 120), 0.0, 0.8, float("nan"), "UNKNOWN_CENTER", 0.1, False)
+    obs_center = ObstacleDetectionResult(
+        x=320, y=240, bbox=(280, 180, 80, 120), pan=0.0, proximity=0.5, dist_cm=200.0,
+        mode_text="TEST", uncertainty_score=0.1, is_wall=False,
+        sector_dists={"LEFT": 250.0, "CENTER": 200.0, "RIGHT": 70.0},
+        all_obstacles=[unk_center_obs], is_valid=True
+    )
+    adv_c = estimate_directional_advisory(obs_center, threat="WARNING", now=10.0)
+    assert adv_c.state == DirectionState.AVAILABLE
+    assert adv_c.angle_deg < -5.0  # Steers left away from center unknown obstacle and right hazard!

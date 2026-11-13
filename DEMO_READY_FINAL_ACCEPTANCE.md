@@ -177,3 +177,4 @@ Measured on local CPU reference execution (`Intel64 Family 6 Model 142`, FP32 ON
 1. Review implementation and evidence on branch `feature/demo-ready-unified-ux` and PR #1 ([#1](https://github.com/thehoganboy/visef27/pull/1)).
 2. Authorize sideload installation of `HorusEyes_iPhone14Pro.ipa` (GitHub Actions Run #32 artifact) and `app-debug.apk` onto physical test devices for final controlled presentation walkthrough.
 3. Keep PR #1 open for gate sign-off; **do not merge into `main`**.
+

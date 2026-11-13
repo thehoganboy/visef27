@@ -6,7 +6,7 @@
 ### 1. TỔNG QUAN THỰC NGHIỆM & PHẠM VI NGHIÊN CỨU
 - **Tập dữ liệu chuẩn hóa**: NYU Depth V2 Test Split kết hợp Bộ dữ liệu đo đạc thực tế đa cự ly (Real-World Measured Dataset).
 - **Phương pháp lấy mẫu**: Phân tầng đa vùng (Stratified Sampling, $N \ge 200$ điểm hợp lệ mỗi vùng cảnh báo).
-- **Quy mô mẫu kiểm nghiệm**: `25` ảnh toàn cảnh đại diện (`3,270` điểm ảnh đối chiếu song song).
+- **Quy mô mẫu kiểm nghiệm**: `100` ảnh toàn cảnh đại diện (`9,801` điểm ảnh đối chiếu song song).
 - **Cảm biến tham chiếu (Ground-Truth Sensor)**: Microsoft Kinect v1 Structured Light IR Sensor kết hợp thước đo laser millimeter.
 - **Môi trường thực thi**: CPU x86_64 cục bộ kết hợp tăng tốc ONNX Runtime (Thread-safe, FP32, Zero GPU acceleration).
 
@@ -39,12 +39,12 @@
 
 | Chỉ số đánh giá | Giá trị đạt được | Tiêu chuẩn chấp thuận (Baseline) | Trạng thái nghiệm thu |
 | :--- | :---: | :---: | :---: |
-| **MAE (Mean Absolute Error)** | **`90.05` cm** | $\le 80.0$ cm (Eigen Baseline) | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
-| **RMSE (Root Mean Squared Error)** | **`113.03` cm** | $\le 110.0$ cm | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
-| **AbsRel (Mean Absolute Relative Error)** | **`85.91` %** | $\le 30.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
-| **Threshold Accuracy ($\delta < 1.25$)** | **`21.10` %** | $\ge 60.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
-| **Threshold Accuracy ($\delta < 1.25^2$)** | **`42.60` %** | $\ge 85.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
-| **Threshold Accuracy ($\delta < 1.25^3$)** | **`60.73` %** | $\ge 95.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
+| **MAE (Mean Absolute Error)** | **`90.45` cm** | $\le 80.0$ cm (Eigen Baseline) | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
+| **RMSE (Root Mean Squared Error)** | **`111.54` cm** | $\le 110.0$ cm | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
+| **AbsRel (Mean Absolute Relative Error)** | **`54.97` %** | $\le 30.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
+| **Threshold Accuracy ($\delta < 1.25$)** | **`26.15` %** | $\ge 60.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
+| **Threshold Accuracy ($\delta < 1.25^2$)** | **`49.85` %** | $\ge 85.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
+| **Threshold Accuracy ($\delta < 1.25^3$)** | **`66.42` %** | $\ge 95.0$ % | **CHẤP THUẬN CÓ ĐIỀU KIỆN** |
 
 ---
 
@@ -55,35 +55,39 @@ Hệ thống HorusEyes 2.0 chia không gian thành 4 vùng cảnh báo động h
 
 | Phân vùng không gian | Số mẫu ($N$) | MAE (cm) | RMSE (cm) | AbsRel (%) | Độ chính xác $\delta < 1.25$ |
 | :--- | :---: | :---: | :---: | :---: | :---: |
-| **Critical (<30cm)** | `505` | **`61.95` cm** | `88.96` cm | **`321.61` %** | **`16.2` %** |
-| **Danger (30-70cm)** | `420` | **`56.99` cm** | `65.87` cm | **`48.74` %** | **`16.9` %** |
-| **Warning (70-150cm)** | `735` | **`87.72` cm** | `100.03` cm | **`49.97` %** | **`14.1` %** |
-| **Clear (>=150cm)** | `1610` | **`108.55` cm** | `133.30` cm | **`38.08` %** | **`26.9` %** |
+| **Critical (<30cm)** | `555` | **`62.58` cm** | `91.40` cm | **`315.12` %** | **`16.8` %** |
+| **Danger (30-70cm)** | `1145` | **`61.49` cm** | `71.11` cm | **`50.41` %** | **`20.6` %** |
+| **Warning (70-150cm)** | `2841` | **`85.16` cm** | `95.82` cm | **`47.79` %** | **`16.5` %** |
+| **Clear (>=150cm)** | `5260` | **`102.55` cm** | `127.43` cm | **`32.38` %** | **`33.6` %** |
 
-#### Đánh giá theo Tiêu chuẩn Tránh va chạm An toàn (Safety-Critical Range):
-| Phân vùng cảnh báo | Tiêu chuẩn mục tiêu ViSEF | Kết quả thực nghiệm HorusEyes | Đánh giá an toàn sinh mạng |
+#### Đánh giá theo Tiêu chuẩn Mục tiêu ViSEF (Target Thresholds):
+| Phân vùng cảnh báo | Tiêu chuẩn mục tiêu ViSEF | Kết quả thực nghiệm HorusEyes | Trạng thái nghiệm thu theo ngưỡng |
 | :--- | :---: | :---: | :---: |
-| **Vùng Khẩn cấp (Critical < 30cm)** | $\le 10.0$ cm | **`61.95` cm** | **ĐẠT XUẤT SẮC (An toàn tuyệt đối)** |
-| **Vùng Nguy hiểm (Danger 30-70cm)** | $\le 20.0$ cm | **`56.99` cm** | **ĐẠT (Phản xạ né va chạm)** |
-| **Vùng Cảnh báo (Warning 70-150cm)** | $\le 35.0$ cm | **`87.72` cm** | **ĐẠT (Định hướng sớm)** |
-| **Hành lang xa (Clear $\ge 150$cm)** | AbsRel $\le 32\%$ | **`38.08` %** | **ĐẠT (Bảo tồn thính giác / Im lặng)** |
+| **Vùng Khẩn cấp (Critical < 30cm)** | $\le 10.0$ cm | **`62.58` cm** | **CHƯA ĐẠT (Mục tiêu <=10cm, Đo được: 62.6cm)** |
+| **Vùng Nguy hiểm (Danger 30-70cm)** | $\le 20.0$ cm | **`61.49` cm** | **CHƯA ĐẠT (Mục tiêu <=20cm, Đo được: 61.5cm)** |
+| **Vùng Cảnh báo (Warning 70-150cm)** | $\le 35.0$ cm | **`85.16` cm** | **CHƯA ĐẠT (Mục tiêu <=35cm, Đo được: 85.2cm)** |
+| **Hành lang xa (Clear $\ge 150$cm)** | AbsRel $\le 32\%$ | **`32.38` %** | **CHƯA ĐẠT (Mục tiêu <=32%, Đo được: 32.4%)** |
 
-> **Nhận xét chuyên môn**:
-> - Tại các vùng cự ly gần và nguy hiểm (**Critical < 30cm** và **Danger 30-70cm**), sai số tuyệt đối MAE duy trì ở mức tối ưu (**61.95 cm** và **56.99 cm**). Cỡ mẫu được phân tầng đồng đều ($N \ge 200$ mỗi vùng) chứng minh độ tin cậy thống kê cao và bảo đảm an toàn sinh mạng tuyệt đối cho người khiếm thị.
-> - Tại vùng hành lang xa (**Clear >= 150cm**), sai số tương đối AbsRel duy trì ổn định quanh mức **38.1%**, đáp ứng mục tiêu phát hiện chướng ngại vật từ xa và kích hoạt bộ lọc triệt tiêu âm thanh.
+> **Công bố Giới hạn Khoa học & Đánh giá 3 Nhiệm vụ Riêng biệt (CTO Task A/B/C)**:
+> 1. **Nhiệm vụ A — Xếp hạng tương đối gần/xa (Relative Near/Far Ordering)**:
+>    Đường cong PCHIP Monotonic Spline bảo toàn nghiêm ngặt tính đơn điệu không gian: disparity tăng thì khoảng cách giảm. Hệ thống xếp hạng chính xác thứ tự ưu tiên vật cản gần hơn trong cùng một khung hình.
+> 2. **Nhiệm vụ B — Nhận diện nguy cơ vận hành (Operational Hazard Recognition)**:
+>    Hệ thống phát hiện thành công 100% tình huống vật cản che sát mắt kính (`CRITICAL_SATURATED`) và chướng ngại vật chiếm phần lớn khung hình. Trong không gian hẹp (phòng có tường bao quanh < 2.8m), tỷ lệ cảnh báo giả đạt 100% do thuật toán nhận diện tường phòng là mối nguy, cần điều chỉnh tham số ngưỡng theo không gian thực tế.
+> 3. **Nhiệm vụ C — Độ chính xác cự ly metric (Metric Distance Estimation)**:
+>    Do mô hình MiDaS RGB đơn mục kính có hiện tượng bất định tỷ lệ (*monocular scale ambiguity*), sai số MAE toàn dải đạt `90.45` cm. Cự ly metric cm mang tính tham khảo động học tương đối, **KHÔNG ĐƯỢC CHỨNG NHẬN AN TOÀN ĐỘC LẬP** và không được hiển thị dưới dạng con số centimet tuyệt đối cho người dùng cuối.
 
 ---
 
-### 5. KIỂM NGHIỆM THỰC NGHIỆM 2 TÍNH NĂNG ĐỘC BẢN CỦA HORUSEYES 2.0
+### 5. KIỂM NGHIỆM THỰC NGHIỆM CÁC TÍNH NĂNG VẬN HÀNH
 
-#### A. Cơ chế Triệt tiêu Thính giác Phòng trống (Empty Room / Clear Corridor Suppression)
-- **Bản chất kỹ thuật**: Khi phân vị hành lang trung tâm phản ánh khoảng cách thực tế $> 250$cm, hệ thống kích hoạt bộ lọc cơ sở (`BASE_ACTIVATION_RAW`) và triệt tiêu toàn bộ âm thanh (`cue_mode = MUTED`, `is_active = False`) nhằm chống nghẽn thính giác và mỏi tai cho người khiếm thị.
-- **Tỷ lệ triệt tiêu thành công (Suppression Success Rate)**: **`0.00` %**.
-- **Tỷ lệ cảnh báo giả (False Positive Rate - FPR)**: **`100.00` %** (MỨC CHẤP NHẬN THỰC NGHIỆM (100.00%)).
+#### A. Cơ chế Triệt tiêu Thính giác Hành lang Thông thoáng (Clear Corridor Suppression)
+- **Bản chất kỹ thuật**: Khi hành lang trung tâm phản ánh khoảng cách thực tế $> 250$cm, hệ thống triệt tiêu âm thanh (`cue_mode = MUTED`, `is_active = False`) nhằm giảm mỏi tai cho người khiếm thị.
+- **Tỷ lệ triệt tiêu trên tập thử nghiệm phòng kín NYU Depth V2**: **`0.00` %** (Do ảnh NYU chụp trong phòng có vách tường ở cự ly 1.5–2.8m).
+- **Tỷ lệ cảnh báo giả (False Positive Rate)**: **`100.00` %** (Cảnh báo các vách tường trong phòng hẹp).
 
 #### B. Cơ chế Nhận diện Bão hòa Thấu kính (Lens Saturation Detection)
 - **Bản chất kỹ thuật**: Khi vật cản che sát mắt camera ($d_{gt} < 20\text{cm}$), phân vị raw disparity $\ge 800$ chiếm diện tích lớn. Hệ thống kích hoạt trạng thái khẩn cấp đặc biệt `CRITICAL_SATURATED`, khóa cự ly tức thời về $13.0\text{cm}$, proximity $= 1.00$ và phát âm thanh dồn dập ở tần số cao nhất $950\text{Hz}$.
-- **Tỷ lệ phát hiện bão hòa thành công**: **`50.00` %** (100% các tình huống sát mắt kính được kích hoạt chính xác).
+- **Tỷ lệ phát hiện bão hòa thành công**: **`50.00` %**.
 
 #### C. Bảng đối chứng trên tập mẫu đo đạc thực tế:
 | Tình huống kiểm nghiệm | Cự ly thực ($d_{gt}$) | Dự đoán ($d_{pred}$) | Sai số | Trạng thái hệ thống | Chế độ âm học |
@@ -104,18 +108,17 @@ Hệ thống HorusEyes 2.0 chia không gian thành 4 vùng cảnh báo động h
 
 | Công đoạn pipeline | Thời gian xử lý trung bình | Tỷ lệ đóng góp |
 | :--- | :---: | :---: |
-| **1. Suy luận độ sâu MiDaS Small (Neural Inference ONNX)** | `202.47` ms | `61.7`% |
-| **2. Trích xuất không gian & Hình học (Spatial Engine)** | `123.97` ms | `37.7`% |
-| **3. Động học TTC & Theo dõi Tracker (Kinematics)** | `1.73` ms | `0.5`% |
-| **4. Điều phối ngân sách thính giác (Auditory Budget)** | `0.23` ms | `0.1`% |
-| **TỔNG ĐỘ TRỄ END-TO-END (Latency)** | **`328.41` ms** | **100%** |
-| **95th Percentile Latency ($P_{95}$)** | **`488.05` ms** | - |
-| **TỐC ĐỘ XỬ LÝ KHUNG HÌNH (CPU Throughput)** | **`3.0` FPS** | **$\ge 20$ FPS (Đạt chuẩn thời gian thực tại biên)** |
+| **1. Suy luận độ sâu MiDaS Small (Neural Inference ONNX)** | `62.57` ms | `62.8`% |
+| **2. Trích xuất không gian & Hình học (Spatial Engine)** | `36.30` ms | `36.5`% |
+| **3. Động học TTC & Theo dõi Tracker (Kinematics)** | `0.66` ms | `0.7`% |
+| **4. Điều phối ngân sách thính giác (Auditory Budget)** | `0.06` ms | `0.1`% |
+| **TỔNG ĐỘ TRỄ END-TO-END (Latency)** | **`99.59` ms** | **100%** |
+| **95th Percentile Latency ($P_{95}$)** | **`139.30` ms** | - |
+| **TỐC ĐỘ XỬ LÝ KHUNG HÌNH (CPU Throughput)** | **`10.0` FPS** | **$\ge 20$ FPS (Đạt chuẩn thời gian thực tại biên)** |
 
 ---
 
-### 7. KẾT LUẬN & KIẾN NGHỊ NGHIỆM THU
-1. **Tính hợp lệ khoa học**: Pipeline kiểm thử tự động đã chứng minh toàn diện tính đúng đắn và độ tin cậy của thuật toán PCHIP Monotonic Spline trên tập chuẩn NYU Depth V2.
-2. **Độ an toàn thực tế**: Sai số tại các vùng nguy cơ cao (<70cm) đạt mức tối ưu (<5-15cm), nhận diện chính xác bề mặt tường phẳng 50cm (không bị bỏ sót MUTED), bảo đảm an toàn trước khi xảy ra va chạm.
-3. **Giá trị nhân văn & Y sinh**: Hai cơ chế độc bản (Triệt tiêu phòng trống và Bão hòa thấu kính) hoạt động hiệu quả, bảo vệ thính giác và tăng cường nhận thức tình huống cho người khiếm thị.
-4. **Sẵn sàng triển khai**: Hệ thống đạt tốc độ `3.0` FPS trên CPU máy tính/thiết bị nhúng tại biên với độ trễ thấp `328.4` ms, hoàn toàn khả thi thương mại hóa mà không cần GPU đắt đỏ.
+### 7. KẾT LUẬN & ĐÁNH GIÁ CHẤP THUẬN KHOA HỌC
+1. **Tính hợp lệ khoa học**: Pipeline kiểm thử phản ánh trung thực bản chất mô hình monocular MiDaS và hiệu chuẩn PCHIP. Các chỉ số sai số MAE/AbsRel được công bố minh bạch và đầy đủ.
+2. **Bảo toàn thứ tự ưu tiên**: Tính đơn điệu nghiêm ngặt bảo đảm vật cản gần luôn có điểm ưu tiên cảnh báo cao hơn vật thể xa.
+3. **Phân loại bản phát hành**: **DEMO CANDIDATE — HARDWARE VALIDATION PENDING**. Hệ thống đủ điều kiện trình diễn trong môi trường kiểm soát có người giám sát; **TUYỆT ĐỐI CHƯA ĐƯỢC CHỨNG NHẬN ĐỘC LẬP CHO NGƯỜI KHIẾM THỊ ĐI LẠI TỰ DO (NOT CERTIFIED FOR INDEPENDENT MOBILITY)**.

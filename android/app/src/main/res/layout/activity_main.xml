@@ -10,6 +10,7 @@
             android:importantForAccessibility="yes" android:contentDescription="Perception paused" />
     </FrameLayout>
     <Button android:id="@+id/btnStartStop" android:layout_width="match_parent"
-        android:layout_height="80dp" android:layout_margin="20dp" android:text="START"
-        android:textSize="24sp" android:textColor="#121418" android:backgroundTint="#E1E1E1" />
+        android:layout_height="80dp" android:layout_margin="20dp" android:text="CHẠY"
+        android:contentDescription="Bắt đầu nhận thức tránh va chạm"
+        android:textSize="24sp" android:textStyle="bold" android:textColor="#121418" android:backgroundTint="#E1E1E1" />
 </LinearLayout>

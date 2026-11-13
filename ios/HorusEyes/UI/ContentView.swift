@@ -64,18 +64,27 @@ func estimateDirectionalAdvisory(
     for o in obs.allObstacles {
         let l = Double(o.bbox.x)
         let r = Double(o.bbox.x + o.bbox.w)
-        let z = max(10.0, (o.distCM.isFinite && o.distCM > 0) ? Double(o.distCM) : (validC ? zCenter : 100.0))
+        let isDistValid = o.distCM.isFinite && o.distCM > 0
         let angLeft = atan2(l - cx, fx) * 180.0 / .pi
         let angRight = atan2(r - cx, fx) * 180.0 / .pi
         let angCenter = (angLeft + angRight) / 2.0
         let angHalfW = max(2.0, (angRight - angLeft) / 2.0)
-        let marginDeg = min(22.0, max(4.0, atan2(20.0, z) * 180.0 / .pi))
-        let totalRadius = angHalfW + marginDeg
+        let totalRadius: Double
         let weight: Double
-        if z < 50.0 { weight = 20.0 }
-        else if z < 80.0 { weight = 10.0 }
-        else if z < 150.0 { weight = 4.0 }
-        else { weight = 1.0 }
+        if isDistValid {
+            let z = max(10.0, Double(o.distCM))
+            let marginDeg = min(22.0, max(4.0, atan2(20.0, z) * 180.0 / .pi))
+            totalRadius = angHalfW + marginDeg
+            if z < 50.0 { weight = 20.0 }
+            else if z < 80.0 { weight = 10.0 }
+            else if z < 150.0 { weight = 4.0 }
+            else { weight = 1.0 }
+        } else {
+            // Unknown-distance obstacle: retain image-space angular occupancy without fabricating 100cm
+            let marginDeg = 8.0
+            totalRadius = angHalfW + marginDeg
+            weight = 12.0
+        }
         profiles.append(ObsProfile(angCenter: angCenter, radius: totalRadius, weight: weight))
     }
 
@@ -282,13 +291,13 @@ struct ContentView: View {
                 }
             }.clipped()
             Button(action: model.toggle) {
-                Text(model.active ? "STOP" : "START")
+                Text(model.active ? "DỪNG" : "CHẠY")
                     .font(.system(size: 26, weight: .bold))
                     .frame(maxWidth: .infinity, minHeight: 76)
-                    .foregroundColor(Color(white: 0.08))
-                    .background(Color(white: 0.88)).cornerRadius(16)
+                    .foregroundColor(model.active ? Color.white : Color(white: 0.08))
+                    .background(model.active ? Color(red: 0.92, green: 0.31, blue: 0.31) : Color(white: 0.88)).cornerRadius(16)
             }
-            .accessibilityLabel(model.active ? "Stop perception" : "Start perception")
+            .accessibilityLabel(model.active ? "Dừng nhận thức tránh va chạm" : "Bắt đầu nhận thức tránh va chạm")
             .padding(20)
         }
         .background(Color(white: 0.07))
