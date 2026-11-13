@@ -50,8 +50,20 @@ func estimateDirectionalAdvisory(
     let validR = zRightRaw != nil && zRightRaw!.isFinite && zRightRaw! > 0
     let zRight = validR ? Double(zRightRaw!) : Double.nan
 
+    // Completely obstructed check if all sectors are valid and close
     if validC && zCenter < 50.0 && validL && zLeft < 60.0 && validR && zRight < 60.0 {
-        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+        if !obs.spatialBins.isEmpty {
+            let cBins = obs.spatialBins.filter { abs(Double($0.angleCenter)) <= 6.0 && $0.isValid }
+            let cDists = cBins.map { Double($0.distCM) }
+            let finiteCDists = cDists.filter { $0.isFinite && $0 > 0 }
+            if finiteCDists.count == cBins.count && !finiteCDists.isEmpty && finiteCDists.allSatisfy({ $0 >= 75.0 }) {
+                // Central corridor is genuinely open with valid distance readings (doorway clearance)
+            } else {
+                return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+            }
+        } else {
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+        }
     }
 
     struct ObsProfile {
@@ -98,14 +110,24 @@ func estimateDirectionalAdvisory(
         profiles.append(ObsProfile(angCenter: angCenter, radius: 12.0, weight: weight, zObs: zCenter, isValidDist: true))
     }
 
-    // Clear frame with no detected obstacles: only permitted if ALL 3 sectors are valid & clear
+    // Clear frame with no detected obstacles
     if profiles.isEmpty {
-        if validC && validL && validR && zCenter >= 150.0 && zLeft >= 150.0 && zRight >= 150.0 {
-            let angOut = (prevAngle != nil && prevAngle!.isFinite) ? (0.3 * 0.0 + 0.7 * prevAngle!) : 0.0
-            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: now)
-        } else if !validC && !validL && !validR {
-            return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: now)
+        // Central corridor valid & clear: edge invalidity must NOT invalidate the center (P0-02/P0-03)
+        if validC && zCenter >= 150.0 {
+            var centerSupported = true
+            if !obs.spatialBins.isEmpty {
+                let cBins = obs.spatialBins.filter { abs(Double($0.angleCenter)) <= 5.0 }
+                let validCList = cBins.filter { $0.isValid }
+                if validCList.count < max(1, Int(Double(cBins.count) * 0.8)) {
+                    centerSupported = false
+                }
+            }
+            if centerSupported {
+                let angOut = (prevAngle != nil && prevAngle!.isFinite) ? (0.3 * 0.0 + 0.7 * prevAngle!) : 0.0
+                return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: now)
+            }
         }
+        return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: now)
     }
 
     // Step 5A: Generate all candidate headings across observed FOV
@@ -125,19 +147,69 @@ func estimateDirectionalAdvisory(
     var eligibleCandidates: [Candidate] = []
     var obstructedCount = 0
 
+    let bins = obs.spatialBins
     for cand in allCandidateAngles {
-        let (secValid, zSec): (Bool, Double)
-        if cand < -10.0 {
-            secValid = validL; zSec = zLeft
-        } else if cand > 10.0 {
-            secValid = validR; zSec = zRight
+        var candSupported = false
+        var candDist = Double.nan
+
+        if !bins.isEmpty {
+            let cMin = cand - 5.0
+            let cMax = cand + 5.0
+            let kMin = cand - 2.5
+            let kMax = cand + 2.5
+            let wCorr = cMax - cMin  // 10.0 deg
+            let wCore = kMax - kMin  // 5.0 deg
+
+            var validCorrCov: Double = 0.0
+            var validCoreCov: Double = 0.0
+            var validDists: [Double] = []
+
+            for b in bins {
+                let bMin = Double(b.angleMin)
+                let bMax = Double(b.angleMax)
+                if bMax <= bMin { continue }
+
+                let ovCorr = max(0.0, min(bMax, cMax) - max(bMin, cMin))
+                let ovCore = max(0.0, min(bMax, kMax) - max(bMin, kMin))
+
+                if b.isValid {
+                    validCorrCov += ovCorr
+                    validCoreCov += ovCore
+                    let d = Double(b.distCM)
+                    if ovCorr > 0.0 && d.isFinite && d > 0 {
+                        validDists.append(d)
+                    }
+                }
+            }
+
+            let corrRatio = validCorrCov / wCorr
+            let coreRatio = validCoreCov / wCore
+
+            // P0-01 / P0-03: Candidate corridor must have >= 80% valid coverage and central load-bearing core must be valid
+            if corrRatio >= 0.80 && coreRatio >= 0.95 && !validDists.isEmpty {
+                candSupported = true
+                candDist = validDists.min() ?? Double.nan
+            }
         } else {
-            secValid = validC; zSec = zCenter
+            // 3-sector fallback for legacy mocks or tests without spatialBins
+            let (secValid, zSec): (Bool, Double)
+            if cand < -10.0 {
+                secValid = validL; zSec = zLeft
+            } else if cand > 10.0 {
+                secValid = validR; zSec = zRight
+            } else {
+                secValid = validC; zSec = zCenter
+            }
+            if secValid {
+                candSupported = true
+                candDist = zSec
+            }
         }
-        if !secValid { continue }
+
+        if !candSupported { continue }
 
         var isBlocked = false
-        if zSec < 40.0 { isBlocked = true }
+        if candDist < 40.0 { isBlocked = true }
 
         if !isBlocked {
             for p in profiles {
@@ -170,8 +242,8 @@ func estimateDirectionalAdvisory(
             }
         }
 
-        if zSec < 80.0 { risk += ((80.0 - zSec) / 10.0) * 4.0 }
-        else if zSec < 150.0 { risk += ((150.0 - zSec) / 70.0) * 1.5 }
+        if candDist < 80.0 { risk += ((80.0 - candDist) / 10.0) * 4.0 }
+        else if candDist < 150.0 { risk += ((150.0 - candDist) / 70.0) * 1.5 }
 
         risk += 0.05 * abs(cand)
 
@@ -179,7 +251,7 @@ func estimateDirectionalAdvisory(
             risk -= 1.0
         }
 
-        eligibleCandidates.append(Candidate(ang: cand, zSec: zSec, risk: risk))
+        eligibleCandidates.append(Candidate(ang: cand, zSec: candDist, risk: risk))
     }
 
     // Step 5C: Evaluate outcomes when no candidate is eligible
@@ -247,8 +319,19 @@ func estimateDirectionalAdvisory(
         }
     }
 
-    if minCost > 30.0 || (threat == "CRITICAL" && validC && zCenter < 40.0) {
+    if minCost > 30.0 {
         return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+    }
+
+    if threat == "CRITICAL" && validC {
+        // Immediate frontal collision (< 25cm) forces emergency STOP
+        if zCenter < 25.0 {
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+        }
+        // Constrained center hazard (< 40cm): allow alternative heading only if genuinely safe and has clearance
+        if zCenter < 40.0 && (minCost > 15.0 || !eligibleCandidates.contains(where: { abs($0.ang - bestCand) < 1.5 && $0.zSec >= 60.0 })) {
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: now)
+        }
     }
 
     let conf = max(0.30, min(0.55, 1.0 - (minCost / 35.0)))

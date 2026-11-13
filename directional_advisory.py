@@ -141,8 +141,10 @@ def estimate_directional_advisory(
         # (doorway scenario: doorposts make sector averages close, but central gap is open)
         if spatial_bins and len(spatial_bins) > 0:
             c_bins = [b for b in spatial_bins if abs(getattr(b, "angle_center", 99.0)) <= 6.0 and getattr(b, "is_valid", False)]
-            if c_bins and all(getattr(b, "dist_cm", 0.0) >= 75.0 for b in c_bins if math.isfinite(getattr(b, "dist_cm", 0.0))):
-                pass  # Central corridor is open; proceed to hierarchical corridor evaluation
+            c_dists = [getattr(b, "dist_cm", float("nan")) for b in c_bins]
+            finite_c_dists = [d for d in c_dists if math.isfinite(d) and d > 0]
+            if len(finite_c_dists) == len(c_bins) and len(finite_c_dists) > 0 and all(d >= 75.0 for d in finite_c_dists):
+                pass  # Central corridor is genuinely open with valid distance readings
             else:
                 return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
         else:
@@ -206,10 +208,16 @@ def estimate_directional_advisory(
         obstacle_profiles.append((ang_center, 12.0, weight, z_center, True))
 
     # Clear observation with no detected obstacles
-    # ONLY allowed when ALL three sectors are confirmed VALID and clear
     if not obstacle_profiles:
-        if status_c == "VALID" and status_l == "VALID" and status_r == "VALID":
-            if z_center >= 150.0 and z_left >= 150.0 and z_right >= 150.0:
+        # Central corridor valid & clear: edge invalidity must NOT invalidate the center (P0-02/P0-03)
+        if status_c == "VALID" and z_center >= 150.0:
+            center_supported = True
+            if spatial_bins and len(spatial_bins) > 0:
+                c_bins = [b for b in spatial_bins if abs(getattr(b, "angle_center", 99.0)) <= 5.0]
+                valid_c = [b for b in c_bins if getattr(b, "is_valid", False)]
+                if len(valid_c) < max(1, int(len(c_bins) * 0.8)):
+                    center_supported = False
+            if center_supported:
                 angle_out = 0.0
                 if prev_angle is not None and math.isfinite(prev_angle):
                     angle_out = 0.3 * angle_out + 0.7 * prev_angle
@@ -222,13 +230,12 @@ def estimate_directional_advisory(
                     observed_angular_range=obs_range,
                     source_timestamp=adv_ts
                 )
-        elif status_c != "VALID" and status_l != "VALID" and status_r != "VALID":
-            # No valid sector data at all -> cannot recommend any direction
-            return DirectionalAdvisory(
-                state=DirectionState.UNAVAILABLE,
-                observed_angular_range=obs_range,
-                source_timestamp=adv_ts
-            )
+        # If center is invalid / unobservable or below clearance with no detected obstacle to avoid
+        return DirectionalAdvisory(
+            state=DirectionState.UNAVAILABLE,
+            observed_angular_range=obs_range,
+            source_timestamp=adv_ts
+        )
 
     # 5. Build candidate angles within observed FOV (step 2.5 degrees)
     # Step 5A: Generate candidate headings across observed FOV
@@ -252,18 +259,41 @@ def estimate_directional_advisory(
         if spatial_bins and len(spatial_bins) > 0:
             c_min = cand - 5.0
             c_max = cand + 5.0
-            overlapping = [
-                b for b in spatial_bins
-                if not (getattr(b, "angle_max", -99.0) < c_min or getattr(b, "angle_min", 99.0) > c_max)
-            ]
-            if overlapping:
-                valid_bins = [b for b in overlapping if getattr(b, "is_valid", False)]
-                if len(valid_bins) >= max(1, len(overlapping) // 2):
-                    dists = [getattr(b, "dist_cm", float("nan")) for b in valid_bins]
-                    valid_dists = [d for d in dists if math.isfinite(d) and d > 0]
-                    if valid_dists:
-                        cand_supported = True
-                        cand_dist = min(valid_dists)
+            k_min = cand - 2.5
+            k_max = cand + 2.5
+            w_corr = c_max - c_min  # 10.0 deg
+            w_core = k_max - k_min  # 5.0 deg
+
+            valid_corr_cov = 0.0
+            valid_core_cov = 0.0
+            valid_dists = []
+
+            for b in spatial_bins:
+                b_min = getattr(b, "angle_min", 99.0)
+                b_max = getattr(b, "angle_max", -99.0)
+                if b_max <= b_min:
+                    continue
+                # Overlap with corridor [c_min, c_max]
+                ov_corr = max(0.0, min(b_max, c_max) - max(b_min, c_min))
+                # Overlap with central load-bearing core [k_min, k_max]
+                ov_core = max(0.0, min(b_max, k_max) - max(b_min, k_min))
+
+                if getattr(b, "is_valid", False):
+                    valid_corr_cov += ov_corr
+                    valid_core_cov += ov_core
+                    if ov_corr > 0.0:
+                        d = getattr(b, "dist_cm", float("nan"))
+                        if math.isfinite(d) and d > 0:
+                            valid_dists.append(d)
+
+            corr_ratio = valid_corr_cov / w_corr
+            core_ratio = valid_core_cov / w_core
+
+            # P0-03 Problem A: Corridor must have >= 80% valid angular coverage
+            # and central load-bearing core [theta - 2.5, theta + 2.5] must be valid
+            if corr_ratio >= 0.80 and core_ratio >= 0.95 and valid_dists:
+                cand_supported = True
+                cand_dist = min(valid_dists)
         else:
             # 3-sector fallback for legacy mocks or tests without spatial_bins
             if cand < -10.0:
@@ -408,8 +438,17 @@ def estimate_directional_advisory(
             min_cost = total_cost
             best_candidate = cand
 
-    if min_cost > 30.0 or (threat == "CRITICAL" and status_c == "VALID" and z_center < 40.0):
+    # P0-03 Problem D: Refined STOP vs Alternative Heading
+    if min_cost > 30.0:
         return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+
+    if threat == "CRITICAL" and status_c == "VALID":
+        # Immediate frontal collision (< 25cm) forces emergency STOP
+        if z_center < 25.0:
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
+        # Constrained center hazard (< 40cm): allow alternative heading only if genuinely safe and has clearance
+        if z_center < 40.0 and (min_cost > 15.0 or not any(d >= 60.0 for c, d, r in eligible_candidates if abs(c - best_candidate) < 1.5)):
+            return DirectionalAdvisory(state=DirectionState.STOP, observed_angular_range=obs_range, source_timestamp=adv_ts)
 
     confidence = max(0.30, min(0.55, 1.0 - (min_cost / 35.0)))
     selected_angle = best_candidate

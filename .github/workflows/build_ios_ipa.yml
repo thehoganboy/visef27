@@ -58,7 +58,7 @@ jobs:
 
       - name: Run native Swift behavior regressions
         run: |
-          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior
+          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior
           /tmp/horus-behavior
 
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)

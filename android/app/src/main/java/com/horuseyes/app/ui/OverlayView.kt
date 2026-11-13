@@ -42,6 +42,16 @@ fun estimateDirectionalAdvisory(
 
     val halfFov = hfovDeg / 2f
     val obsRange = Pair(-halfFov, halfFov)
+
+    // Spatial observation freshness check (reject stale observations > 750ms)
+    val advNanos = if (depth.timestampNanos > 0L) depth.timestampNanos else nowNanos
+    if (depth.timestampNanos > 0L && nowNanos > 0L) {
+        val ageSeconds = (nowNanos - depth.timestampNanos) / 1_000_000_000.0
+        if (ageSeconds > 0.75) {
+            return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = depth.timestampNanos)
+        }
+    }
+
     val camW = if (depth.width > 0) depth.width.toFloat() else 192f
     val cx = camW / 2f
     val fx = cx / kotlin.math.tan(Math.toRadians(halfFov.toDouble())).toFloat()
@@ -61,7 +71,18 @@ fun estimateDirectionalAdvisory(
 
     // Completely obstructed check if all sectors are valid and close
     if (validC && zCenter < 50f && validL && zLeft < 60f && validR && zRight < 60f) {
-        return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
+        if (depth.spatialBins.isNotEmpty()) {
+            val cBins = depth.spatialBins.filter { abs(it.angleCenter) <= 6.0f && it.isValid }
+            val cDists = cBins.map { it.estimatedDistanceCm }
+            val finiteCDists = cDists.filter { it.isFinite() && it > 0f }
+            if (finiteCDists.size == cBins.size && finiteCDists.isNotEmpty() && finiteCDists.all { it >= 75f }) {
+                // Central corridor is genuinely open with valid distance readings (doorway clearance)
+            } else {
+                return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
+            }
+        } else {
+            return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
+        }
     }
 
     data class ObsProfile(val angCenter: Float, val radius: Float, val weight: Float, val zObs: Float, val isValidDist: Boolean)
@@ -104,14 +125,24 @@ fun estimateDirectionalAdvisory(
         profiles.add(ObsProfile(angCenter, 12f, weight, zCenter, true))
     }
 
-    // Clear frame with no detected obstacles: only permitted if ALL 3 sectors are valid & clear
+    // Clear frame with no detected obstacles
     if (profiles.isEmpty()) {
-        if (validC && validL && validR && zCenter >= 150f && zLeft >= 150f && zRight >= 150f) {
-            val angOut = if (prevAngle != null && prevAngle.isFinite()) 0.3f * 0f + 0.7f * prevAngle else 0f
-            return DirectionalAdvisory("AVAILABLE", angOut, 0.55f, obsRange, nowNanos)
-        } else if (!validC && !validL && !validR) {
-            return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
+        // Central corridor valid & clear: edge invalidity must NOT invalidate the center (P0-02/P0-03)
+        if (validC && zCenter >= 150f) {
+            var centerSupported = true
+            if (depth.spatialBins.isNotEmpty()) {
+                val cBins = depth.spatialBins.filter { abs(it.angleCenter) <= 5.0f }
+                val validCList = cBins.filter { it.isValid }
+                if (validCList.size < max(1, (cBins.size * 0.8f).toInt())) {
+                    centerSupported = false
+                }
+            }
+            if (centerSupported) {
+                val angOut = if (prevAngle != null && prevAngle.isFinite()) 0.3f * 0f + 0.7f * prevAngle else 0f
+                return DirectionalAdvisory("AVAILABLE", angOut, 0.55f, obsRange, nowNanos)
+            }
         }
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = advNanos)
     }
 
     // Step 5A: Generate all candidate headings across observed FOV
@@ -127,16 +158,62 @@ fun estimateDirectionalAdvisory(
     val eligibleCandidates = mutableListOf<Candidate>()
     var obstructedCount = 0
 
+    val bins = depth.spatialBins
     for (cand in allCandidateAngles) {
-        val (secValid, zSec) = when {
-            cand < -10f -> Pair(validL, zLeft)
-            cand > 10f -> Pair(validR, zRight)
-            else -> Pair(validC, zCenter)
+        var candSupported = false
+        var candDist = Float.NaN
+
+        if (bins.isNotEmpty()) {
+            val cMin = cand - 5.0f
+            val cMax = cand + 5.0f
+            val kMin = cand - 2.5f
+            val kMax = cand + 2.5f
+            val wCorr = cMax - cMin  // 10.0 deg
+            val wCore = kMax - kMin  // 5.0 deg
+
+            var validCorrCov = 0.0f
+            var validCoreCov = 0.0f
+            val validDists = mutableListOf<Float>()
+
+            for (b in bins) {
+                if (b.angleMax <= b.angleMin) continue
+                val ovCorr = max(0.0f, min(b.angleMax, cMax) - max(b.angleMin, cMin))
+                val ovCore = max(0.0f, min(b.angleMax, kMax) - max(b.angleMin, kMin))
+
+                if (b.isValid) {
+                    validCorrCov += ovCorr
+                    validCoreCov += ovCore
+                    if (ovCorr > 0.0f && b.estimatedDistanceCm.isFinite() && b.estimatedDistanceCm > 0f) {
+                        validDists.add(b.estimatedDistanceCm)
+                    }
+                }
+            }
+
+            val corrRatio = validCorrCov / wCorr
+            val coreRatio = validCoreCov / wCore
+
+            // P0-01 / P0-03: Candidate corridor must have >= 80% valid coverage and central load-bearing core must be valid
+            if (corrRatio >= 0.80f && coreRatio >= 0.95f && validDists.isNotEmpty()) {
+                candSupported = true
+                candDist = validDists.minOrNull() ?: Float.NaN
+            }
+        } else {
+            // 3-sector fallback for legacy mocks or tests without spatialBins
+            val (secValid, zSec) = when {
+                cand < -10f -> Pair(validL, zLeft)
+                cand > 10f -> Pair(validR, zRight)
+                else -> Pair(validC, zCenter)
+            }
+            if (secValid) {
+                candSupported = true
+                candDist = zSec
+            }
         }
-        if (!secValid) continue
+
+        if (!candSupported) continue
 
         var isBlocked = false
-        if (zSec < 40f) isBlocked = true
+        if (candDist < 40f) isBlocked = true
 
         if (!isBlocked) {
             for (p in profiles) {
@@ -169,8 +246,8 @@ fun estimateDirectionalAdvisory(
             }
         }
 
-        if (zSec < 80f) risk += ((80f - zSec) / 10f) * 4f
-        else if (zSec < 150f) risk += ((150f - zSec) / 70f) * 1.5f
+        if (candDist < 80f) risk += ((80f - candDist) / 10f) * 4f
+        else if (candDist < 150f) risk += ((150f - candDist) / 70f) * 1.5f
 
         risk += 0.05f * abs(cand)
 
@@ -178,15 +255,15 @@ fun estimateDirectionalAdvisory(
             risk -= 1.0f
         }
 
-        eligibleCandidates.add(Candidate(cand, zSec, risk))
+        eligibleCandidates.add(Candidate(cand, candDist, risk))
     }
 
     // Step 5C: Evaluate outcomes when no candidate is eligible
     if (eligibleCandidates.isEmpty()) {
         return if (obstructedCount > 0 && (obstructedCount >= allCandidateAngles.size / 2 || (validC && zCenter < 50f))) {
-            DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
+            DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
         } else {
-            DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos)
+            DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = advNanos)
         }
     }
 
@@ -245,8 +322,19 @@ fun estimateDirectionalAdvisory(
         }
     }
 
-    if (minCost > 30f || (threat == "CRITICAL" && validC && zCenter < 40f)) {
-        return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = nowNanos)
+    if (minCost > 30f) {
+        return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
+    }
+
+    if (threat == "CRITICAL" && validC) {
+        // Immediate frontal collision (< 25cm) forces emergency STOP
+        if (zCenter < 25f) {
+            return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
+        }
+        // Constrained center hazard (< 40cm): allow alternative heading only if genuinely safe and has clearance
+        if (zCenter < 40f && (minCost > 15f || !eligibleCandidates.any { abs(it.ang - bestCand) < 1.5f && it.zSec >= 60f })) {
+            return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos)
+        }
     }
 
     val conf = max(0.30f, min(0.55f, 1f - (minCost / 35f)))
@@ -256,7 +344,7 @@ fun estimateDirectionalAdvisory(
     }
     selected = max(-halfFov, min(halfFov, selected))
 
-    return DirectionalAdvisory("AVAILABLE", selected, conf, obsRange, nowNanos)
+    return DirectionalAdvisory("AVAILABLE", selected, conf, obsRange, sourceNanos = advNanos)
 }
 
 class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {

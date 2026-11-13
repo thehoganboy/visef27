@@ -26,6 +26,21 @@ struct SingleObstacle: Identifiable {
     let isWall: Bool
 }
 
+struct SpatialBin {
+    let binId: Int
+    let angleMin: Float
+    let angleMax: Float
+    let angleCenter: Float
+    let validRatio: Float
+    let rawDepthStatistic: Float
+    let distCM: Float
+    let isValid: Bool
+    let hasObstacle: Bool
+    let bodyDistCM: Float
+    let groundDistCM: Float
+    let overheadDistCM: Float
+}
+
 struct ObstacleDetectionResult {
     let x: Int
     let y: Int
@@ -44,6 +59,50 @@ struct ObstacleDetectionResult {
     let camWidth: Int
     let camHeight: Int
     var isValid: Bool = true
+    var spatialBins: [SpatialBin] = []
+    var timestamp: Double = 0.0
+
+    init(
+        x: Int,
+        y: Int,
+        bbox: (x: Int, y: Int, w: Int, h: Int),
+        pan: Float,
+        proximity: Float,
+        distCM: Float,
+        modeText: String,
+        uncertaintyScore: Float,
+        isWall: Bool,
+        sectorDists: [String: Float],
+        allObstacles: [SingleObstacle],
+        isZeroLuxBlind: Bool,
+        isOverheadHazard: Bool,
+        isDropOffHazard: Bool,
+        camWidth: Int,
+        camHeight: Int,
+        isValid: Bool = true,
+        spatialBins: [SpatialBin] = [],
+        timestamp: Double = 0.0
+    ) {
+        self.x = x
+        self.y = y
+        self.bbox = bbox
+        self.pan = pan
+        self.proximity = proximity
+        self.distCM = distCM
+        self.modeText = modeText
+        self.uncertaintyScore = uncertaintyScore
+        self.isWall = isWall
+        self.sectorDists = sectorDists
+        self.allObstacles = allObstacles
+        self.isZeroLuxBlind = isZeroLuxBlind
+        self.isOverheadHazard = isOverheadHazard
+        self.isDropOffHazard = isDropOffHazard
+        self.camWidth = camWidth
+        self.camHeight = camHeight
+        self.isValid = isValid
+        self.spatialBins = spatialBins
+        self.timestamp = timestamp
+    }
 }
 
 // ── Depth Engine ───────────────────────────────────────────────────────────────
@@ -246,6 +305,7 @@ final class DepthEngine: ObservableObject {
                 proximity: 1.0, distCM: satDist, modeText: "CRITICAL_SATURATED",
                 uncertaintyScore: 0.05, isWall: false
             )
+            let satBins = computeSpatialBins(rawDisparity: rawDisparity, w: w, h: h, detectedObstacles: [satObs])
             return ObstacleDetectionResult(
                 x: w / 2, y: h / 2, bbox: satBbox, pan: 0.0, proximity: 1.0,
                 distCM: satDist, modeText: "CRITICAL_SATURATED",
@@ -256,7 +316,8 @@ final class DepthEngine: ObservableObject {
                 isOverheadHazard: false,
                 isDropOffHazard: false,
                 camWidth: w,
-                camHeight: h
+                camHeight: h,
+                spatialBins: satBins
             )
         }
 
@@ -436,7 +497,7 @@ final class DepthEngine: ObservableObject {
         if let first = detectedObstacles.first {
             primaryObs = first
         } else {
-            let safeDist = Config.distSafeCM
+            let safeDist = distC
             let dummyBbox = (x: w / 4, y: h / 4, w: w / 2, h: h / 2)
             primaryObs = SingleObstacle(
                 id: 1, x: w / 2, y: h / 2, bbox: dummyBbox, pan: 0.0,
@@ -454,6 +515,8 @@ final class DepthEngine: ObservableObject {
             modeText = "SAFE (Clear Path)"
         }
 
+        let bins = computeSpatialBins(rawDisparity: rawDisparity, w: w, h: h, detectedObstacles: detectedObstacles)
+
         return ObstacleDetectionResult(
             x: primaryObs.x,
             y: primaryObs.y,
@@ -470,7 +533,8 @@ final class DepthEngine: ObservableObject {
             isOverheadHazard: isOverhead,
             isDropOffHazard: isDropOff,
             camWidth: w,
-            camHeight: h
+            camHeight: h,
+            spatialBins: bins
         )
     }
 
@@ -484,5 +548,133 @@ final class DepthEngine: ObservableObject {
 
     private static func median(_ array: [Float]) -> Float {
         Self.percentile(array, 0.50)
+    }
+
+    func computeSpatialBins(
+        rawDisparity: [Float],
+        w: Int,
+        h: Int,
+        detectedObstacles: [SingleObstacle] = [],
+        numBins: Int = 24,
+        hfovDeg: Float = 65.0
+    ) -> [SpatialBin] {
+        let cx = Float(w) / 2.0
+        let halfFov = hfovDeg / 2.0
+        let fx = cx / tan(halfFov * .pi / 180.0)
+
+        // Multi-band vertical boundaries in 48x64 disparity grid
+        let cy1B = Int(Float(gridH) * 0.20) // ~12
+        let cy2B = Int(Float(gridH) * 0.65) // ~41
+        let cy1G = Int(Float(gridH) * 0.65) // ~41
+        let cy2G = Int(Float(gridH) * 0.85) // ~54
+        let cy1O = 0
+        let cy2O = Int(Float(gridH) * 0.20) // ~12
+
+        let colsPerBin = max(1, gridW / numBins) // 48 / 24 = 2 columns per bin
+        let binW = Float(w) / Float(numBins)
+
+        var bins: [SpatialBin] = []
+
+        for i in 0..<numBins {
+            let x1 = Int(round(Float(i) * binW))
+            let x2 = max(x1 + 1, min(w, Int(round(Float(i + 1) * binW))))
+
+            let angMin = atan2(Float(x1) - cx, fx) * 180.0 / .pi
+            let angMax = atan2(Float(x2) - cx, fx) * 180.0 / .pi
+            let angCenter = (angMin + angMax) / 2.0
+
+            let gx1 = i * colsPerBin
+            let gx2 = min(gridW, (i + 1) * colsPerBin)
+
+            var validRatio: Float = 0.0
+            var rawP80: Float = .nan
+            var bodyDistCM: Float = .nan
+            var groundDistCM: Float = .nan
+            var overheadDistCM: Float = .nan
+            var distCM: Float = .nan
+            var isValid = false
+
+            // 1. Body band [0.20h, 0.65h]
+            var bodySamples: [Float] = []
+            var totalBody = 0
+            for y in cy1B..<cy2B {
+                for x in gx1..<gx2 {
+                    totalBody += 1
+                    let v = rawDisparity[y * gridW + x]
+                    if v.isFinite && v > 0 {
+                        bodySamples.append(v)
+                    }
+                }
+            }
+            validRatio = totalBody > 0 ? Float(bodySamples.count) / Float(totalBody) : 0.0
+            if validRatio >= 0.35 && !bodySamples.isEmpty {
+                rawP80 = Self.percentile(bodySamples, 0.80)
+                bodyDistCM = pchip.interpolate(rawP80)
+                distCM = bodyDistCM
+                isValid = bodyDistCM.isFinite && bodyDistCM > 0
+            }
+
+            // 2. Ground band [0.65h, 0.85h]
+            var groundSamples: [Float] = []
+            var totalGround = 0
+            for y in cy1G..<cy2G {
+                for x in gx1..<gx2 {
+                    totalGround += 1
+                    let v = rawDisparity[y * gridW + x]
+                    if v.isFinite && v > 0 {
+                        groundSamples.append(v)
+                    }
+                }
+            }
+            if totalGround > 0 && Float(groundSamples.count) / Float(totalGround) >= 0.35 && !groundSamples.isEmpty {
+                let gP80 = Self.percentile(groundSamples, 0.80)
+                groundDistCM = pchip.interpolate(gP80)
+            }
+
+            // 3. Overhead band [0.0h, 0.20h]
+            var overheadSamples: [Float] = []
+            var totalOverhead = 0
+            for y in cy1O..<cy2O {
+                for x in gx1..<gx2 {
+                    totalOverhead += 1
+                    let v = rawDisparity[y * gridW + x]
+                    if v.isFinite && v > 0 {
+                        overheadSamples.append(v)
+                    }
+                }
+            }
+            if totalOverhead > 0 && Float(overheadSamples.count) / Float(totalOverhead) >= 0.35 && !overheadSamples.isEmpty {
+                let oP80 = Self.percentile(overheadSamples, 0.80)
+                overheadDistCM = pchip.interpolate(oP80)
+            }
+
+            // Obstacle overlap
+            var hasObs = false
+            for obs in detectedObstacles {
+                let ox1 = obs.bbox.x
+                let ox2 = obs.bbox.x + obs.bbox.w
+                if !(x2 <= ox1 || x1 >= ox2) {
+                    hasObs = true
+                    break
+                }
+            }
+
+            bins.append(SpatialBin(
+                binId: i,
+                angleMin: round(angMin * 100) / 100,
+                angleMax: round(angMax * 100) / 100,
+                angleCenter: round(angCenter * 100) / 100,
+                validRatio: round(validRatio * 1000) / 1000,
+                rawDepthStatistic: rawP80,
+                distCM: distCM,
+                isValid: isValid,
+                hasObstacle: hasObs,
+                bodyDistCM: bodyDistCM,
+                groundDistCM: groundDistCM,
+                overheadDistCM: overheadDistCM
+            ))
+        }
+
+        return bins
     }
 }

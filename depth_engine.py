@@ -247,6 +247,9 @@ class SpatialBin:
     dist_cm: float                  # Khoảng cách ước lượng metric (cm)
     is_valid: bool                  # Cờ dữ liệu hợp lệ
     has_obstacle: bool = False      # Cờ có vật cản cắt qua bin
+    body_dist_cm: float = float("nan")     # Khoảng cách vùng thân/vật cản [0.20h, 0.65h]
+    ground_dist_cm: float = float("nan")   # Khoảng cách vùng cận sàn [0.65h, 0.85h]
+    overhead_dist_cm: float = float("nan") # Khoảng cách vùng trần/nhô cao [0.0h, 0.20h]
 
 
 @dataclass
@@ -391,14 +394,22 @@ def compute_spatial_bins(
 ) -> List[SpatialBin]:
     """
     Compute 16-32 horizontal localized spatial occupancy bins (Directive Final UX Section 2.2).
-    Multi-band vertical pooling separates floor corridor, obstacle/body height, and overhead.
+    Multi-band vertical pooling separates floor corridor, obstacle/body height, and overhead
+    (P0-03 Problem B):
+      - Body/obstacle band: [0.20h, 0.65h] (primary for forward clearance)
+      - Lower/ground-adjacent band: [0.65h, 0.85h] (detect drop-offs, low curbs, step hazards)
+      - Overhead band: [0.0h, 0.20h] (detect overhangs, signboards)
     """
     if detected_list is None:
         detected_list = []
     cx = w / 2.0
     half_fov = hfov_deg / 2.0
     fx = cx / math.tan(math.radians(half_fov))
-    cy1, cy2 = int(0.20 * h), int(0.75 * h)
+
+    # Multi-band vertical boundaries
+    cy1_b, cy2_b = int(0.20 * h), int(0.65 * h)
+    cy1_g, cy2_g = int(0.65 * h), int(0.85 * h)
+    cy1_o, cy2_o = 0, int(0.20 * h)
 
     bins: List[SpatialBin] = []
     bin_w = w / float(num_bins)
@@ -418,20 +429,44 @@ def compute_spatial_bins(
         ang_center = (ang_min + ang_max) / 2.0
 
         if has_depth:
-            raw_slice = depth_raw[cy1:cy2, bx1:bx2]
-            finite_mask = np.isfinite(raw_slice) & (raw_slice > 0)
-            valid_ratio = float(np.mean(finite_mask)) if raw_slice.size > 0 else 0.0
-            if valid_ratio >= 0.35 and np.any(finite_mask):
-                raw_p80 = float(np.percentile(raw_slice[finite_mask], 80))
-                dist_cm = compute_metric_distance_cm(raw_p80, scale_factor)
+            # 1. Main body / obstacle band: [0.20h, 0.65h]
+            raw_b = depth_raw[cy1_b:cy2_b, bx1:bx2]
+            mask_b = np.isfinite(raw_b) & (raw_b > 0)
+            valid_ratio = float(np.mean(mask_b)) if raw_b.size > 0 else 0.0
+            if valid_ratio >= 0.35 and np.any(mask_b):
+                raw_p80 = float(np.percentile(raw_b[mask_b], 80))
+                body_dist_cm = compute_metric_distance_cm(raw_p80, scale_factor)
+                dist_cm = body_dist_cm
                 is_valid = True
             else:
                 raw_p80 = float("nan")
+                body_dist_cm = float("nan")
                 dist_cm = float("nan")
                 is_valid = False
+
+            # 2. Lower / ground-adjacent band: [0.65h, 0.85h]
+            raw_g = depth_raw[cy1_g:cy2_g, bx1:bx2]
+            mask_g = np.isfinite(raw_g) & (raw_g > 0)
+            if raw_g.size > 0 and np.mean(mask_g) >= 0.35 and np.any(mask_g):
+                p80_g = float(np.percentile(raw_g[mask_g], 80))
+                ground_dist_cm = compute_metric_distance_cm(p80_g, scale_factor)
+            else:
+                ground_dist_cm = float("nan")
+
+            # 3. Overhead band: [0.0h, 0.20h]
+            raw_o = depth_raw[cy1_o:cy2_o, bx1:bx2]
+            mask_o = np.isfinite(raw_o) & (raw_o > 0)
+            if raw_o.size > 0 and np.mean(mask_o) >= 0.35 and np.any(mask_o):
+                p80_o = float(np.percentile(raw_o[mask_o], 80))
+                overhead_dist_cm = compute_metric_distance_cm(p80_o, scale_factor)
+            else:
+                overhead_dist_cm = float("nan")
         else:
             valid_ratio = 0.0
             raw_p80 = float("nan")
+            body_dist_cm = float("nan")
+            ground_dist_cm = float("nan")
+            overhead_dist_cm = float("nan")
             dist_cm = float("nan")
             is_valid = False
 
@@ -452,7 +487,10 @@ def compute_spatial_bins(
             depth_raw_p80=raw_p80,
             dist_cm=dist_cm,
             is_valid=is_valid,
-            has_obstacle=has_obs
+            has_obstacle=has_obs,
+            body_dist_cm=body_dist_cm,
+            ground_dist_cm=ground_dist_cm,
+            overhead_dist_cm=overhead_dist_cm
         ))
     return bins
 
