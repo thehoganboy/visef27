@@ -9,6 +9,7 @@
 **Execution Commit SHA:** `17ea999`  
 **Pull Request:** `https://github.com/thehoganboy/visef27/pull/1`  
 **Android Build Status:** `BUILD SUCCESSFUL` (`app-debug.apk`, 155,602,226 bytes)  
+**iOS CI Build Status:** `Run #40 SUCCESS` (URL: `https://github.com/thehoganboy/visef27/actions/runs/43374746695`)  
 **Test Suite:** 26/26 Unit Tests Passing (`test_demo_ready.py`, `test_phase01b_a_plus_plus_adversarial.py`) | 5/5 Pipeline Audit Stages Passing (`test_pipeline.py`)
 
 ---
