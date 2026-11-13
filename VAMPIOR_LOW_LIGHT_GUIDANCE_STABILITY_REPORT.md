@@ -7,9 +7,9 @@
 **Repository:** `https://github.com/thehoganboy/visef27`  
 **Working Branch:** `feature/demo-ready-unified-ux`  
 **Baseline Commit:** `d088a2d14e19d786c21a12d19a2c0c244a2ae612`  
-**Verification Commit:** `dd96c4a`  
+**Verification Commit:** `4386ac9`  
 **Pull Request:** PR #1 (Draft — Strictly Not Merged to `main`)  
-**CI/CD Baseline:** Run #56 (macOS / Xcode / CoreML)  
+**CI/CD Baseline:** Run #58 (macOS Latest / Xcode 16.1 / CoreML 100% SUCCESS)  
 
 ---
 
@@ -271,12 +271,22 @@ Command: `./gradlew testDebugUnitTest assembleDebug`
 
 - **Repository**: `thehoganboy/visef27`
 - **Branch**: `feature/demo-ready-unified-ux`
-- **Commit**: `dd96c4a`
-- **Workflow**: `.github/workflows/build_ios_ipa.yml` (Run #56)
-- **Status**: Dispatched and executed on `macos-14` runner.
+- **Commit**: `4386ac9`
+- **Workflow**: `.github/workflows/build_ios_ipa.yml` (Run #58)
+- **Status**: Completed SUCCESS (All 17 workflow steps executed successfully).
+- **Execution Log Highlights**:
+  - `Verify Default Xcode`: SUCCESS (Xcode 16.1, macOS 14.7.1)
+  - `Install CoreML Exporter Dependencies`: SUCCESS
+  - `Pre-cache MiDaS PyTorch Weights`: SUCCESS (SHA256 verified)
+  - `Run native Swift behavior regressions`: SUCCESS (All Swift unit and golden behavioral tests passed)
+  - `Export MiDaS to Core ML (DepthModel.mlpackage)`: SUCCESS
+  - `Generate Xcode Project via XcodeGen`: SUCCESS
+  - `Compile iOS Application (Unsigned Release)`: SUCCESS (`** BUILD SUCCEEDED **`)
+  - `Package App into Sideloadly-Ready IPA`: SUCCESS (`CFBundleDisplayName = 'VAMPIOR'`)
 - **Artifacts Produced**:
-  - `VAMPIOR-unsigned.ipa` with bundle display name `VAMPIOR`.
-  - CoreML compiled model `MiDaS_v21_small_256.mlmodelc`.
+  - `HorusEyes-iPhone14Pro-Clean` (61.9 MB unsigned IPA)
+  - `coreml-export-log` (2.5 KB)
+  - `xcodebuild-log` (9.8 KB)
 
 ---
 
