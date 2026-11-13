@@ -337,7 +337,7 @@ struct ContentView: View {
             // Rounded Camera Preview Container (P1-01)
             ZStack {
                 CameraPreviewView(session: model.camera.session)
-                let isStop = (model.advisory.state == "STOP" || model.threat == "CRITICAL") && model.threat != "PAUSED"
+                let isStop = model.advisory.state == "STOP" && model.threat != "PAUSED"
                 TrackingOverlayView(result: model.result, threatLevel: model.threat, isStop: isStop)
 
                 // Centered Direction Indicator & Status Badge
@@ -396,7 +396,7 @@ struct DirectionIndicator: View {
 
     var body: some View {
         ZStack {
-            let isStop = (advisory.state == "STOP" || threat == "CRITICAL") && threat != "PAUSED"
+            let isStop = advisory.state == "STOP" && threat != "PAUSED"
             let isPaused = threat == "PAUSED"
 
             if !isStop && !isPaused, let angle = advisory.drawableAngle(now: CACurrentMediaTime()) {

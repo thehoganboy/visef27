@@ -135,6 +135,7 @@ func estimateDirectionalAdvisory(
         let angRight: Double
         let radius: Double
         let margin: Double
+        let cMargin: Double
         let weight: Double
         let zObs: Double
         let isValidDist: Bool
@@ -151,11 +152,13 @@ func estimateDirectionalAdvisory(
         let angHalfW = max(1.5, (angRight - angLeft) / 2.0)
         let totalRadius: Double
         let marginDeg: Double
+        let cMarginDeg: Double
         let weight: Double
         let zVal: Double
         if isDistValid {
             zVal = max(10.0, Double(o.distCM))
             marginDeg = min(25.0, max(4.0, atan2(20.0, zVal) * 180.0 / .pi))
+            cMarginDeg = max(3.5, atan2(15.0, zVal) * 180.0 / .pi)
             totalRadius = angHalfW + marginDeg
             if zVal < 35.0 { weight = 20.0 }
             else if zVal < 50.0 { weight = 15.0 }
@@ -166,6 +169,7 @@ func estimateDirectionalAdvisory(
             // Unknown-distance obstacle: retain image-space angular occupancy without fabricating 100cm
             zVal = Double.nan
             marginDeg = 8.0
+            cMarginDeg = 6.0
             totalRadius = angHalfW + marginDeg
             weight = 10.0
         }
@@ -175,6 +179,7 @@ func estimateDirectionalAdvisory(
             angRight: angRight,
             radius: totalRadius,
             margin: marginDeg,
+            cMargin: cMarginDeg,
             weight: weight,
             zObs: zVal,
             isValidDist: isDistValid
@@ -438,10 +443,10 @@ func estimateDirectionalAdvisory(
     }
 
     let fwdEncroached = profiles.contains { p in
-        p.angRight > -p.margin && p.angLeft < p.margin && (p.zObs.isNaN || p.zObs < 150.0)
+        p.angRight > -p.cMargin && p.angLeft < p.cMargin && (p.zObs.isNaN || p.zObs < 150.0)
     }
 
-    if fwdEligible && !fwdEncroached && fwdDist >= 75.0 && fwdRisk <= 6.0 {
+    if fwdEligible && !fwdEncroached && fwdDist >= 75.0 {
         var angleOut = 0.0
         if let prev = prevAngle, prev.isFinite {
             let smoothed = 0.35 * 0.0 + 0.65 * prev
@@ -456,10 +461,10 @@ func estimateDirectionalAdvisory(
 
     // Priority 2: SMALL CORRECTION
     let leftEncroached = profiles.contains { p in
-        p.angCenter < 0.0 && p.angRight > -p.margin && (p.zObs.isNaN || p.zObs < 150.0)
+        p.angCenter < 0.0 && p.angRight > -p.cMargin && (p.zObs.isNaN || p.zObs < 150.0)
     }
     let rightEncroached = profiles.contains { p in
-        p.angCenter > 0.0 && p.angLeft < p.margin && (p.zObs.isNaN || p.zObs < 150.0)
+        p.angCenter > 0.0 && p.angLeft < p.cMargin && (p.zObs.isNaN || p.zObs < 150.0)
     }
     let smallCandidates = eligibleCandidates.filter { abs($0.ang) <= 15.0 && $0.zSec >= 50.0 }
 

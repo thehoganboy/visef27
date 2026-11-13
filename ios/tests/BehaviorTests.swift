@@ -34,6 +34,7 @@ import Foundation
         testLowLightReleaseCandidateCorrectiveAudit()
         testFinalDeviceReadinessAudioSync()
         testObstacleAvoidanceHotfixScenarios()
+        testCenterCorridorFirstHotfixScenarios()
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
@@ -933,5 +934,162 @@ import Foundation
         precondition(a10 >= 12.0, "Scenario 10 failed: angle must not interpolate through center obstacle (expected >= 12.0, got \(a10))")
 
         print("PASS Swift Final Obstacle Avoidance Policy Scenarios (10/10)")
+    }
+
+    static func testCenterCorridorFirstHotfixScenarios() {
+        let halfFov: Float = 32.5
+        let binW: Float = 65.0 / 24.0
+        func makeBins(dists: [Float?]) -> [SpatialBin] {
+            return (0..<24).map { i in
+                let aMin = -halfFov + Float(i) * binW
+                let aMax = aMin + binW
+                let aCenter = (aMin + aMax) / 2.0
+                let d = dists[i]
+                let isV = d != nil && d!.isFinite && d! > 0
+                return SpatialBin(
+                    binId: i, angleMin: aMin, angleMax: aMax, angleCenter: aCenter,
+                    validRatio: isV ? 1.0 : 0.0, rawDepthStatistic: 200.0,
+                    distCM: isV ? d! : .nan, isValid: isV, hasObstacle: false,
+                    bodyDistCM: isV ? d! : .nan, groundDistCM: .nan, overheadDistCM: .nan
+                )
+            }
+        }
+        func makeObs(
+            threat: String = "SAFE",
+            secDists: [String: Float],
+            obstacles: [SingleObstacle],
+            bins: [SpatialBin],
+            camW: Int = 640,
+            camH: Int = 480
+        ) -> ObstacleDetectionResult {
+            let centerD = secDists["CENTER"] ?? .nan
+            return ObstacleDetectionResult(
+                x: camW / 2, y: camH / 2,
+                bbox: (x: camW / 4, y: camH / 4, w: camW / 2, h: camH / 2),
+                pan: 0.0, proximity: 0.3, distCM: centerD,
+                modeText: "TEST", uncertaintyScore: 0.1, isWall: false,
+                sectorDists: secDists, allObstacles: obstacles,
+                isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+                camWidth: camW, camHeight: camH, isValid: true,
+                spatialBins: bins, timestamp: 10.0
+            )
+        }
+
+        let budget = AuditoryBudgetManager()
+
+        // 1. Only far-left obstacle, clear center -> AVAILABLE_FORWARD
+        let obs1Item = SingleObstacle(id: 1, x: 25, y: 200, bbox: (10, 100, 30, 200), pan: -0.85, proximity: 0.4, distCM: 70.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs1 = makeObs(secDists: ["LEFT": 70.0, "CENTER": 200.0, "RIGHT": 200.0], obstacles: [obs1Item], bins: makeBins(dists: [Float?](repeating: 200.0, count: 24)))
+        let adv1 = estimateDirectionalAdvisory(observation: obs1, threat: "SAFE", now: 10.0)
+        precondition(adv1.state == "AVAILABLE", "CTO 1: state must be AVAILABLE")
+        precondition(abs(adv1.angleDeg ?? 99.0) <= 2.0, "CTO 1: angle must be 0° forward")
+        precondition(adv1.reasonCode == "AVAILABLE_FORWARD", "CTO 1: reason must be AVAILABLE_FORWARD")
+
+        // 2. Only far-right obstacle, clear center -> AVAILABLE_FORWARD
+        let obs2Item = SingleObstacle(id: 2, x: 615, y: 200, bbox: (600, 100, 30, 200), pan: 0.85, proximity: 0.4, distCM: 70.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs2 = makeObs(secDists: ["LEFT": 200.0, "CENTER": 200.0, "RIGHT": 70.0], obstacles: [obs2Item], bins: makeBins(dists: [Float?](repeating: 200.0, count: 24)))
+        let adv2 = estimateDirectionalAdvisory(observation: obs2, threat: "SAFE", now: 10.0)
+        precondition(adv2.state == "AVAILABLE", "CTO 2: state must be AVAILABLE")
+        precondition(abs(adv2.angleDeg ?? 99.0) <= 2.0, "CTO 2: angle must be 0° forward")
+        precondition(adv2.reasonCode == "AVAILABLE_FORWARD", "CTO 2: reason must be AVAILABLE_FORWARD")
+
+        // 3. Obstacles on both sides, sufficient central gap -> AVAILABLE_FORWARD
+        let obs3ItemL = SingleObstacle(id: 31, x: 45, y: 200, bbox: (20, 100, 50, 200), pan: -0.80, proximity: 0.4, distCM: 80.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs3ItemR = SingleObstacle(id: 32, x: 595, y: 200, bbox: (570, 100, 50, 200), pan: 0.80, proximity: 0.4, distCM: 80.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists3 = [Float?](repeating: 80.0, count: 4) + [Float?](repeating: 200.0, count: 16) + [Float?](repeating: 80.0, count: 4)
+        let obs3 = makeObs(secDists: ["LEFT": 80.0, "CENTER": 200.0, "RIGHT": 80.0], obstacles: [obs3ItemL, obs3ItemR], bins: makeBins(dists: dists3))
+        let adv3 = estimateDirectionalAdvisory(observation: obs3, threat: "SAFE", now: 10.0)
+        precondition(adv3.state == "AVAILABLE", "CTO 3: state must be AVAILABLE")
+        precondition(abs(adv3.angleDeg ?? 99.0) <= 2.0, "CTO 3: angle must be 0° forward")
+        precondition(adv3.reasonCode == "AVAILABLE_FORWARD", "CTO 3: reason must be AVAILABLE_FORWARD")
+
+        // 4. Left side significantly encroaches -> AVAILABLE right correction
+        let obs4Item = SingleObstacle(id: 4, x: 245, y: 200, bbox: (200, 100, 90, 200), pan: -0.25, proximity: 0.6, distCM: 55.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists4 = [Float?](repeating: 55.0, count: 10) + [Float?](repeating: 200.0, count: 14)
+        let obs4 = makeObs(threat: "WARNING", secDists: ["LEFT": 55.0, "CENTER": 100.0, "RIGHT": 200.0], obstacles: [obs4Item], bins: makeBins(dists: dists4))
+        let adv4 = estimateDirectionalAdvisory(observation: obs4, threat: "WARNING", now: 10.0)
+        precondition(adv4.state == "AVAILABLE", "CTO 4: state must be AVAILABLE")
+        precondition((adv4.angleDeg ?? 0.0) > 0.0, "CTO 4: expected right correction")
+        precondition(adv4.reasonCode == "AVAILABLE_CORRECTION", "CTO 4: reason must be AVAILABLE_CORRECTION")
+
+        // 5. Right side significantly encroaches -> AVAILABLE left correction
+        let obs5Item = SingleObstacle(id: 5, x: 395, y: 200, bbox: (350, 100, 90, 200), pan: 0.25, proximity: 0.6, distCM: 55.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists5 = [Float?](repeating: 200.0, count: 14) + [Float?](repeating: 55.0, count: 10)
+        let obs5 = makeObs(threat: "WARNING", secDists: ["LEFT": 200.0, "CENTER": 100.0, "RIGHT": 55.0], obstacles: [obs5Item], bins: makeBins(dists: dists5))
+        let adv5 = estimateDirectionalAdvisory(observation: obs5, threat: "WARNING", now: 10.0)
+        precondition(adv5.state == "AVAILABLE", "CTO 5: state must be AVAILABLE")
+        precondition((adv5.angleDeg ?? 0.0) < 0.0, "CTO 5: expected left correction")
+        precondition(adv5.reasonCode == "AVAILABLE_CORRECTION", "CTO 5: reason must be AVAILABLE_CORRECTION")
+
+        // 6. Large obstacle left of center, clear right corridor -> AVAILABLE right alternative
+        let obs6Item = SingleObstacle(id: 6, x: 320, y: 200, bbox: (270, 100, 100, 200), pan: 0.0, proximity: 0.7, distCM: 50.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists6 = [Float?](repeating: 50.0, count: 14) + [Float?](repeating: 200.0, count: 10)
+        let obs6 = makeObs(threat: "WARNING", secDists: ["LEFT": 50.0, "CENTER": 50.0, "RIGHT": 200.0], obstacles: [obs6Item], bins: makeBins(dists: dists6))
+        let adv6 = estimateDirectionalAdvisory(observation: obs6, threat: "WARNING", now: 10.0)
+        precondition(adv6.state == "AVAILABLE", "CTO 6: state must be AVAILABLE")
+        precondition((adv6.angleDeg ?? 0.0) >= 10.0, "CTO 6: expected right alternative")
+        precondition(adv6.reasonCode == "AVAILABLE_ALTERNATIVE", "CTO 6: reason must be AVAILABLE_ALTERNATIVE")
+
+        // 7. Large obstacle right of center, clear left corridor -> AVAILABLE left alternative
+        let obs7Item = SingleObstacle(id: 7, x: 320, y: 200, bbox: (270, 100, 100, 200), pan: 0.0, proximity: 0.7, distCM: 50.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists7 = [Float?](repeating: 200.0, count: 10) + [Float?](repeating: 50.0, count: 14)
+        let obs7 = makeObs(threat: "WARNING", secDists: ["LEFT": 200.0, "CENTER": 50.0, "RIGHT": 50.0], obstacles: [obs7Item], bins: makeBins(dists: dists7))
+        let adv7 = estimateDirectionalAdvisory(observation: obs7, threat: "WARNING", now: 10.0)
+        precondition(adv7.state == "AVAILABLE", "CTO 7: state must be AVAILABLE")
+        precondition((adv7.angleDeg ?? 0.0) <= -10.0, "CTO 7: expected left alternative")
+        precondition(adv7.reasonCode == "AVAILABLE_ALTERNATIVE", "CTO 7: reason must be AVAILABLE_ALTERNATIVE")
+
+        // 8. CRITICAL side obstacle, unaffected center -> AVAILABLE with appropriate hazard warning
+        let obs8Item = SingleObstacle(id: 8, x: 30, y: 200, bbox: (10, 100, 40, 200), pan: -0.85, proximity: 0.95, distCM: 35.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists8 = [Float?](repeating: 35.0, count: 4) + [Float?](repeating: 180.0, count: 20)
+        let obs8 = makeObs(threat: "CRITICAL", secDists: ["LEFT": 35.0, "CENTER": 180.0, "RIGHT": 180.0], obstacles: [obs8Item], bins: makeBins(dists: dists8))
+        let adv8 = estimateDirectionalAdvisory(observation: obs8, threat: "CRITICAL", now: 10.0)
+        precondition(adv8.state == "AVAILABLE", "CTO 8: state must be AVAILABLE despite critical side hazard")
+        precondition(abs(adv8.angleDeg ?? 99.0) <= 2.0, "CTO 8: forward walking path remains unobstructed")
+        precondition(adv8.reasonCode == "AVAILABLE_FORWARD", "CTO 8: reason must be AVAILABLE_FORWARD")
+        // Verify audio budget hazard warning preservation:
+        let kin8 = KinematicsResult(
+            primaryTTC: .infinity, primaryVelocityZ: 0, threats: [:],
+            safeDirection: "FORWARD", isEvading: false, threatLevel: "CRITICAL",
+            guidanceState: "HAZARD_IMMEDIATE", hazardState: "ACTIVE_HAZARD",
+            lostUnresolvedTimestamp: 0.0, timestamp: 10.0
+        )
+        let decision8 = budget.coordinate(obstacleResult: obs8, kinematicsResult: kin8, advisory: adv8)
+        precondition(decision8.isActive == true, "CTO 8: Audio warning must remain active")
+        precondition(decision8.threatLevel == "CRITICAL", "CTO 8: Audio must warn of critical threat")
+        precondition(decision8.cueMode == "SHARP_PING", "CTO 8: Audio cue must be SHARP_PING")
+        precondition(decision8.pan < -0.3, "CTO 8: Audio pan must indicate left side hazard")
+
+        // 9. Entire usable corridor blocked -> STOP
+        let obs9Item = SingleObstacle(id: 9, x: 320, y: 200, bbox: (100, 100, 440, 200), pan: 0.0, proximity: 0.9, distCM: 35.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let obs9 = makeObs(threat: "CRITICAL", secDists: ["LEFT": 35.0, "CENTER": 35.0, "RIGHT": 35.0], obstacles: [obs9Item], bins: makeBins(dists: [Float?](repeating: 35.0, count: 24)))
+        let adv9 = estimateDirectionalAdvisory(observation: obs9, threat: "CRITICAL", now: 10.0)
+        precondition(adv9.state == "STOP", "CTO 9: state must be STOP")
+        precondition(adv9.reasonCode == "CORRIDOR_OBSTRUCTED", "CTO 9: reason must be CORRIDOR_OBSTRUCTED")
+
+        // 10. Imminent unavoidable collision -> STOP
+        let obs10Item = SingleObstacle(id: 10, x: 320, y: 200, bbox: (260, 80, 120, 350), pan: 0.0, proximity: 1.0, distCM: 20.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs10 = makeObs(threat: "CRITICAL", secDists: ["LEFT": 20.0, "CENTER": 20.0, "RIGHT": 20.0], obstacles: [obs10Item], bins: makeBins(dists: [Float?](repeating: 20.0, count: 24)))
+        let adv10 = estimateDirectionalAdvisory(observation: obs10, threat: "CRITICAL", now: 10.0)
+        precondition(adv10.state == "STOP", "CTO 10: state must be STOP")
+        precondition(adv10.reasonCode == "CRITICAL_OBSTACLE", "CTO 10: reason must be CRITICAL_OBSTACLE")
+
+        // 11. Unknown central and side clearance -> UNAVAILABLE
+        let obs11Item = SingleObstacle(id: 11, x: 320, y: 200, bbox: (270, 100, 100, 200), pan: 0.0, proximity: 0.7, distCM: 50.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists11 = [Float?](repeating: nil, count: 24)
+        let obs11 = makeObs(threat: "WARNING", secDists: ["LEFT": .nan, "CENTER": 50.0, "RIGHT": .nan], obstacles: [obs11Item], bins: makeBins(dists: dists11))
+        let adv11 = estimateDirectionalAdvisory(observation: obs11, threat: "WARNING", now: 10.0)
+        precondition(adv11.state == "UNAVAILABLE", "CTO 11: state must be UNAVAILABLE")
+
+        // 12. Narrow gap below body-width requirement -> STOP
+        let obs12ItemL = SingleObstacle(id: 121, x: 200, y: 200, bbox: (100, 100, 200, 200), pan: -0.3, proximity: 0.8, distCM: 40.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let obs12ItemR = SingleObstacle(id: 122, x: 440, y: 200, bbox: (340, 100, 200, 200), pan: 0.3, proximity: 0.8, distCM: 40.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let dists12 = [Float?](repeating: 40.0, count: 11) + [180.0, 180.0] + [Float?](repeating: 40.0, count: 11)
+        let obs12 = makeObs(threat: "WARNING", secDists: ["LEFT": 40.0, "CENTER": 40.0, "RIGHT": 40.0], obstacles: [obs12ItemL, obs12ItemR], bins: makeBins(dists: dists12))
+        let adv12 = estimateDirectionalAdvisory(observation: obs12, threat: "WARNING", now: 10.0)
+        precondition(adv12.state == "STOP", "CTO 12: narrow gap below clearance requirement must be STOP")
+        precondition(adv12.reasonCode == "CORRIDOR_OBSTRUCTED", "CTO 12: reason must be CORRIDOR_OBSTRUCTED")
+
+        print("PASS Swift Center-Corridor First Hotfix Scenarios (12/12)")
     }
 }

@@ -315,8 +315,14 @@ final class AuditoryBudgetManager {
 
         // ── 3. Direct Spatial Hazard Localization (FIX-M01 & TASK 01A-2) ──────
         let finalSafeDir: String
-        if let adv = advisory, adv.state == "UNAVAILABLE" {
-            finalSafeDir = "NONE"
+        if let adv = advisory {
+            if adv.state == "UNAVAILABLE" {
+                finalSafeDir = "NONE"
+            } else if adv.state == "AVAILABLE" {
+                finalSafeDir = adv.reasonCode == "AVAILABLE_FORWARD" ? "FORWARD" : ((adv.angleDeg ?? 0) > 0 ? "RIGHT" : "LEFT")
+            } else {
+                finalSafeDir = safeDir
+            }
         } else {
             finalSafeDir = safeDir
         }
