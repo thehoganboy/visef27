@@ -29,6 +29,7 @@ ios/*.xcodeproj
 *.onnx.data
 
 # IDE & OS Artifacts
+artifacts/
 .idea/
 .vscode/
 .DS_Store

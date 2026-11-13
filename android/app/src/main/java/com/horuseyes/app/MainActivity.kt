@@ -10,6 +10,8 @@ import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.graphics.Color
+import android.view.MotionEvent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.*
@@ -57,6 +59,17 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
         sensors = getSystemService(SENSOR_SERVICE) as SensorManager
+        binding.btnStartStop.setOnTouchListener { v, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    v.animate().scaleX(0.96f).scaleY(0.96f).setDuration(120).start()
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    v.animate().scaleX(1.0f).scaleY(1.0f).setDuration(160).start()
+                }
+            }
+            false
+        }
         binding.btnStartStop.setOnClickListener {
             binding.btnStartStop.performHapticFeedback(android.view.HapticFeedbackConstants.CONFIRM)
             setRunning(!running)
@@ -80,6 +93,8 @@ class MainActivity : AppCompatActivity(), TelemetryListener, SensorEventListener
         analyzer?.setActive(value)
         binding.btnStartStop.text = if (value) "DỪNG" else "CHẠY"
         binding.btnStartStop.contentDescription = if (value) "Dừng nhận thức tránh va chạm" else "Bắt đầu nhận thức tránh va chạm"
+        binding.btnStartStop.setBackgroundResource(if (value) R.drawable.bg_button_dung else R.drawable.bg_button_chay)
+        binding.btnStartStop.setTextColor(if (value) Color.WHITE else Color.parseColor("#121418"))
         binding.overlayView.setState(if (value) "INITIALIZING" else "PAUSED")
         if (value) {
             try {

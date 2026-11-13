@@ -99,6 +99,7 @@ final class DemoController: ObservableObject {
         timer?.invalidate()
         timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
     }
+
     private func tick() {
         lock.lock(); yaw = imu.yawRateRadS; let frameTime = lastFrame; lock.unlock()
         guard active else { return }
@@ -113,17 +114,21 @@ final class DemoController: ObservableObject {
             }
         }
     }
+
     private func silentDecision() -> BudgetDecision {
         BudgetDecision(isActive: false, pan: 0, proximity: 0, distCM: .nan, ttc: .infinity,
             priorityScore: 0, volumeFactor: 0, safeDirection: "NONE", cueMode: "MUTED", threatLevel: "UNKNOWN", suppressedCount: 0)
     }
+
     private func fault() {
         threat = "SENSOR_FAULT"; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
         audio.update(decision: BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
             ttc: .infinity, priorityScore: 99, volumeFactor: 0.35, safeDirection: "STOP",
             cueMode: "SYSTEM_FAULT_TONE", threatLevel: "SENSOR_FAULT", suppressedCount: 0))
     }
+
     func toggle() { setActive(!active) }
+
     func setActive(_ value: Bool) {
         lock.lock(); generation += 1; enabled = value; lock.unlock()
         active = value; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
@@ -134,6 +139,7 @@ final class DemoController: ObservableObject {
         if value { audio.start() } else { audio.stop() }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
+
     func disappear() {
         guard isAppeared else { return }
         isAppeared = false
@@ -143,57 +149,156 @@ final class DemoController: ObservableObject {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// APPLE-INSPIRED LIQUID GLASS BUTTON STYLE
+// ═══════════════════════════════════════════════════════════════════════════════
+struct LiquidButtonStyle: ButtonStyle {
+    let isActive: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 30, weight: .bold))
+            .foregroundColor(isActive ? Color.white : Color(white: 0.08))
+            .frame(maxWidth: .infinity, minHeight: 124)
+            .background(
+                ZStack {
+                    if isActive {
+                        // Active DỪNG state: Apple System Red liquid gradient with specular top highlight
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 1.0, green: 0.27, blue: 0.23), Color(red: 0.85, green: 0.12, blue: 0.09)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.45), Color.white.opacity(0.1)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 1
+                            )
+                    } else {
+                        // Paused CHẠY state: Frosted glass finish with subtle specular highlight
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 0.97, green: 0.97, blue: 0.98), Color(red: 0.89, green: 0.89, blue: 0.92)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.8), Color.white.opacity(0.2)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 1
+                            )
+                    }
+                }
+            )
+            .shadow(color: isActive ? Color.red.opacity(0.3) : Color.black.opacity(0.25), radius: 8, x: 0, y: 4)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.spring(response: 0.24, dampingFraction: 0.68), value: configuration.isPressed)
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN APPLICATION VIEW
+// ═══════════════════════════════════════════════════════════════════════════════
 struct ContentView: View {
     @StateObject private var model = DemoController()
+
     var body: some View {
         VStack(spacing: 0) {
+            // Rounded Camera Preview Container (P1-01)
             ZStack {
                 CameraPreviewView(session: model.camera.session)
                 TrackingOverlayView(result: model.result, threatLevel: model.threat)
                 VStack {
                     Spacer()
                     DirectionIndicator(advisory: model.advisory, threat: model.threat)
-                        .padding(.bottom, 30)
+                        .padding(.bottom, 24)
                 }
-            }.clipped()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
+            )
+            .background(Color.black)
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
+
+            // Enlarged Liquid START/STOP Button (P0-03)
             Button(action: model.toggle) {
                 Text(model.active ? "DỪNG" : "CHẠY")
-                    .font(.system(size: 28, weight: .bold))
-                    .frame(maxWidth: .infinity, minHeight: 110)
-                    .foregroundColor(model.active ? Color.white : Color(white: 0.08))
-                    .background(model.active ? Color(red: 0.92, green: 0.31, blue: 0.31) : Color(white: 0.88)).cornerRadius(20)
             }
+            .buttonStyle(LiquidButtonStyle(isActive: model.active))
             .accessibilityLabel(model.active ? "Dừng nhận thức tránh va chạm" : "Bắt đầu nhận thức tránh va chạm")
             .padding(.horizontal, 16)
-            .padding(.vertical, 16)
+            .padding(.bottom, 16)
         }
-        .background(Color(white: 0.07))
+        .background(Color(red: 0.04, green: 0.04, blue: 0.05)) // Apple Dark Chassis (#0A0A0C)
         .onAppear { model.appear() }
         .onDisappear { model.disappear() }
     }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3D DIRECTIONAL ADVISORY INDICATOR (P0-01)
+// ═══════════════════════════════════════════════════════════════════════════════
 struct DirectionIndicator: View {
     let advisory: DirectionalAdvisory
     let threat: String
+
     var body: some View {
         Group {
             if let angle = advisory.drawableAngle(now: CACurrentMediaTime()), threat != "PAUSED" {
+                // Perceptual visual rotation mapping (P0-01)
+                let visualAngle = max(-45.0, min(45.0, angle * 1.4))
+                let lateralOffset = max(-35.0, min(35.0, visualAngle * 0.9))
+
                 Image(systemName: "arrow.up")
-                    .font(.system(size: 64, weight: .heavy))
-                    .rotationEffect(.degrees(angle)).scaleEffect(x: 1, y: 0.7)
-                    .foregroundStyle(LinearGradient(colors: [.white, .gray], startPoint: .top, endPoint: .bottom))
-                    .shadow(color: .black, radius: 1, x: 4, y: 7)
-                    .animation(.easeOut(duration: 0.15), value: angle)
+                    .font(.system(size: 80, weight: .heavy))
+                    .rotation3DEffect(.degrees(22), axis: (x: 1, y: 0, z: 0)) // 3D road perspective
+                    .rotationEffect(.degrees(visualAngle))
+                    .offset(x: lateralOffset)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color.white, Color(red: 0.88, green: 0.88, blue: 0.92)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .shadow(color: Color.black.opacity(0.75), radius: 6, x: 0, y: 5)
+                    .animation(.spring(response: 0.22, dampingFraction: 0.75), value: angle)
                     .accessibilityLabel("Estimated direction advisory")
             } else {
-                Label(threat == "CRITICAL" ? "STOP" : threat == "PAUSED" ? "PAUSED" : "UNAVAILABLE",
-                    systemImage: threat == "CRITICAL" ? "hand.raised.fill" : "minus.circle")
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundColor(threat == "CRITICAL" ? .red : .white)
-                    .padding(.horizontal, 22).padding(.vertical, 14)
-                    .background(Color.black.opacity(0.8)).cornerRadius(16)
-                    .accessibilityLabel(threat == "CRITICAL" ? "Stop. Obstacle detected" : "Direction unavailable")
+                Label(
+                    threat == "CRITICAL" ? "STOP" : threat == "PAUSED" ? "PAUSED" : "UNAVAILABLE",
+                    systemImage: threat == "CRITICAL" ? "hand.raised.fill" : "minus.circle"
+                )
+                .font(.system(size: 22, weight: .bold))
+                .foregroundColor(threat == "CRITICAL" ? Color(red: 1.0, green: 0.23, blue: 0.19) : Color(red: 0.95, green: 0.95, blue: 0.97))
+                .padding(.horizontal, 24)
+                .padding(.vertical, 14)
+                .background(
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color(white: 0.05).opacity(0.85))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                        )
+                )
+                .accessibilityLabel(threat == "CRITICAL" ? "Stop. Obstacle detected" : "Direction unavailable")
             }
         }
     }

@@ -380,52 +380,129 @@ class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs)
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val now = SystemClock.elapsedRealtimeNanos()
+        val density = resources.displayMetrics.density
+
         // Preview is live. Suppress brackets older than 250 ms rather than show
         // geometrically correct but temporally misleading stale detections.
         depth?.takeIf { now - timestamp <= 250_000_000L }?.let { d ->
             val sh = 1f; val sw = d.sourceAspect
             val scale = min(width / sw, height / sh)
             val ox = (width - sw * scale) / 2; val oy = (height - scale) / 2
-            paint.color = when (threat) {
-                "CRITICAL" -> Color.rgb(239, 68, 74)
-                "WARNING" -> Color.rgb(245, 180, 60)
-                else -> Color.LTGRAY
+
+            val primaryColor = when (threat) {
+                "CRITICAL" -> Color.rgb(255, 59, 48)   // Apple Red
+                "WARNING" -> Color.rgb(255, 149, 0)    // Apple Orange
+                else -> Color.rgb(242, 242, 247)       // Apple Crisp White
             }
-            paint.strokeWidth = 3 * resources.displayMetrics.density
+
             for (o in d.allObstacles) {
                 val l = ox + o.bbox.left.toFloat() / d.width * sw * scale
                 val r = ox + o.bbox.right.toFloat() / d.width * sw * scale
                 val t = oy + o.bbox.top.toFloat() / d.height * scale
                 val b = oy + o.bbox.bottom.toFloat() / d.height * scale
-                val leg = min(20 * resources.displayMetrics.density, min(r - l, b - t) / 3)
+                val leg = min(26f * density, min(r - l, b - t) / 2.8f)
+
+                // Pass 1: Outer dark outline for high contrast against bright scenes
+                paint.color = Color.argb(220, 0, 0, 0)
+                paint.strokeWidth = 7.0f * density
+                paint.strokeCap = Paint.Cap.ROUND
+                for ((x, y, dx, dy) in listOf(listOf(l, t, 1f, 1f), listOf(r, t, -1f, 1f), listOf(l, b, 1f, -1f), listOf(r, b, -1f, -1f))) {
+                    canvas.drawLine(x, y, x + dx * leg, y, paint)
+                    canvas.drawLine(x, y, x, y + dy * leg, paint)
+                }
+
+                // Pass 2: Vivid inner colored stroke
+                paint.color = primaryColor
+                paint.strokeWidth = 4.5f * density
+                paint.strokeCap = Paint.Cap.ROUND
                 for ((x, y, dx, dy) in listOf(listOf(l, t, 1f, 1f), listOf(r, t, -1f, 1f), listOf(l, b, 1f, -1f), listOf(r, b, -1f, -1f))) {
                     canvas.drawLine(x, y, x + dx * leg, y, paint)
                     canvas.drawLine(x, y, x, y + dy * leg, paint)
                 }
             }
         }
-        val cx = width / 2f; val cy = height * 0.87f
+
+        val cx = width / 2f
+        val cy = height * 0.86f
         val angle = advisory.drawableAngle(now)
+
         if (angle != null && threat != "PAUSED") {
-            canvas.save(); canvas.translate(cx, cy); canvas.scale(1f, 0.7f); canvas.rotate(angle)
+            // Perceptual visual rotation mapping (P0-01)
+            val visualAngle = (angle * 1.4f).coerceIn(-45f, 45f)
+            val lateralOffset = (visualAngle * 0.9f * density).coerceIn(-35f * density, 35f * density)
+
+            canvas.save()
+            canvas.translate(cx + lateralOffset, cy)
+            canvas.scale(1.10f, 0.75f) // 3D road-projected perspective
+            canvas.rotate(visualAngle)
+
+            // Scaled 1.25x 3D arrow path with wider arrowhead
             val path = Path().apply {
-                moveTo(-13f, 25f); lineTo(13f, 25f); lineTo(13f, -15f); lineTo(28f, -15f)
-                lineTo(0f, -53f); lineTo(-28f, -15f); lineTo(-13f, -15f); close()
+                moveTo(-16f * density, 32f * density)
+                lineTo(16f * density, 32f * density)
+                lineTo(16f * density, -20f * density)
+                lineTo(38f * density, -20f * density)
+                lineTo(0f, -68f * density) // Prominent arrowhead tip
+                lineTo(-38f * density, -20f * density)
+                lineTo(-16f * density, -20f * density)
+                close()
             }
-            paint.color = Color.DKGRAY; canvas.save(); canvas.translate(4f, 7f); canvas.drawPath(path, paint); canvas.restore()
-            paint.color = Color.LTGRAY; canvas.drawPath(path, paint); canvas.restore()
+
+            // Outer drop shadow
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(160, 0, 0, 0)
+            canvas.save()
+            canvas.translate(0f, 6f * density)
+            canvas.drawPath(path, paint)
+            canvas.restore()
+
+            // Outer dark stroke for maximum edge contrast
+            paint.style = Paint.Style.STROKE
+            paint.color = Color.argb(120, 0, 0, 0)
+            paint.strokeWidth = 2.5f * density
+            canvas.drawPath(path, paint)
+
+            // Front surface: Crisp silver-white gradient
+            paint.style = Paint.Style.FILL
+            paint.shader = android.graphics.LinearGradient(
+                0f, -68f * density, 0f, 32f * density,
+                Color.WHITE, Color.rgb(209, 209, 214),
+                android.graphics.Shader.TileMode.CLAMP
+            )
+            canvas.drawPath(path, paint)
+            paint.shader = null
+
+            canvas.restore()
         } else {
             val text = when (threat) {
                 "PAUSED" -> "PAUSED"
                 "CRITICAL" -> "STOP"
                 else -> "UNAVAILABLE"
             }
-            paint.textSize = 22 * resources.displayMetrics.scaledDensity; paint.textAlign = Paint.Align.CENTER
-            paint.color = Color.argb(220, 18, 20, 24)
-            canvas.drawRoundRect(cx - 150 * resources.displayMetrics.density, cy - 40, cx + 150 * resources.displayMetrics.density, cy + 25, 16f, 16f, paint)
-            paint.color = if (threat == "CRITICAL") Color.rgb(239, 68, 74) else Color.LTGRAY
-            canvas.drawText(text, cx, cy + 5, paint)
+            paint.style = Paint.Style.FILL
+            paint.textSize = 22f * density
+            paint.textAlign = Paint.Align.CENTER
+            paint.isFakeBoldText = true
+
+            // Pill badge background
+            paint.color = Color.argb(215, 12, 14, 18)
+            val badgeHalfW = 120f * density
+            val badgeH = 26f * density
+            canvas.drawRoundRect(cx - badgeHalfW, cy - badgeH, cx + badgeHalfW, cy + badgeH, 18f * density, 18f * density, paint)
+
+            // Pill subtle border
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1f * density
+            paint.color = Color.argb(60, 255, 255, 255)
+            canvas.drawRoundRect(cx - badgeHalfW, cy - badgeH, cx + badgeHalfW, cy + badgeH, 18f * density, 18f * density, paint)
+
+            // Text
+            paint.style = Paint.Style.FILL
+            paint.color = if (threat == "CRITICAL") Color.rgb(255, 59, 48) else Color.rgb(242, 242, 247)
+            canvas.drawText(text, cx, cy + 8f * density, paint)
+            paint.isFakeBoldText = false
         }
+
         if (depth != null) postInvalidateDelayed(250)
     }
 }
