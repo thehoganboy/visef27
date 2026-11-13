@@ -33,6 +33,7 @@ import Foundation
         testLowLightRobustnessAndLocalDisparity()
         testLowLightReleaseCandidateCorrectiveAudit()
         testFinalDeviceReadinessAudioSync()
+        testObstacleAvoidanceHotfixScenarios()
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {
@@ -808,5 +809,129 @@ import Foundation
         precondition(advStale.reasonCode == "SOURCE_FRAME_STALE", "Reason code must be SOURCE_FRAME_STALE")
 
         print("PASS Swift Final Device Readiness Audio Sync Tests")
+    }
+
+    static func testObstacleAvoidanceHotfixScenarios() {
+        let halfFov: Float = 32.5
+        let binW: Float = 65.0 / 24.0
+        func makeBins(dists: [Float?]) -> [SpatialBin] {
+            return (0..<24).map { i in
+                let aMin = -halfFov + Float(i) * binW
+                let aMax = aMin + binW
+                let aCenter = (aMin + aMax) / 2.0
+                let d = dists[i]
+                let isV = d != nil && d!.isFinite && d! > 0
+                return SpatialBin(
+                    binId: i, angleMin: aMin, angleMax: aMax, angleCenter: aCenter,
+                    validRatio: isV ? 1.0 : 0.0, rawDepthStatistic: 200.0,
+                    distCM: isV ? d! : .nan, isValid: isV, hasObstacle: false,
+                    bodyDistCM: isV ? d! : .nan, groundDistCM: .nan, overheadDistCM: .nan
+                )
+            }
+        }
+        func makeObs(
+            threat: String = "SAFE",
+            secDists: [String: Float],
+            obstacles: [SingleObstacle],
+            bins: [SpatialBin],
+            camW: Int = 640,
+            camH: Int = 480
+        ) -> ObstacleDetectionResult {
+            let centerD = secDists["CENTER"] ?? .nan
+            return ObstacleDetectionResult(
+                x: camW / 2, y: camH / 2,
+                bbox: (x: camW / 4, y: camH / 4, w: camW / 2, h: camH / 2),
+                pan: 0.0, proximity: 0.3, distCM: centerD,
+                modeText: "TEST", uncertaintyScore: 0.1, isWall: false,
+                sectorDists: secDists, allObstacles: obstacles,
+                isZeroLuxBlind: false, isOverheadHazard: false, isDropOffHazard: false,
+                camWidth: camW, camHeight: camH, isValid: true,
+                spatialBins: bins, timestamp: 10.0
+            )
+        }
+
+        // 1. Small obstacle far left -> AVAILABLE forward if forward corridor supported
+        let obs1Item = SingleObstacle(id: 1, x: 25, y: 200, bbox: (10, 100, 30, 200), pan: -0.85, proximity: 0.4, distCM: 70.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs1 = makeObs(secDists: ["LEFT": 70.0, "CENTER": 200.0, "RIGHT": 200.0], obstacles: [obs1Item], bins: makeBins(dists: [Float?](repeating: 200.0, count: 24)))
+        let adv1 = estimateDirectionalAdvisory(observation: obs1, threat: "SAFE", now: 10.0)
+        precondition(adv1.state == "AVAILABLE", "Scenario 1 failed state")
+        precondition(abs(adv1.angleDeg ?? 99.0) <= 2.0, "Scenario 1 failed angle: expected forward, got \(String(describing: adv1.angleDeg))")
+        precondition(adv1.reasonCode == "AVAILABLE_FORWARD", "Scenario 1 failed reason code")
+
+        // 2. Small obstacle far right -> AVAILABLE forward
+        let obs2Item = SingleObstacle(id: 2, x: 615, y: 200, bbox: (600, 100, 30, 200), pan: 0.85, proximity: 0.4, distCM: 70.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs2 = makeObs(secDists: ["LEFT": 200.0, "CENTER": 200.0, "RIGHT": 70.0], obstacles: [obs2Item], bins: makeBins(dists: [Float?](repeating: 200.0, count: 24)))
+        let adv2 = estimateDirectionalAdvisory(observation: obs2, threat: "SAFE", now: 10.0)
+        precondition(adv2.state == "AVAILABLE", "Scenario 2 failed state")
+        precondition(abs(adv2.angleDeg ?? 99.0) <= 2.0, "Scenario 2 failed angle: expected forward, got \(String(describing: adv2.angleDeg))")
+        precondition(adv2.reasonCode == "AVAILABLE_FORWARD", "Scenario 2 failed reason code")
+
+        // 3. Left obstacle encroaching into forward corridor -> AVAILABLE with supported right correction
+        let obs3Item = SingleObstacle(id: 3, x: 245, y: 200, bbox: (200, 100, 90, 200), pan: -0.25, proximity: 0.6, distCM: 55.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists3: [Float?] = [Float?](repeating: 55.0, count: 10) + [Float?](repeating: 200.0, count: 14)
+        let obs3 = makeObs(threat: "WARNING", secDists: ["LEFT": 55.0, "CENTER": 100.0, "RIGHT": 200.0], obstacles: [obs3Item], bins: makeBins(dists: dists3))
+        let adv3 = estimateDirectionalAdvisory(observation: obs3, threat: "WARNING", now: 10.0)
+        precondition(adv3.state == "AVAILABLE", "Scenario 3 failed state")
+        precondition((adv3.angleDeg ?? 0.0) > 0.0, "Scenario 3 failed angle: expected right correction, got \(String(describing: adv3.angleDeg))")
+        precondition(adv3.reasonCode == "AVAILABLE_CORRECTION", "Scenario 3 failed reason code")
+
+        // 4. Right obstacle encroaching -> AVAILABLE with supported left correction
+        let obs4Item = SingleObstacle(id: 4, x: 395, y: 200, bbox: (350, 100, 90, 200), pan: 0.25, proximity: 0.6, distCM: 55.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists4: [Float?] = [Float?](repeating: 200.0, count: 14) + [Float?](repeating: 55.0, count: 10)
+        let obs4 = makeObs(threat: "WARNING", secDists: ["LEFT": 200.0, "CENTER": 100.0, "RIGHT": 55.0], obstacles: [obs4Item], bins: makeBins(dists: dists4))
+        let adv4 = estimateDirectionalAdvisory(observation: obs4, threat: "WARNING", now: 10.0)
+        precondition(adv4.state == "AVAILABLE", "Scenario 4 failed state")
+        precondition((adv4.angleDeg ?? 0.0) < 0.0, "Scenario 4 failed angle: expected left correction, got \(String(describing: adv4.angleDeg))")
+        precondition(adv4.reasonCode == "AVAILABLE_CORRECTION", "Scenario 4 failed reason code")
+
+        // 5. Central obstacle with sufficient side passage -> AVAILABLE alternative
+        let obs5Item = SingleObstacle(id: 5, x: 320, y: 200, bbox: (270, 100, 100, 200), pan: 0.0, proximity: 0.7, distCM: 50.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists5: [Float?] = [Float?](repeating: 50.0, count: 14) + [Float?](repeating: 200.0, count: 10)
+        let obs5 = makeObs(threat: "WARNING", secDists: ["LEFT": 50.0, "CENTER": 50.0, "RIGHT": 200.0], obstacles: [obs5Item], bins: makeBins(dists: dists5))
+        let adv5 = estimateDirectionalAdvisory(observation: obs5, threat: "WARNING", now: 10.0)
+        precondition(adv5.state == "AVAILABLE", "Scenario 5 failed state")
+        precondition((adv5.angleDeg ?? 0.0) >= 10.0, "Scenario 5 failed angle: expected alternative >= 10 deg, got \(String(describing: adv5.angleDeg))")
+        precondition(adv5.reasonCode == "AVAILABLE_ALTERNATIVE", "Scenario 5 failed reason code")
+
+        // 6. Both sides and center obstructed -> STOP
+        let obs6Item = SingleObstacle(id: 6, x: 320, y: 200, bbox: (100, 100, 440, 200), pan: 0.0, proximity: 0.9, distCM: 35.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let obs6 = makeObs(threat: "CRITICAL", secDists: ["LEFT": 35.0, "CENTER": 35.0, "RIGHT": 35.0], obstacles: [obs6Item], bins: makeBins(dists: [Float?](repeating: 35.0, count: 24)))
+        let adv6 = estimateDirectionalAdvisory(observation: obs6, threat: "CRITICAL", now: 10.0)
+        precondition(adv6.state == "STOP", "Scenario 6 failed state")
+        precondition(adv6.reasonCode == "CORRIDOR_OBSTRUCTED", "Scenario 6 failed reason code")
+
+        // 7. Narrow gap below body-clearance requirement -> STOP
+        let obs7ItemL = SingleObstacle(id: 71, x: 200, y: 200, bbox: (100, 100, 200, 200), pan: -0.3, proximity: 0.8, distCM: 40.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let obs7ItemR = SingleObstacle(id: 72, x: 440, y: 200, bbox: (340, 100, 200, 200), pan: 0.3, proximity: 0.8, distCM: 40.0, modeText: "WALL", uncertaintyScore: 0.1, isWall: true)
+        let dists7: [Float?] = [Float?](repeating: 40.0, count: 11) + [180.0, 180.0] + [Float?](repeating: 40.0, count: 11)
+        let obs7 = makeObs(threat: "WARNING", secDists: ["LEFT": 40.0, "CENTER": 40.0, "RIGHT": 40.0], obstacles: [obs7ItemL, obs7ItemR], bins: makeBins(dists: dists7))
+        let adv7 = estimateDirectionalAdvisory(observation: obs7, threat: "WARNING", now: 10.0)
+        precondition(adv7.state == "STOP", "Scenario 7 failed state: narrow gap must STOP")
+        precondition(adv7.reasonCode == "CORRIDOR_OBSTRUCTED", "Scenario 7 failed reason code")
+
+        // 8. Unknown side passage -> UNAVAILABLE, not invented AVAILABLE
+        let obs8Item = SingleObstacle(id: 8, x: 320, y: 200, bbox: (270, 100, 100, 200), pan: 0.0, proximity: 0.7, distCM: 50.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists8 = [Float?](repeating: nil, count: 24)
+        let obs8 = makeObs(threat: "WARNING", secDists: ["LEFT": .nan, "CENTER": 50.0, "RIGHT": .nan], obstacles: [obs8Item], bins: makeBins(dists: dists8))
+        let adv8 = estimateDirectionalAdvisory(observation: obs8, threat: "WARNING", now: 10.0)
+        precondition(adv8.state == "UNAVAILABLE", "Scenario 8 failed state: unknown passage must be UNAVAILABLE")
+
+        // 9. Imminent unavoidable collision -> STOP immediately
+        let obs9Item = SingleObstacle(id: 9, x: 320, y: 200, bbox: (260, 80, 120, 350), pan: 0.0, proximity: 1.0, distCM: 20.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let obs9 = makeObs(threat: "CRITICAL", secDists: ["LEFT": 20.0, "CENTER": 20.0, "RIGHT": 20.0], obstacles: [obs9Item], bins: makeBins(dists: [Float?](repeating: 20.0, count: 24)))
+        let adv9 = estimateDirectionalAdvisory(observation: obs9, threat: "CRITICAL", now: 10.0)
+        precondition(adv9.state == "STOP", "Scenario 9 failed state: imminent collision must force STOP")
+        precondition(adv9.reasonCode == "CRITICAL_OBSTACLE", "Scenario 9 failed reason code")
+
+        // 10. Existing valid heading becomes obstructed -> no smoothed arrow through the obstacle
+        let obs10Item = SingleObstacle(id: 10, x: 320, y: 200, bbox: (270, 100, 100, 200), pan: 0.0, proximity: 0.8, distCM: 45.0, modeText: "OBSTACLE", uncertaintyScore: 0.1, isWall: false)
+        let dists10: [Float?] = [Float?](repeating: 45.0, count: 12) + [Float?](repeating: 200.0, count: 12)
+        let obs10 = makeObs(threat: "WARNING", secDists: ["LEFT": 45.0, "CENTER": 45.0, "RIGHT": 200.0], obstacles: [obs10Item], bins: makeBins(dists: dists10))
+        let adv10 = estimateDirectionalAdvisory(observation: obs10, threat: "WARNING", now: 10.0, prevAngle: 0.0)
+        precondition(adv10.state == "AVAILABLE", "Scenario 10 failed state")
+        guard let a10 = adv10.angleDeg else { fatalError("Scenario 10 missing angle") }
+        precondition(a10 >= 12.0, "Scenario 10 failed: angle must not interpolate through center obstacle (expected >= 12.0, got \(a10))")
+
+        print("PASS Swift Final Obstacle Avoidance Policy Scenarios (10/10)")
     }
 }

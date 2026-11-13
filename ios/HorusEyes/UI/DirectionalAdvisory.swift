@@ -109,19 +109,13 @@ func estimateDirectionalAdvisory(
     let validR = zRightRaw != nil && zRightRaw!.isFinite && zRightRaw! > 0
     let zRight = validR ? Double(zRightRaw!) : Double.nan
 
-    // Completely obstructed check if all sectors are valid and close
-    if validC && zCenter < 50.0 && validL && zLeft < 60.0 && validR && zRight < 60.0 {
-        if !obs.spatialBins.isEmpty {
-            let cBins = obs.spatialBins.filter { abs(Double($0.angleCenter)) <= 6.0 && $0.isValid }
-            let cDists = cBins.map { Double($0.distCM) }
-            let finiteCDists = cDists.filter { $0.isFinite && $0 > 0 }
-            if finiteCDists.count == cBins.count && !finiteCDists.isEmpty && finiteCDists.allSatisfy({ $0 >= 75.0 }) {
-                // Central corridor is genuinely open with valid distance readings (doorway clearance)
-            } else {
-                return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CORRIDOR_OBSTRUCTED")
-            }
-        } else {
-            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CORRIDOR_OBSTRUCTED")
+    // Priority 4 — Immediate frontal collision (< 25cm) under CRITICAL threat forces emergency STOP
+    if threat == "CRITICAL" {
+        let centerImminent = (validC && zCenter < 25.0) || obs.allObstacles.contains(where: {
+            $0.distCM.isFinite && $0.distCM > 0 && $0.distCM < 25.0 && abs(Double($0.pan)) < 0.35
+        })
+        if centerImminent {
+            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CRITICAL_OBSTACLE")
         }
     }
 
@@ -137,7 +131,10 @@ func estimateDirectionalAdvisory(
 
     struct ObsProfile {
         let angCenter: Double
+        let angLeft: Double
+        let angRight: Double
         let radius: Double
+        let margin: Double
         let weight: Double
         let zObs: Double
         let isValidDist: Bool
@@ -151,26 +148,57 @@ func estimateDirectionalAdvisory(
         let angLeft = atan2(l - cx, fx) * 180.0 / .pi
         let angRight = atan2(r - cx, fx) * 180.0 / .pi
         let angCenter = (angLeft + angRight) / 2.0
-        let angHalfW = max(2.0, (angRight - angLeft) / 2.0)
+        let angHalfW = max(1.5, (angRight - angLeft) / 2.0)
         let totalRadius: Double
+        let marginDeg: Double
         let weight: Double
         let zVal: Double
         if isDistValid {
             zVal = max(10.0, Double(o.distCM))
-            let marginDeg = min(22.0, max(4.0, atan2(20.0, zVal) * 180.0 / .pi))
+            marginDeg = min(25.0, max(4.0, atan2(20.0, zVal) * 180.0 / .pi))
             totalRadius = angHalfW + marginDeg
-            if zVal < 50.0 { weight = 20.0 }
-            else if zVal < 80.0 { weight = 10.0 }
-            else if zVal < 150.0 { weight = 4.0 }
+            if zVal < 35.0 { weight = 20.0 }
+            else if zVal < 50.0 { weight = 15.0 }
+            else if zVal < 80.0 { weight = 8.0 }
+            else if zVal < 150.0 { weight = 3.0 }
             else { weight = 1.0 }
         } else {
             // Unknown-distance obstacle: retain image-space angular occupancy without fabricating 100cm
             zVal = Double.nan
-            let marginDeg = 8.0
+            marginDeg = 8.0
             totalRadius = angHalfW + marginDeg
-            weight = 12.0
+            weight = 10.0
         }
-        profiles.append(ObsProfile(angCenter: angCenter, radius: totalRadius, weight: weight, zObs: zVal, isValidDist: isDistValid))
+        profiles.append(ObsProfile(
+            angCenter: angCenter,
+            angLeft: angLeft,
+            angRight: angRight,
+            radius: totalRadius,
+            margin: marginDeg,
+            weight: weight,
+            zObs: zVal,
+            isValidDist: isDistValid
+        ))
+    }
+
+    let isAngleBlocked = { (cand: Double) -> Bool in
+        for p in profiles {
+            let dEdge: Double
+            if cand < p.angLeft {
+                dEdge = p.angLeft - cand
+            } else if cand > p.angRight {
+                dEdge = cand - p.angRight
+            } else {
+                dEdge = 0.0
+            }
+            if !p.isValidDist {
+                if dEdge < p.margin { return true }
+            } else {
+                if p.zObs < 50.0 && dEdge < p.margin { return true }
+                if p.zObs < 35.0 && dEdge < (p.margin + 2.0) { return true }
+            }
+        }
+        return false
     }
 
     let bins = obs.spatialBins
@@ -317,19 +345,7 @@ func estimateDirectionalAdvisory(
         if !candSupported { continue }
 
         var isBlocked = false
-        if candDist < 40.0 { isBlocked = true }
-
-        if !isBlocked {
-            for p in profiles {
-                let dAng = abs(cand - p.angCenter)
-                if !p.isValidDist {
-                    if dAng < p.radius { isBlocked = true; break }
-                } else {
-                    if p.zObs < 50.0 && dAng < p.radius { isBlocked = true; break }
-                    if p.zObs < 35.0 && dAng < (p.radius + 2.0) { isBlocked = true; break }
-                }
-            }
-        }
+        if candDist < 40.0 || isAngleBlocked(cand) { isBlocked = true }
 
         if isBlocked {
             obstructedCount += 1
@@ -338,20 +354,27 @@ func estimateDirectionalAdvisory(
 
         var risk = 0.0
         for p in profiles {
-            let dAng = abs(cand - p.angCenter)
-            if dAng < p.radius {
-                let penetration = 1.0 - (dAng / p.radius)
-                risk += p.weight * (penetration * penetration) * 15.0
+            let dEdge: Double
+            if cand < p.angLeft {
+                dEdge = p.angLeft - cand
+            } else if cand > p.angRight {
+                dEdge = cand - p.angRight
             } else {
-                let dEdge = dAng - p.radius
-                if dEdge < 15.0 {
-                    risk += p.weight * exp(-((dEdge * dEdge) / 40.0)) * 2.0
+                dEdge = 0.0
+            }
+            if dEdge < p.margin {
+                let pen = 1.0 - (dEdge / max(1.0, p.margin))
+                risk += p.weight * (pen * pen) * 12.0
+            } else {
+                let buf = dEdge - p.margin
+                if buf < 15.0 {
+                    risk += p.weight * exp(-((buf * buf) / 40.0)) * 1.5
                 }
             }
         }
 
-        if candDist < 80.0 { risk += ((80.0 - candDist) / 10.0) * 4.0 }
-        else if candDist < 150.0 { risk += ((150.0 - candDist) / 70.0) * 1.5 }
+        if candDist < 80.0 { risk += ((80.0 - candDist) / 10.0) * 3.0 }
+        else if candDist < 150.0 { risk += ((150.0 - candDist) / 70.0) * 1.0 }
 
         risk += 0.05 * abs(cand)
 
@@ -376,6 +399,28 @@ func estimateDirectionalAdvisory(
         }
     }
 
+    let isHeadingEligible = { (ang: Double) -> Bool in
+        if abs(ang) > halfFov { return false }
+        if isAngleBlocked(ang) { return false }
+        if !bins.isEmpty {
+            let cMin = ang - 2.5
+            let cMax = ang + 2.5
+            var vDists: [Double] = []
+            for b in bins {
+                let bMin = Double(b.angleMin)
+                let bMax = Double(b.angleMax)
+                if bMax <= bMin { continue }
+                let ov = max(0.0, min(bMax, cMax) - max(bMin, cMin))
+                if ov > 0.0 && b.isValid {
+                    let d = Double(b.distCM)
+                    if d.isFinite && d > 0 { vDists.append(d) }
+                }
+            }
+            if let minD = vDists.min(), minD < 40.0 { return false }
+        }
+        return true
+    }
+
     // ── Step 6: Hierarchical Movement Policy (P0-02 Corridor Evidence) ──
 
     // Priority 1: HOLD FORWARD
@@ -391,34 +436,72 @@ func estimateDirectionalAdvisory(
         }
     }
 
-    let fwdEncroached = profiles.contains { abs($0.angCenter) < $0.radius }
+    let fwdEncroached = profiles.contains { p in
+        p.angRight > -p.margin && p.angLeft < p.margin && (p.zObs.isNaN || p.zObs < 150.0)
+    }
 
-    if fwdEligible && !fwdEncroached && fwdDist >= 75.0 && fwdRisk <= 4.0 {
+    if fwdEligible && !fwdEncroached && fwdDist >= 75.0 && fwdRisk <= 6.0 {
         var angleOut = 0.0
         if let prev = prevAngle, prev.isFinite {
-            angleOut = 0.35 * 0.0 + 0.65 * prev
-            if abs(angleOut) < 1.0 { angleOut = 0.0 }
+            let smoothed = 0.35 * 0.0 + 0.65 * prev
+            if abs(smoothed) < 1.0 || !isHeadingEligible(smoothed) {
+                angleOut = 0.0
+            } else {
+                angleOut = smoothed
+            }
         }
-        return DirectionalAdvisory(state: "AVAILABLE", angleDeg: angleOut, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_FORWARD")
+        return DirectionalAdvisory(state: "AVAILABLE", angleDeg: (angleOut * 10.0).rounded() / 10.0, confidence: 0.55, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_FORWARD")
     }
 
     // Priority 2: SMALL CORRECTION
-    let smallCandidates = eligibleCandidates.filter { abs($0.ang) <= 12.5 }
-    if !smallCandidates.isEmpty {
-        let bestSc = smallCandidates.min { ($0.risk + 0.08 * abs($0.ang)) < ($1.risk + 0.08 * abs($1.ang)) }!
-        if bestSc.risk < 20.0 && (!fwdEligible || fwdEncroached || bestSc.risk < fwdRisk - 0.5) {
+    let leftEncroached = profiles.contains { p in
+        p.angCenter < 0.0 && p.angRight > -p.margin && (p.zObs.isNaN || p.zObs < 150.0)
+    }
+    let rightEncroached = profiles.contains { p in
+        p.angCenter > 0.0 && p.angLeft < p.margin && (p.zObs.isNaN || p.zObs < 150.0)
+    }
+    let smallCandidates = eligibleCandidates.filter { abs($0.ang) <= 15.0 && $0.zSec >= 50.0 }
+
+    if leftEncroached && !rightEncroached {
+        let rCands = smallCandidates.filter { $0.ang > 1.0 }
+        if let bestSc = rCands.min(by: { ($0.risk + 0.08 * abs($0.ang)) < ($1.risk + 0.08 * abs($1.ang)) }) {
             var scAngle = bestSc.ang
             if let prev = prevAngle, prev.isFinite {
-                scAngle = 0.45 * scAngle + 0.55 * prev
+                let sm = 0.45 * scAngle + 0.55 * prev
+                if isHeadingEligible(sm) { scAngle = sm }
             }
             scAngle = max(-halfFov, min(halfFov, scAngle))
             let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
-            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: scAngle, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_CORRECTION")
+            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: (scAngle * 10.0).rounded() / 10.0, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_CORRECTION")
+        }
+    } else if rightEncroached && !leftEncroached {
+        let lCands = smallCandidates.filter { $0.ang < -1.0 }
+        if let bestSc = lCands.min(by: { ($0.risk + 0.08 * abs($0.ang)) < ($1.risk + 0.08 * abs($1.ang)) }) {
+            var scAngle = bestSc.ang
+            if let prev = prevAngle, prev.isFinite {
+                let sm = 0.45 * scAngle + 0.55 * prev
+                if isHeadingEligible(sm) { scAngle = sm }
+            }
+            scAngle = max(-halfFov, min(halfFov, scAngle))
+            let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
+            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: (scAngle * 10.0).rounded() / 10.0, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_CORRECTION")
+        }
+    } else if !smallCandidates.isEmpty && (!fwdEligible || fwdEncroached) {
+        let bestSc = smallCandidates.min(by: { ($0.risk + 0.08 * abs($0.ang)) < ($1.risk + 0.08 * abs($1.ang)) })!
+        if bestSc.risk < 25.0 {
+            var scAngle = bestSc.ang
+            if let prev = prevAngle, prev.isFinite {
+                let sm = 0.45 * scAngle + 0.55 * prev
+                if isHeadingEligible(sm) { scAngle = sm }
+            }
+            scAngle = max(-halfFov, min(halfFov, scAngle))
+            let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
+            return DirectionalAdvisory(state: "AVAILABLE", angleDeg: (scAngle * 10.0).rounded() / 10.0, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_CORRECTION")
         }
     }
 
     // Priority 3: ALTERNATIVE HEADING
-    var bestCand = 0.0
+    var bestCand = eligibleCandidates[0]
     var minCost = Double.infinity
     for c in eligibleCandidates {
         var cost = c.risk + 0.08 * abs(c.ang)
@@ -427,31 +510,23 @@ func estimateDirectionalAdvisory(
         }
         if cost < minCost {
             minCost = cost
-            bestCand = c.ang
+            bestCand = c
         }
     }
 
-    if minCost > 30.0 {
-        return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "NO_SAFE_PATH")
-    }
-
-    if threat == "CRITICAL" && validC {
-        // Immediate frontal collision (< 25cm) forces emergency STOP
-        if zCenter < 25.0 {
-            return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CRITICAL_OBSTACLE")
-        }
-        // Constrained center hazard (< 40cm): allow alternative heading only if genuinely safe and has clearance
-        if zCenter < 40.0 && (minCost > 15.0 || !eligibleCandidates.contains(where: { abs($0.ang - bestCand) < 1.5 && $0.zSec >= 60.0 })) {
+    if threat == "CRITICAL" && validC && zCenter < 40.0 {
+        if bestCand.zSec < 50.0 {
             return DirectionalAdvisory(state: "STOP", observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "CRITICAL_OBSTACLE")
         }
     }
 
-    let conf = max(0.30, min(0.55, 1.0 - (minCost / 35.0)))
-    var selected = bestCand
+    var selected = bestCand.ang
     if let prev = prevAngle, prev.isFinite {
-        selected = 0.45 * selected + 0.55 * prev
+        let sm = 0.45 * selected + 0.55 * prev
+        if isHeadingEligible(sm) { selected = sm }
     }
     selected = max(-halfFov, min(halfFov, selected))
+    let conf = max(0.30, min(0.55, 1.0 - (minCost / 35.0)))
 
-    return DirectionalAdvisory(state: "AVAILABLE", angleDeg: selected, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_ALTERNATIVE")
+    return DirectionalAdvisory(state: "AVAILABLE", angleDeg: (selected * 10.0).rounded() / 10.0, confidence: conf, observedAngularRange: obsRange, sourceTimestamp: advTs, reasonCode: "AVAILABLE_ALTERNATIVE")
 }
