@@ -240,13 +240,14 @@ func estimateDirectionalAdvisory(
                 reasonCode: "AVAILABLE_FORWARD"
             )
         } else if centerSupported && candDist.isFinite && candDist < 40.0 {
+            let stopCode = threat == "CRITICAL" ? "CRITICAL_OBSTACLE" : "CORRIDOR_OBSTRUCTED"
             return DirectionalAdvisory(
                 state: "STOP",
                 angleDeg: nil,
                 confidence: nil,
                 observedAngularRange: obsRange,
                 sourceTimestamp: advTs,
-                reasonCode: "CRITICAL_OBSTACLE"
+                reasonCode: stopCode
             )
         } else {
             let reason: String
