@@ -62,11 +62,13 @@ jobs:
           echo "=== Compiling native Swift behavior regressions ==="
           swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
             echo "FATAL: swiftc compilation failed"
+            cat swiftc.log
             exit 1
           }
           echo "=== Running native Swift behavior regressions ==="
           /tmp/horus-behavior 2>&1 | tee behavior.log || {
             echo "FATAL: native Swift behavior regression execution failed"
+            cat behavior.log
             exit 1
           }
 

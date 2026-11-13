@@ -178,7 +178,7 @@ func estimateDirectionalAdvisory(
                 angleDeg: (angleOut * 10.0).rounded() / 10.0,
                 confidence: 0.55,
                 observedAngularRange: obsRange,
-                sourceTimestampSeconds: advTs,
+                sourceTimestamp: advTs,
                 reasonCode: "AVAILABLE_FORWARD"
             )
         } else if centerSupported && candDist.isFinite && candDist < 40.0 {
@@ -187,7 +187,7 @@ func estimateDirectionalAdvisory(
                 angleDeg: nil,
                 confidence: nil,
                 observedAngularRange: obsRange,
-                sourceTimestampSeconds: advTs,
+                sourceTimestamp: advTs,
                 reasonCode: "CRITICAL_OBSTACLE"
             )
         } else {
@@ -196,7 +196,7 @@ func estimateDirectionalAdvisory(
                 angleDeg: nil,
                 confidence: nil,
                 observedAngularRange: obsRange,
-                sourceTimestampSeconds: advTs,
+                sourceTimestamp: advTs,
                 reasonCode: !centerSupported ? "CENTER_COVERAGE_INSUFFICIENT" : "NO_SUPPORTED_CANDIDATE"
             )
         }
