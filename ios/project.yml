@@ -39,7 +39,9 @@ targets:
         CFBundleName: "VAMPIOR"
         CFBundleDisplayName: "VAMPIOR"
         CFBundleDevelopmentRegion: "en"
-        CFBundleShortVersionString: "2.0"
+        CFBundleShortVersionString: "3.1"
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
         CFBundleVersion: "1"
         UISupportedInterfaceOrientations:
           - "UIInterfaceOrientationPortrait"

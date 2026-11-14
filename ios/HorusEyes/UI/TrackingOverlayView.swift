@@ -3,6 +3,7 @@ import SwiftUI
 struct TrackingOverlayView: View {
     let result: ObstacleDetectionResult?
     let threatLevel: String
+    let mode: DepthMode
     var isStop: Bool = false
 
     var body: some View {
@@ -15,12 +16,14 @@ struct TrackingOverlayView: View {
             let oy = (size.height - CGFloat(result.camHeight) * scale) / 2
             guard ox.isFinite, oy.isFinite else { return }
 
-            let isEffectiveStop = isStop || threatLevel == "CRITICAL"
+            let isEffectiveStop = isStop
             let primaryColor: Color = isEffectiveStop ? Color(red: 1.0, green: 0.23, blue: 0.19) :
                                       threatLevel == "WARNING" ? Color(red: 1.0, green: 0.58, blue: 0.0) :
                                       Color(red: 0.95, green: 0.95, blue: 0.97)
 
-            for obstacle in result.allObstacles {
+            var labels: [CGRect] = []
+            let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
+            for obstacle in result.allObstacles.prefix(12) {
                 let box = obstacle.bbox
                 let l = ox + CGFloat(box.x) * scale
                 let t = oy + CGFloat(box.y) * scale
@@ -40,6 +43,24 @@ struct TrackingOverlayView: View {
 
                 // Pass 2: Vivid inner colored stroke
                 context.stroke(path, with: .color(primaryColor), style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
+                let text = context.resolve(Text(mode.distanceLabel(obstacle.distCM))
+                    .font(.caption.weight(.semibold).monospacedDigit()).foregroundColor(.white))
+                let measured = text.measure(in: size)
+                let w = measured.width + 12, h = measured.height + 6
+                guard w <= bounds.width, h <= bounds.height else { continue }
+                let positions = [
+                    CGPoint(x: l, y: t - h - 4), CGPoint(x: l, y: b + 4),
+                    CGPoint(x: r + 4, y: t), CGPoint(x: l + 4, y: t + 5)
+                ]
+                for position in positions {
+                    let box = CGRect(x: min(max(position.x, bounds.minX), bounds.maxX - w),
+                                     y: min(max(position.y, bounds.minY), bounds.maxY - h), width: w, height: h)
+                    guard !labels.contains(where: { $0.insetBy(dx: -3, dy: -3).intersects(box) }) else { continue }
+                    context.fill(Path(roundedRect: box, cornerRadius: 5), with: .color(.black.opacity(0.82)))
+                    context.draw(text, at: CGPoint(x: box.midX, y: box.midY))
+                    labels.append(box)
+                    break
+                }
             }
         }
         .allowsHitTesting(false)

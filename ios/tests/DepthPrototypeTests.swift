@@ -49,6 +49,16 @@ struct DepthPrototypeTests {
         precondition(DepthMode.lidar.unavailableReason(hasHardware: false) != nil)
         precondition(DepthMode.stereo.unavailableReason(hasHardware: false) != nil)
         precondition(DepthMode.stereo.unavailableReason(hasHardware: true) == nil)
-        print("PASS 28 portable assertions: LiDAR filtering (10), stereo geometry and sync (8), freshness and switching (6), capability (4)")
+        precondition(DepthMode.lidar.distanceLabel(83) == "83 cm")
+        precondition(DepthMode.midas.distanceLabel(85) == "≈ 85 cm")
+        precondition(DepthMode.stereo.distanceLabel(86) == "≈ 86 cm")
+        precondition(DepthMode.stereo.distanceLabel(.infinity) == "N/A")
+        var occluded = right
+        for y in 9...15 {
+            for x in 17...37 { occluded[y * width + x] = -1 }
+        }
+        precondition(StereoCorrespondence.disparity(left: left, right: occluded, width: width,
+            height: height, x: 30, y: 12, maxShift: 12) == nil)
+        print("PASS 33 portable assertions: LiDAR filtering (10), stereo geometry and sync (8), freshness and switching (6), capability (4)")
     }
 }

@@ -14,7 +14,7 @@ import Foundation
         func observe(_ depth: Float) -> ObstacleDetectionResult {
             let frame = DepthFrame(source: .lidar, timestamp: 10, geometry: geometry,
                 width: 48, height: 64, centimeters: Array(repeating: depth, count: 48 * 64),
-                confidence: [], detail: "Fixture")
+                confidence: Array(repeating: 2, count: 48 * 64), detail: "Fixture")
             return frame.spatialObservation()
         }
         let clear = observe(200)
@@ -27,7 +27,21 @@ import Foundation
             width: 48, height: 64, centimeters: Array(repeating: 200, count: 48 * 64),
             confidence: [], detail: "Fixture", error: "Calibration unverified")
         precondition(!unavailable.spatialObservation().isValid)
-        print("PASS 6 native metric spatial checks")
+        func scene(_ depth: (Int, Int) -> Float) -> ObstacleDetectionResult {
+            let values = (0..<(48 * 64)).map { depth($0 % 48, $0 / 48) }
+            return DepthFrame(source: .lidar, timestamp: 10, geometry: geometry, width: 48, height: 64,
+                centimeters: values, confidence: Array(repeating: 2, count: values.count), detail: "Fixture")
+                .spatialObservation()
+        }
+        let scattered = scene { x, y in [18, 23, 25, 30].contains(x) && y == 25 ? 20 : 200 }
+        precondition(scattered.allObstacles.isEmpty && scattered.sectorDists["CENTER"] == 200)
+        let floor = scene { _, y in y >= 42 ? 32 : 200 }
+        precondition(floor.allObstacles.isEmpty && estimateDirectionalAdvisory(observation: floor, threat: "SAFE", now: 10.1).state == "AVAILABLE")
+        let lateral = scene { x, y in (x < 6 || x >= 42) && (14..<42).contains(y) ? 70 : 200 }
+        precondition(lateral.allObstacles.count == 2)
+        let forward = estimateDirectionalAdvisory(observation: lateral, threat: "WARNING", now: 10.1)
+        precondition(forward.state == "AVAILABLE" && abs(forward.angleDeg ?? 100) <= 2)
+        print("PASS 10 native metric spatial checks")
     }
 
     static func main() {

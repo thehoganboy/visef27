@@ -11,6 +11,7 @@ final class DemoController: ObservableObject {
     @Published private(set) var preview: CGImage?
     @Published private(set) var diagnostics = ""
     @Published private(set) var exportURL: URL?
+    @Published private(set) var stereoPairURL: URL?
     private let journal = DepthDiagnostics()
     private let imageContext = CIContext()
     private var epoch = DepthSourceEpoch()
@@ -80,6 +81,7 @@ final class DemoController: ObservableObject {
         resetEvidence(active)
         journal.switchRequested(selected)
         exportURL = nil
+        stereoPairURL = nil
         diagnostics = ""
         preview = nil
         restartCapture()
@@ -140,7 +142,7 @@ final class DemoController: ObservableObject {
                 self.submit(captureToken: captureToken, timestamp: frame.timestamp, settle: 0, previewWhilePaused: true) {
                     let portrait = buffer.map { CIImage(cvPixelBuffer: $0).oriented(.right) }
                     let image = portrait.flatMap { self.imageContext.createCGImage($0, from: $0.extent) }
-                    let observation = frame.error == nil && frame.source == .lidar ? frame.spatialObservation() : nil
+                    let observation = frame.error == nil ? frame.spatialObservation() : nil
                     return (observation, frame, image)
                 }
             }
@@ -189,8 +191,8 @@ final class DemoController: ObservableObject {
                     guard self.captureEpoch == captureToken, self.epoch.value == token,
                           (-0.05...0.75).contains(CACurrentMediaTime() - capturedAt) else { return }
                     if let image { self.preview = image }
-                    self.diagnostics = self.journal.label(frame: frame, latencyMS: inferenceMS)
-                    if frame.source == .stereo && !self.modeReady {
+                    self.diagnostics = self.journal.label(frame: frame, observation: observation, latencyMS: inferenceMS)
+                    if frame.source == .stereo && frame.error != nil && !self.modeReady {
                         self.modeReady = true
                         self.journal.switchOutcome(frame.source, outcome: "diagnostics_ready")
                     } else if frame.error == nil && observation?.isValid == true, !self.modeReady {
@@ -208,7 +210,7 @@ final class DemoController: ObservableObject {
                         }
                         self.audio.update(decision: self.silentDecision())
                     }
-                    if evaluate && (observation?.isValid != true || frame.source == .stereo) {
+                    if evaluate && observation?.isValid != true {
                         self.journal.record(frame: frame, observation: observation, state: self.advisory.state,
                             inferenceMS: inferenceMS, endToEndMS: (CACurrentMediaTime() - capturedAt) * 1000)
                     }
@@ -367,6 +369,16 @@ final class DemoController: ObservableObject {
             advisory = DirectionalAdvisory(state: "UNAVAILABLE", reasonCode: reason)
         }
         journal.switchOutcome(mode, outcome: reason)
+    }
+
+    func captureStereoPair() {
+        guard let stereo else { return }
+        stereoPairURL = nil
+        let token = captureEpoch
+        stereo.requestPair { [weak self] url in
+            guard let self, self.captureEpoch == token else { return }
+            self.stereoPairURL = url
+        }
     }
 
     func prepareExport() {
@@ -532,7 +544,7 @@ struct ContentView: View {
                     Color.black
                 }
                 let isStop = model.advisory.state == "STOP" && model.threat != "PAUSED"
-                TrackingOverlayView(result: model.result, threatLevel: model.threat, isStop: isStop)
+                TrackingOverlayView(result: model.result, threatLevel: model.threat, mode: model.mode, isStop: isStop)
 
                 // Centered Direction Indicator & Status Badge
                 VStack(spacing: 0) {
@@ -598,9 +610,17 @@ struct ContentView: View {
                     .padding(.horizontal, 16)
             }
             HStack {
-                Text(model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics)
+                Text((model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics) + " • " + model.advisory.state)
                     .font(.caption2.monospacedDigit())
                 Spacer()
+                if model.mode == .stereo {
+                    Button { model.captureStereoPair() } label: { Image(systemName: "camera") }
+                        .accessibilityLabel("Capture synchronized stereo calibration pair")
+                    if let url = model.stereoPairURL {
+                        ShareLink(item: url) { Image(systemName: "square.and.arrow.up.on.square") }
+                            .accessibilityLabel("Share synchronized stereo calibration pair")
+                    }
+                }
                 if let url = model.exportURL {
                     Button { model.prepareExport() } label: { Image(systemName: "arrow.clockwise") }
                         .accessibilityLabel("Refresh diagnostics export")

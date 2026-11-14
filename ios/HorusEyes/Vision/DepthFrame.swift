@@ -7,12 +7,18 @@ enum DepthMode: String, CaseIterable, Identifiable {
 
     var id: Self { self }
 
+    func distanceLabel(_ cm: Float) -> String {
+        guard cm.isFinite, cm > 0 else { return "N/A" }
+        let prefix = self == .lidar ? "" : "≈ "
+        return prefix + String(format: "%.0f cm", cm)
+    }
+
     func unavailableReason(hasHardware: Bool) -> String? {
         guard !hasHardware else { return nil }
         switch self {
         case .midas: return nil
         case .lidar: return "LiDAR scene depth requires a supported iPhone"
-        case .stereo: return "Stereo requires a supported rear wide/tele MultiCam pair"
+        case .stereo: return "Stereo requires a supported rear physical MultiCam pair"
         }
     }
 }
@@ -37,6 +43,11 @@ struct DepthFrame {
     let detail: String
     var error: String? = nil
     var captureProcessingMS: Double = 0
+
+    var strongCoverage: Double? {
+        guard !confidence.isEmpty, confidence.count == centimeters.count else { return nil }
+        return Double(confidence.filter { $0 == 2 }.count) / Double(confidence.count)
+    }
 
     var validityMask: [Bool] { centimeters.map { $0.isFinite && $0 > 0 } }
 
