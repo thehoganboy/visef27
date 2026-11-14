@@ -187,7 +187,7 @@ jobs:
           plutil -p Payload/HorusEyes.app/Info.plist
           zip -qq -r HorusEyes_iPhone14Pro.ipa Payload
           unzip -tq HorusEyes_iPhone14Pro.ipa
-          lipo -verify_arch arm64 Payload/HorusEyes.app/HorusEyes
+          lipo Payload/HorusEyes.app/HorusEyes -verify_arch arm64
           ls -la HorusEyes_iPhone14Pro.ipa
           ipa_size=$(wc -c < HorusEyes_iPhone14Pro.ipa | tr -d ' ')
           echo "=== Final IPA Size: $ipa_size bytes ==="
