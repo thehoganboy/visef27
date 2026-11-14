@@ -2,7 +2,7 @@ name: Build Unsigned iOS IPA (iPhone 14 Sideloadly)
 
 on:
   push:
-    branches: [ main, master, feature/demo-ready-unified-ux ]
+    branches: [ main, master, feature/demo-ready-unified-ux, feature/ios-trimode-depth-prototype ]
   workflow_dispatch:
 
 concurrency:
@@ -23,6 +23,11 @@ jobs:
           echo "=== Active Xcode Version ==="
           xcodebuild -version
           xcode-select -p
+
+      - name: Run portable depth prototype tests
+        run: |
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/tests/DepthPrototypeTests.swift -o /tmp/depth-prototype
+          /tmp/depth-prototype
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v5
@@ -60,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== Compiling native Swift behavior regressions ==="
-          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
+          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/MetricSpatialObservation.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
             echo "FATAL: swiftc compilation failed"
             cat swiftc.log
             exit 1
@@ -181,6 +186,8 @@ jobs:
           echo "=== Verified Final App Info.plist ==="
           plutil -p Payload/HorusEyes.app/Info.plist
           zip -qq -r HorusEyes_iPhone14Pro.ipa Payload
+          unzip -tq HorusEyes_iPhone14Pro.ipa
+          lipo -verify_arch arm64 Payload/HorusEyes.app/HorusEyes
           ls -la HorusEyes_iPhone14Pro.ipa
           ipa_size=$(wc -c < HorusEyes_iPhone14Pro.ipa | tr -d ' ')
           echo "=== Final IPA Size: $ipa_size bytes ==="

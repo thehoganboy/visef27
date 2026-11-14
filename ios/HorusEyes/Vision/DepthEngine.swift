@@ -61,6 +61,7 @@ struct ObstacleDetectionResult {
     var isValid: Bool = true
     var spatialBins: [SpatialBin] = []
     var timestamp: Double = 0.0
+    var geometry: DepthGeometry? = nil
 
     init(
         x: Int,
@@ -160,11 +161,19 @@ final class DepthEngine: ObservableObject {
         sourceTimestamp: Double = CACurrentMediaTime(),
         aeSettleFramesRemaining: Int,
         meanLuma: Float,
-        isZeroLuxBlind: Bool
+        isZeroLuxBlind: Bool,
+        onDepth: ((DepthFrame) -> Void)? = nil
     ) -> ObstacleDetectionResult {
         let startTime = CACurrentMediaTime()
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
+
+        let geometry = DepthGeometry(width: width, height: height,
+            fx: Float(width) / 2 / tan(65 * .pi / 360), cx: Float(width) / 2)
+        var frame = DepthFrame(source: .midas, timestamp: sourceTimestamp, geometry: geometry,
+            width: 0, height: 0, centimeters: [], confidence: [], detail: "MiDaS calibrated estimate",
+            error: "Model output unavailable")
+        defer { onDepth?(frame) }
 
         // Step 0: Immediate Zero-Lux Blind check (Sensor Fault Mode: absolute darkness / camera covered)
         if isZeroLuxBlind || meanLuma < Config.luxZeroBlindThreshold || meanLuma > 250 {
@@ -212,6 +221,13 @@ final class DepthEngine: ObservableObject {
                 isWall: false, sectorDists: [:], allObstacles: [], isZeroLuxBlind: false,
                 isOverheadHazard: false, isDropOffHazard: false, camWidth: width, camHeight: height,
                 isValid: false, timestamp: sourceTimestamp)
+        }
+
+        if onDepth != nil {
+            frame = DepthFrame(source: .midas, timestamp: sourceTimestamp, geometry: geometry,
+                width: gridW, height: gridH,
+                centimeters: rawDisparity.map { $0.isFinite && $0 > 0 ? pchip.interpolate($0) : .nan },
+                confidence: [], detail: "MiDaS calibrated estimate")
         }
 
         // Stage 2 — Local Observation Validity & Spatial Engine v8

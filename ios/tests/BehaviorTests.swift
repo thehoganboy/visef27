@@ -9,7 +9,29 @@ import Foundation
             sectorDists: ["LEFT":250,"CENTER":distance,"RIGHT":250],allObstacles: objects ? [o] : [],
             isZeroLuxBlind: false,isOverheadHazard: false,isDropOffHazard: false,camWidth: 192,camHeight: 256,isValid: valid)
     }
+    static func nativeMetricDepthTests() {
+        let geometry = DepthGeometry(width: 480, height: 640, fx: 420, cx: 240)
+        func observe(_ depth: Float) -> ObstacleDetectionResult {
+            let frame = DepthFrame(source: .lidar, timestamp: 10, geometry: geometry,
+                width: 48, height: 64, centimeters: Array(repeating: depth, count: 48 * 64),
+                confidence: [], detail: "Fixture")
+            return frame.spatialObservation()
+        }
+        let clear = observe(200)
+        precondition(clear.sectorDists["CENTER"] == 200)
+        precondition(estimateDirectionalAdvisory(observation: clear, threat: "SAFE", now: 10.1).state == "AVAILABLE")
+        precondition(estimateDirectionalAdvisory(observation: observe(20), threat: "CRITICAL", now: 10.1).state == "STOP")
+        precondition(estimateDirectionalAdvisory(observation: clear, threat: "SAFE", now: 11).state == "UNAVAILABLE")
+        precondition(!observe(.nan).isValid)
+        let unavailable = DepthFrame(source: .stereo, timestamp: 10, geometry: geometry,
+            width: 48, height: 64, centimeters: Array(repeating: 200, count: 48 * 64),
+            confidence: [], detail: "Fixture", error: "Calibration unverified")
+        precondition(!unavailable.spatialObservation().isValid)
+        print("PASS 6 native metric spatial checks")
+    }
+
     static func main() {
+        nativeMetricDepthTests()
         let kin = KinematicsEngine(), budget = AuditoryBudgetManager()
         for i in 1...12 {
             let result = kin.compute(obstacleResult: obs(),frameId: UInt64(i),timestamp: 10+Double(i)*0.1,aeSettleRemaining: 0)

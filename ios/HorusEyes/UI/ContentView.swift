@@ -1,11 +1,26 @@
 import SwiftUI
 import AVFoundation
 import QuartzCore
+import CoreImage
 
 final class DemoController: ObservableObject {
     let camera = CameraTorchManager()
     private let audio = SpatialAudioEngine()
     private let imu = IMUManager()
+    @Published private(set) var mode: DepthMode = .midas
+    @Published private(set) var preview: CGImage?
+    @Published private(set) var diagnostics = ""
+    @Published private(set) var exportURL: URL?
+    private let journal = DepthDiagnostics()
+    private let imageContext = CIContext()
+    private var epoch = DepthSourceEpoch()
+    private var captureEpoch = 0
+    private var sourceStarted = false
+    private var stopping = false
+    private var lidar: LiDARCapture?
+    private var stereo: StereoCapture?
+    private var sequence: UInt64 = 0
+    private var modeReady = false
     @Published var active = false
     @Published var threat = "PAUSED"
     @Published var result: ObstacleDetectionResult?
@@ -15,7 +30,6 @@ final class DemoController: ObservableObject {
     private let inferenceQueue = DispatchQueue(label: "com.horuseyes.inference", qos: .userInitiated)
     private var enabled = false
     private var busy = false
-    private var generation = 0
     private var workerGeneration = -1
     private var depth: DepthEngine?
     private var kin = KinematicsEngine()
@@ -43,148 +57,286 @@ final class DemoController: ObservableObject {
         guard !isAppeared else { return }
         isAppeared = true
 
-        camera.onFrameProcessed = { [weak self] buffer, frameId, settle, luma, capturedAt in
-            guard let self = self else { return }
-            self.lock.lock()
-            self.lastFrame = capturedAt
-            guard self.enabled && !self.busy else { self.lock.unlock(); return }
-            self.busy = true
-            let token = self.generation
-            let rate = self.yaw
-            self.lock.unlock()
-            self.inferenceQueue.async {
-                defer { self.lock.lock(); self.busy = false; self.lock.unlock() }
-                if self.workerGeneration != token {
-                    self.kin = KinematicsEngine(); self.budget = AuditoryBudgetManager()
-                    self.workerGeneration = token
+        reconcileCapture()
+        imu.startMotionTracking()
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    static func unsupported(_ mode: DepthMode) -> String? {
+        switch mode {
+        case .midas: return nil
+        case .lidar: return LiDARCapture.supported ? nil : "LiDAR scene depth requires a supported iPhone"
+        case .stereo: return StereoCapture.supported ? nil : "Stereo requires a supported rear wide/tele MultiCam pair"
+        }
+    }
+
+    func select(_ selected: DepthMode) {
+        guard Self.unsupported(selected) == nil else { return }
+        guard selected != mode || selected != .midas else { return }
+        mode = selected
+        resetEvidence(active)
+        journal.switchRequested(selected)
+        exportURL = nil
+        diagnostics = ""
+        preview = nil
+        restartCapture()
+    }
+
+    private func restartCapture() {
+        guard !stopping else { return }
+        lock.lock()
+        captureEpoch += 1
+        lock.unlock()
+        sourceStarted = false
+        stopping = true
+        let complete = { [weak self] in
+            guard let self else { return }
+            self.stopping = false
+            self.reconcileCapture()
+        }
+        if let stereo {
+            self.stereo = nil
+            stereo.stop(completion: complete)
+        } else {
+            lidar?.stop()
+            lidar = nil
+            camera.setGuidanceActive(false)
+            camera.stop(completion: complete)
+        }
+    }
+
+    private func reconcileCapture() {
+        guard isAppeared, !stopping, !sourceStarted else { return }
+        sourceStarted = true
+        let captureToken = captureEpoch
+        let selected = mode
+        if selected == .midas {
+            camera.setFrameHandler { [weak self] buffer, _, settle, luma, capturedAt in
+                self?.submit(captureToken: captureToken, timestamp: capturedAt, settle: settle) {
+                    if self?.depth == nil { self?.depth = DepthEngine() }
+                    var frame: DepthFrame?
+                    let obs = self?.depth?.processFrame(pixelBuffer: buffer, frameId: 0, sourceTimestamp: capturedAt,
+                        aeSettleFramesRemaining: settle, meanLuma: luma,
+                        isZeroLuxBlind: luma < Config.luxZeroBlindThreshold, onDepth: { frame = $0 })
+                    return (obs, frame, nil)
                 }
-                if self.depth == nil { self.depth = DepthEngine() }
-                let obs = self.depth!.processFrame(
-                    pixelBuffer: buffer,
-                    frameId: frameId,
-                    sourceTimestamp: capturedAt,
-                    aeSettleFramesRemaining: settle,
-                    meanLuma: luma,
-                    isZeroLuxBlind: luma < Config.luxZeroBlindThreshold
-                )
-                let risk = self.kin.compute(
-                    obstacleResult: obs,
-                    frameId: frameId,
-                    timestamp: capturedAt,
-                    aeSettleRemaining: settle,
-                    imuYawRateRadS: rate
-                )
+            }
+            camera.setGuidanceActive(active)
+            camera.start()
+            return
+        }
 
+        let startNative = { [weak self] in
+            guard let self, self.isAppeared, self.captureEpoch == captureToken else { return }
+            guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+                self.sourceFailed("Camera access denied")
+                return
+            }
+            let receive: (DepthFrame, CVPixelBuffer?) -> Void = { [weak self] frame, buffer in
+                guard let self else { return }
+                self.submit(captureToken: captureToken, timestamp: frame.timestamp, settle: 0, previewWhilePaused: true) {
+                    let portrait = buffer.map { CIImage(cvPixelBuffer: $0).oriented(.right) }
+                    let image = portrait.flatMap { self.imageContext.createCGImage($0, from: $0.extent) }
+                    let observation = frame.error == nil && frame.source == .lidar ? frame.spatialObservation() : nil
+                    return (observation, frame, image)
+                }
+            }
+            let fail: (String) -> Void = { [weak self] reason in
                 DispatchQueue.main.async {
-                    let consumedAt = CACurrentMediaTime()
-                    self.lock.lock()
-                    let current = self.enabled && self.generation == token
-                    self.lock.unlock()
-                    guard current else { return }
+                    guard let self, self.captureEpoch == captureToken else { return }
+                    if self.diagnostics != reason { self.sourceFailed(reason) }
+                }
+            }
+            if selected == .lidar {
+                let source = LiDARCapture(onFrame: receive, onError: fail)
+                self.lidar = source
+                source.start()
+            } else {
+                let source = StereoCapture(onFrame: receive, onError: fail)
+                self.stereo = source
+                source.start()
+            }
+        }
+        if AVCaptureDevice.authorizationStatus(for: .video) == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .video) { _ in DispatchQueue.main.async(execute: startNative) }
+        } else {
+            startNative()
+        }
+    }
 
-                    let age = consumedAt - obs.timestamp
-                    guard obs.timestamp > 0 && !obs.timestamp.isNaN && !obs.timestamp.isInfinite else { return }
-                    guard age >= -0.05 && age <= 0.75 else { return }
-                    guard frameId > self.lastAcceptedFrameId && obs.timestamp >= self.lastAcceptedTimestamp else { return }
+    private func submit(captureToken: Int, timestamp capturedAt: Double, settle: Int, previewWhilePaused: Bool = false,
+                        work: @escaping () -> (ObstacleDetectionResult?, DepthFrame?, CGImage?)) {
+        lock.lock()
+        guard captureEpoch == captureToken, (enabled || previewWhilePaused), !busy else { lock.unlock(); return }
+        lastFrame = capturedAt
+        busy = true
+        let token = epoch.value
+        let rate = yaw
+        sequence += 1
+        let frameId = sequence
+        let evaluate = enabled
+        lock.unlock()
+        inferenceQueue.async {
+            defer { self.lock.lock(); self.busy = false; self.lock.unlock() }
+            let began = CACurrentMediaTime()
+            let (observation, frame, image) = work()
+            let inferenceMS = (CACurrentMediaTime() - began) * 1000 + (frame?.captureProcessingMS ?? 0)
+            if let frame {
+                DispatchQueue.main.async {
+                    guard self.captureEpoch == captureToken, self.epoch.value == token,
+                          (-0.05...0.75).contains(CACurrentMediaTime() - capturedAt) else { return }
+                    if let image { self.preview = image }
+                    self.diagnostics = self.journal.label(frame: frame, latencyMS: inferenceMS)
+                    if frame.source == .stereo && !self.modeReady {
+                        self.modeReady = true
+                        self.journal.switchOutcome(frame.source, outcome: "diagnostics_ready")
+                    } else if frame.error == nil && observation?.isValid == true, !self.modeReady {
+                        self.modeReady = true
+                        self.journal.switchOutcome(frame.source, outcome: "depth_ready")
+                    }
+                    if evaluate && frame.source != .midas && observation?.isValid != true {
+                        self.sourceTimestamp = capturedAt
+                        self.result = nil
+                        self.prevAngle = nil
+                        if frame.source == .stereo || self.modeReady || CACurrentMediaTime() - self.started > 1 {
+                            self.threat = "UNAVAILABLE"
+                            self.advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: capturedAt,
+                                reasonCode: frame.error ?? "INSUFFICIENT_DEPTH")
+                        }
+                        self.audio.update(decision: self.silentDecision())
+                    }
+                    if evaluate && (observation?.isValid != true || frame.source == .stereo) {
+                        self.journal.record(frame: frame, observation: observation, state: self.advisory.state,
+                            inferenceMS: inferenceMS, endToEndMS: (CACurrentMediaTime() - capturedAt) * 1000)
+                    }
+                }
+            }
+            guard evaluate, let obs = observation,
+                  frame?.source == .midas || obs.isValid else { return }
+            if self.workerGeneration != token {
+                self.kin = KinematicsEngine()
+                self.workerGeneration = token
+            }
+            let risk = self.kin.compute(
+                obstacleResult: obs,
+                frameId: frameId,
+                timestamp: capturedAt,
+                aeSettleRemaining: settle,
+                imuYawRateRadS: rate
+            )
 
-                    self.lastAcceptedFrameId = frameId
-                    self.lastAcceptedTimestamp = obs.timestamp
-                    self.result = obs.isValid ? obs : nil
-                    self.sourceTimestamp = obs.timestamp
-                    self.threat = risk.threatLevel
-                    let rawAdv = estimateDirectionalAdvisory(
-                        observation: obs,
+            DispatchQueue.main.async {
+                let consumedAt = CACurrentMediaTime()
+                self.lock.lock()
+                let current = self.enabled && self.epoch.accepts(token, timestamp: obs.timestamp,
+                    now: consumedAt, after: self.lastAcceptedTimestamp)
+                self.lock.unlock()
+                guard current, frameId > self.lastAcceptedFrameId else { return }
+
+                self.lastAcceptedFrameId = frameId
+                self.lastAcceptedTimestamp = obs.timestamp
+                self.result = obs.isValid ? obs : nil
+                self.sourceTimestamp = obs.timestamp
+                self.threat = risk.threatLevel
+                let rawAdv = estimateDirectionalAdvisory(
+                    observation: obs,
+                    threat: risk.threatLevel,
+                    now: consumedAt,
+                    prevAngle: self.prevAngle
+                )
+
+                var finalAdv = rawAdv
+
+                // Evidence-Aware Temporal Stability (P0-03)
+                if risk.threatLevel == "CRITICAL" || rawAdv.state == "STOP" {
+                    // Critical hazard: immediate preemption with ZERO smoothing delay
+                    self.observationHistory.removeAll()
+                    finalAdv = rawAdv
+                } else if risk.threatLevel == "SENSOR_FAULT" || rawAdv.state == "UNKNOWN" {
+                    self.observationHistory.removeAll()
+                    finalAdv = rawAdv
+                } else if rawAdv.state == "AVAILABLE" {
+                    self.observationHistory.append(ObservationSnapshot(
+                        frameId: frameId,
+                        timestamp: obs.timestamp,
                         threat: risk.threatLevel,
-                        now: consumedAt,
-                        prevAngle: self.prevAngle
-                    )
-
-                    var finalAdv = rawAdv
-
-                    // Evidence-Aware Temporal Stability (P0-03)
-                    if risk.threatLevel == "CRITICAL" || rawAdv.state == "STOP" {
-                        // Critical hazard: immediate preemption with ZERO smoothing delay
-                        self.observationHistory.removeAll()
-                        finalAdv = rawAdv
-                    } else if risk.threatLevel == "SENSOR_FAULT" || rawAdv.state == "UNKNOWN" {
-                        self.observationHistory.removeAll()
-                        finalAdv = rawAdv
-                    } else if rawAdv.state == "AVAILABLE" {
+                        state: rawAdv.state,
+                        angleDeg: rawAdv.angleDeg,
+                        confidence: rawAdv.confidence ?? 0.55,
+                        reasonCode: rawAdv.reasonCode
+                    ))
+                    if self.observationHistory.count > 4 {
+                        self.observationHistory.removeFirst()
+                    }
+                    finalAdv = rawAdv
+                } else if rawAdv.state == "UNAVAILABLE" && self.mode == .midas {
+                    // Check for transient 1-frame degradation over otherwise stable, fresh observation
+                    let recentValid = self.observationHistory.filter {
+                        $0.state == "AVAILABLE" && (consumedAt - $0.timestamp) <= 0.28
+                    }
+                    if recentValid.count >= 2, let lastValid = recentValid.last, let heldAngle = lastValid.angleDeg {
+                        // Bounded transient hold: maintain direction for this single frame
+                        finalAdv = DirectionalAdvisory(
+                            state: "AVAILABLE",
+                            angleDeg: heldAngle,
+                            confidence: lastValid.confidence * 0.85,
+                            observedAngularRange: rawAdv.observedAngularRange,
+                            sourceTimestamp: lastValid.timestamp,
+                            reasonCode: "TRANSIENT_HOLD"
+                        )
                         self.observationHistory.append(ObservationSnapshot(
                             frameId: frameId,
                             timestamp: obs.timestamp,
                             threat: risk.threatLevel,
-                            state: rawAdv.state,
-                            angleDeg: rawAdv.angleDeg,
-                            confidence: rawAdv.confidence ?? 0.55,
-                            reasonCode: rawAdv.reasonCode
+                            state: "TRANSIENT_HOLD",
+                            angleDeg: heldAngle,
+                            confidence: lastValid.confidence * 0.85,
+                            reasonCode: "TRANSIENT_HOLD"
                         ))
                         if self.observationHistory.count > 4 {
                             self.observationHistory.removeFirst()
                         }
+                    } else {
+                        self.observationHistory.removeAll()
                         finalAdv = rawAdv
-                    } else if rawAdv.state == "UNAVAILABLE" {
-                        // Check for transient 1-frame degradation over otherwise stable, fresh observation
-                        let recentValid = self.observationHistory.filter {
-                            $0.state == "AVAILABLE" && (consumedAt - $0.timestamp) <= 0.28
-                        }
-                        if recentValid.count >= 2, let lastValid = recentValid.last, let heldAngle = lastValid.angleDeg {
-                            // Bounded transient hold: maintain direction for this single frame
-                            finalAdv = DirectionalAdvisory(
-                                state: "AVAILABLE",
-                                angleDeg: heldAngle,
-                                confidence: lastValid.confidence * 0.85,
-                                observedAngularRange: rawAdv.observedAngularRange,
-                                sourceTimestamp: lastValid.timestamp,
-                                reasonCode: "TRANSIENT_HOLD"
-                            )
-                            self.observationHistory.append(ObservationSnapshot(
-                                frameId: frameId,
-                                timestamp: obs.timestamp,
-                                threat: risk.threatLevel,
-                                state: "TRANSIENT_HOLD",
-                                angleDeg: heldAngle,
-                                confidence: lastValid.confidence * 0.85,
-                                reasonCode: "TRANSIENT_HOLD"
-                            ))
-                            if self.observationHistory.count > 4 {
-                                self.observationHistory.removeFirst()
-                            }
-                        } else {
-                            self.observationHistory.removeAll()
-                            finalAdv = rawAdv
-                        }
                     }
-
-                    self.advisory = finalAdv
-                    self.prevAngle = finalAdv.state == "AVAILABLE" ? finalAdv.angleDeg : nil
-
-                    // P0: Coordinate final authoritative advisory with auditory budget manager BEFORE updating audio
-                    let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk, advisory: finalAdv)
-                    self.audio.update(decision: decision)
                 }
+
+                if finalAdv.state == "UNKNOWN" && self.mode != .midas {
+                    finalAdv.state = "UNAVAILABLE"
+                }
+                self.advisory = finalAdv
+                if let frame, obs.isValid {
+                    self.journal.record(frame: frame, observation: obs, state: finalAdv.state,
+                        inferenceMS: inferenceMS, endToEndMS: (consumedAt - capturedAt) * 1000)
+                }
+                self.prevAngle = finalAdv.state == "AVAILABLE" ? finalAdv.angleDeg : nil
+
+                // P0: Coordinate final authoritative advisory with auditory budget manager BEFORE updating audio
+                let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk, advisory: finalAdv)
+                self.audio.update(decision: decision)
             }
         }
-        camera.start()
-        imu.startMotionTracking()
-        timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
     }
 
     private func tick() {
         lock.lock(); yaw = imu.yawRateRadS; let frameTime = lastFrame; lock.unlock()
         guard active else { return }
         let now = CACurrentMediaTime()
-        if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) { fault() }
+        if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) {
+            if mode == .midas { fault() }
+            else if threat != "UNAVAILABLE" || result != nil { sourceFailed("Depth frames timed out") }
+        }
         // Preview remains live; stale boxes must disappear independently of frames.
         if now-sourceTimestamp > 0.25 { result = nil }
         // Expire directional advisory and guidance-dependent audio at 750ms
         if now-sourceTimestamp > 0.75 {
-            if advisory.state == "AVAILABLE" {
+            if advisory.state == "AVAILABLE" || (mode != .midas && advisory.state == "STOP") {
                 advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: sourceTimestamp, reasonCode: "SOURCE_FRAME_STALE")
                 prevAngle = nil
             }
-            if threat != "CRITICAL" && threat != "SENSOR_FAULT" {
+            if mode != .midas || (threat != "CRITICAL" && threat != "SENSOR_FAULT") {
                 audio.update(decision: silentDecision())
             }
         }
@@ -205,20 +357,48 @@ final class DemoController: ObservableObject {
 
     func toggle() { setActive(!active) }
 
-    func setActive(_ value: Bool) {
-        lock.lock(); generation += 1; enabled = value; lock.unlock()
-        active = value; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
-        observationHistory.removeAll()
-        camera.setGuidanceActive(value)
-        if !value {
-            camera.forceTorchOff()
+    private func sourceFailed(_ reason: String) {
+        resetEvidence(active)
+        diagnostics = reason
+        if active {
+            threat = "UNAVAILABLE"
+            advisory = DirectionalAdvisory(state: "UNAVAILABLE", reasonCode: reason)
         }
+        journal.switchOutcome(mode, outcome: reason)
+    }
+
+    func prepareExport() {
+        do { exportURL = try journal.export() }
+        catch { diagnostics = "Export failed: \(error.localizedDescription)" }
+    }
+
+    func setActive(_ value: Bool) {
+        resetEvidence(value)
+        if mode == .midas {
+            camera.setGuidanceActive(value)
+            if !value { camera.forceTorchOff() }
+        }
+        if value { audio.start() } else { audio.stop() }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
+
+    private func resetEvidence(_ value: Bool) {
+        lock.lock()
+        epoch.invalidate()
+        enabled = value
+        lastFrame = 0
+        lock.unlock()
+        active = value
+        modeReady = false
+        budget = AuditoryBudgetManager()
+        result = nil
+        advisory = DirectionalAdvisory()
+        prevAngle = nil
+        observationHistory.removeAll()
         lastAcceptedFrameId = 0; lastAcceptedTimestamp = 0.0
         started = CACurrentMediaTime(); sourceTimestamp = started
         threat = value ? "INITIALIZING" : "PAUSED"
         audio.update(decision: silentDecision())
-        if value { audio.start() } else { audio.stop() }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 
     func disappear() {
@@ -228,7 +408,7 @@ final class DemoController: ObservableObject {
         camera.setGuidanceActive(false)
         camera.forceTorchOff()
         setActive(false); timer?.invalidate(); timer = nil
-        camera.stop(); imu.stopMotionTracking(); audio.stop()
+        restartCapture(); imu.stopMotionTracking(); audio.stop()
     }
 }
 
@@ -331,12 +511,24 @@ struct FlashlightButton: View {
 // ═══════════════════════════════════════════════════════════════════════════════
 struct ContentView: View {
     @StateObject private var model = DemoController()
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
             // Rounded Camera Preview Container (P1-01)
             ZStack {
-                CameraPreviewView(session: model.camera.session)
+                if model.mode == .midas {
+                    CameraPreviewView(session: model.camera.session)
+                } else if let preview = model.preview {
+                    GeometryReader { geometry in
+                        Image(decorative: preview, scale: 1)
+                            .resizable().scaledToFill()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                            .clipped()
+                    }
+                } else {
+                    Color.black
+                }
                 let isStop = model.advisory.state == "STOP" && model.threat != "PAUSED"
                 TrackingOverlayView(result: model.result, threatLevel: model.threat, isStop: isStop)
 
@@ -355,6 +547,9 @@ struct ContentView: View {
                         FlashlightButton(isTorchActive: model.camera.isTorchActive) {
                             model.camera.toggleManualTorch()
                         }
+                        .disabled(model.mode != .midas)
+                        .opacity(model.mode == .midas ? 1 : 0.35)
+                        .accessibilityHint(model.mode == .midas ? "" : "Torch control is available in MiDaS")
                         .padding(.top, 16)
                         .padding(.trailing, 16)
                     }
@@ -372,6 +567,50 @@ struct ContentView: View {
             .padding(.top, 8)
             .padding(.bottom, 8)
 
+            HStack(spacing: 3) {
+                ForEach(DepthMode.allCases) { mode in
+                    let unsupported = DemoController.unsupported(mode)
+                    Button { model.select(mode) } label: {
+                        Text(mode.rawValue)
+                            .font(.caption.weight(.semibold))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 8)
+                            .background(model.mode == mode ? Color.white.opacity(0.2) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 8))
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(unsupported == nil ? Color.white : Color.gray)
+                    .disabled(unsupported != nil)
+                    .accessibilityHint(unsupported ?? "Select depth method")
+                }
+            }
+            .padding(3)
+            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            .padding(.horizontal, 16)
+
+            let unsupported = DepthMode.allCases.compactMap(DemoController.unsupported)
+            if !unsupported.isEmpty {
+                Text(unsupported.joined(separator: " • "))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 16)
+            }
+            HStack {
+                Text(model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics)
+                    .font(.caption2.monospacedDigit())
+                Spacer()
+                if let url = model.exportURL {
+                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
+                        .accessibilityLabel("Share diagnostics")
+                } else {
+                    Button { model.prepareExport() } label: { Image(systemName: "doc.badge.arrow.up") }
+                        .accessibilityLabel("Prepare diagnostics export")
+                }
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 5)
+
             // Enlarged Liquid START/STOP Button (P0-03)
             Button(action: model.toggle) {
                 Text(model.active ? "DỪNG" : "CHẠY")
@@ -384,6 +623,10 @@ struct ContentView: View {
         .background(Color(red: 0.04, green: 0.04, blue: 0.05)) // Apple Dark Chassis (#0A0A0C)
         .onAppear { model.appear() }
         .onDisappear { model.disappear() }
+        .onChange(of: scenePhase) { phase in
+            if phase == .active { model.appear() }
+            else if phase == .background { model.disappear() }
+        }
     }
 }
 

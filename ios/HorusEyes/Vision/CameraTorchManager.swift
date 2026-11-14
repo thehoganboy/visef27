@@ -25,6 +25,8 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private let captureSession = AVCaptureSession()
     private var videoDevice: AVCaptureDevice?
     private let sessionQueue = DispatchQueue(label: "com.visef.horuseyes.cameraQueue", qos: .userInitiated)
+    private var wantsCapture = false
+    private var captureRequest = 0
     private var isSessionConfigured: Bool = false
     private var sessionGeneration: Int = 0
     private var guidanceActiveInternal: Bool = false
@@ -49,7 +51,11 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private let hapticGenerator = UIImpactFeedbackGenerator(style: .heavy)
 
     // Callbacks
-    var onFrameProcessed: ((_ pixelBuffer: CVPixelBuffer, _ frameId: UInt64, _ aeSettle: Int, _ luma: Float, _ sourceTimestamp: Double) -> Void)?
+    private var onFrameProcessed: ((_ pixelBuffer: CVPixelBuffer, _ frameId: UInt64, _ aeSettle: Int, _ luma: Float, _ sourceTimestamp: Double) -> Void)?
+
+    func setFrameHandler(_ handler: @escaping (CVPixelBuffer, UInt64, Int, Float, CFTimeInterval) -> Void) {
+        sessionQueue.async { [weak self] in self?.onFrameProcessed = handler }
+    }
     var onTorchToggled: ((_ isOn: Bool) -> Void)?
 
     // ── Health Watchdog ────────────────────────────────────────────────────────
@@ -156,41 +162,47 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
     // ── Safe Permission & Startup ─────────────────────────────────────────────
     func start() {
-        switch AVCaptureDevice.authorizationStatus(for: .video) {
-        case .authorized:
-            setupCaptureSessionIfNeeded { [weak self] in
-                self?.startRunningSession()
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            self.wantsCapture = true
+            self.captureRequest += 1
+            let request = self.captureRequest
+            switch AVCaptureDevice.authorizationStatus(for: .video) {
+            case .authorized:
+                self.prepareCapture(request: request)
+            case .notDetermined:
+                AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+                    guard granted else { return }
+                    self?.prepareCapture(request: request)
+                }
+            default:
+                break
             }
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
-                if granted {
-                    self?.setupCaptureSessionIfNeeded {
-                        self?.startRunningSession()
-                    }
-                } else {
-                    print("[HorusEyes] Camera permission denied by user.")
+        }
+    }
+
+    private func prepareCapture(request: Int) {
+        setupCaptureSessionIfNeeded { [weak self] in
+            guard let self else { return }
+            self.sessionQueue.async {
+                guard self.wantsCapture, self.captureRequest == request, !self.captureSession.isRunning else { return }
+                self.captureSession.startRunning()
+                self.lastFpsTimestamp = CACurrentMediaTime()
+            }
+        }
+    }
+
+    func stop(completion: (() -> Void)? = nil) {
+        sessionQueue.async { [weak self] in
+            if let self {
+                self.wantsCapture = false
+                self.captureRequest += 1
+                if self.captureSession.isRunning {
+                    self.setHardwareTorch(on: false)
+                    self.captureSession.stopRunning()
                 }
             }
-        case .denied, .restricted:
-            print("[HorusEyes] Camera permission currently denied or restricted.")
-        @unknown default:
-            break
-        }
-    }
-
-    private func startRunningSession() {
-        sessionQueue.async { [weak self] in
-            guard let self = self, !self.captureSession.isRunning else { return }
-            self.captureSession.startRunning()
-            self.lastFpsTimestamp = CACurrentMediaTime()
-        }
-    }
-
-    func stop() {
-        sessionQueue.async { [weak self] in
-            guard let self = self, self.captureSession.isRunning else { return }
-            self.setHardwareTorch(on: false)
-            self.captureSession.stopRunning()
+            if let completion { DispatchQueue.main.async(execute: completion) }
         }
     }
 

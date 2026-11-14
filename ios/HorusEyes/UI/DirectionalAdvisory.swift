@@ -80,7 +80,12 @@ func estimateDirectionalAdvisory(
     }
 
     let halfFov = hfovDeg / 2.0
-    let obsRange = (-halfFov)...halfFov
+    let geometry = obs.geometry
+    let camW = Double(obs.camWidth > 0 ? obs.camWidth : 192)
+    let cx = geometry.map { Double($0.cx) } ?? camW / 2
+    let fx = geometry.map { Double($0.fx) } ?? (cx / tan(halfFov * .pi / 180))
+    let obsRange = geometry == nil ? (-halfFov)...halfFov :
+        (atan2(-cx, fx) * 180 / .pi)...(atan2(camW - cx, fx) * 180 / .pi)
 
     // Spatial observation freshness check (reject missing, invalid, or stale observations > 750ms)
     guard obs.timestamp > 0 && !obs.timestamp.isNaN && !obs.timestamp.isInfinite else {
@@ -91,10 +96,6 @@ func estimateDirectionalAdvisory(
         return DirectionalAdvisory(state: "UNAVAILABLE", observedAngularRange: obsRange, sourceTimestamp: obs.timestamp, reasonCode: "SOURCE_FRAME_STALE")
     }
     let advTs = obs.timestamp
-
-    let camW = Double(obs.camWidth > 0 ? obs.camWidth : 192)
-    let cx = camW / 2.0
-    let fx = cx / tan(halfFov * .pi / 180.0)
 
     // Explicit validity-aware sector extraction (no fabricated 250cm defaults)
     let zLeftRaw = obs.sectorDists["LEFT"]
@@ -216,7 +217,8 @@ func estimateDirectionalAdvisory(
         if !bins.isEmpty {
             let cBins = bins.filter { abs($0.angleCenter) <= 5.0 }
             let validCList = cBins.filter { $0.isValid }
-            if validCList.count >= max(1, Int(Double(cBins.count) * 0.75)) {
+            let required = geometry == nil ? max(1, Int(Double(cBins.count) * 0.75)) : max(1, cBins.count)
+            if validCList.count >= required {
                 centerCoverageOk = true
                 let dists = validCList.compactMap { Double($0.distCM) }.filter { $0.isFinite && $0 > 0 }
                 if !dists.isEmpty {
@@ -276,8 +278,8 @@ func estimateDirectionalAdvisory(
 
     // Step 5A: Generate all candidate headings across observed FOV
     var allCandidateAngles: [Double] = []
-    var aStep = -halfFov + 2.5
-    while aStep <= halfFov - 2.5 + 1e-4 {
+    var aStep = geometry == nil ? -halfFov + 2.5 : ceil((obsRange.lowerBound + 2.5) / 2.5) * 2.5
+    while aStep <= obsRange.upperBound - 2.5 + 1e-4 {
         allCandidateAngles.append(aStep)
         aStep += 2.5
     }
