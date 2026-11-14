@@ -28,7 +28,7 @@ jobs:
         run: |
           swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/tests/DepthPrototypeTests.swift -o /tmp/depth-prototype
           /tmp/depth-prototype
-          swiftc ios/HorusEyes/Vision/StereoCalibration.swift ios/tests/StereoCalibrationTests.swift -o /tmp/stereo-calibration
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoCalibration.swift ios/tests/StereoCalibrationTests.swift -o /tmp/stereo-calibration
           /tmp/stereo-calibration
 
       - name: Set up Python 3.10

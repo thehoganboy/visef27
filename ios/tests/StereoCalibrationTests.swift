@@ -24,6 +24,13 @@ struct StereoCalibrationTests {
         precondition(profile.verified(for: ["wide", "ultra"], factoryBaselineMM: 20))
         precondition(!profile.verified(for: ["wide", "tele"], factoryBaselineMM: 20))
         precondition(!profile.verified(for: ["wide", "ultra"], factoryBaselineMM: 50))
-        print("PASS 9 stereo calibration and rectification assertions (synthetic)")
+        let errors = [Float(50), 100, 200, 300].map { truth -> Float in
+            let disparity = 300 * 2 / truth
+            return StereoCorrespondence.depthCM(focalPixels: 300, baselineMM: 20, subpixelDisparity: disparity) - truth
+        }
+        let mae = errors.map(abs).reduce(0, +) / Float(errors.count)
+        let rmse = sqrt(errors.map { $0 * $0 }.reduce(0, +) / Float(errors.count))
+        precondition(mae < 0.001 && rmse < 0.001)
+        print("PASS 10 stereo geometry checks. Synthetic projection fixture MAE \(mae) cm, RMSE \(rmse) cm.")
     }
 }

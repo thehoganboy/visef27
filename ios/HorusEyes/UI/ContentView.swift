@@ -12,8 +12,9 @@ final class DemoController: ObservableObject {
     @Published private(set) var diagnostics = ""
     @Published private(set) var exportURL: URL?
     @Published private(set) var stereoPairURL: URL?
+    @Published private(set) var stereoPairFailed = false
     private let journal = DepthDiagnostics()
-    private let imageContext = CIContext()
+    private let imageContext = CIContext(options: [.cacheIntermediates: false])
     private var epoch = DepthSourceEpoch()
     private var captureEpoch = 0
     private var sourceStarted = false
@@ -22,6 +23,7 @@ final class DemoController: ObservableObject {
     private var stereo: StereoCapture?
     private var sequence: UInt64 = 0
     private var modeReady = false
+    private var stereoDiagnosticReady = false
     @Published var active = false
     @Published var threat = "PAUSED"
     @Published var result: ObstacleDetectionResult?
@@ -82,6 +84,7 @@ final class DemoController: ObservableObject {
         journal.switchRequested(selected)
         exportURL = nil
         stereoPairURL = nil
+        stereoPairFailed = false
         diagnostics = ""
         preview = nil
         restartCapture()
@@ -192,8 +195,8 @@ final class DemoController: ObservableObject {
                           (-0.05...0.75).contains(CACurrentMediaTime() - capturedAt) else { return }
                     if let image { self.preview = image }
                     self.diagnostics = self.journal.label(frame: frame, observation: observation, latencyMS: inferenceMS)
-                    if frame.source == .stereo && frame.error != nil && !self.modeReady {
-                        self.modeReady = true
+                    if frame.source == .stereo && frame.error != nil && !self.stereoDiagnosticReady {
+                        self.stereoDiagnosticReady = true
                         self.journal.switchOutcome(frame.source, outcome: "diagnostics_ready")
                     } else if frame.error == nil && observation?.isValid == true, !self.modeReady {
                         self.modeReady = true
@@ -374,10 +377,12 @@ final class DemoController: ObservableObject {
     func captureStereoPair() {
         guard let stereo else { return }
         stereoPairURL = nil
+        stereoPairFailed = false
         let token = captureEpoch
         stereo.requestPair { [weak self] url in
             guard let self, self.captureEpoch == token else { return }
             self.stereoPairURL = url
+            self.stereoPairFailed = url == nil
         }
     }
 
@@ -404,6 +409,7 @@ final class DemoController: ObservableObject {
         lock.unlock()
         active = value
         modeReady = false
+        stereoDiagnosticReady = false
         budget = AuditoryBudgetManager()
         result = nil
         advisory = DirectionalAdvisory()
@@ -616,6 +622,7 @@ struct ContentView: View {
                 if model.mode == .stereo {
                     Button { model.captureStereoPair() } label: { Image(systemName: "camera") }
                         .accessibilityLabel("Capture synchronized stereo calibration pair")
+                    if model.stereoPairFailed { Image(systemName: "exclamationmark.triangle").accessibilityLabel("Stereo pair unavailable") }
                     if let url = model.stereoPairURL {
                         ShareLink(item: url) { Image(systemName: "square.and.arrow.up.on.square") }
                             .accessibilityLabel("Share synchronized stereo calibration pair")

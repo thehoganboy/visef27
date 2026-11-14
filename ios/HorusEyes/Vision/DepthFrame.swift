@@ -80,20 +80,30 @@ enum StereoCorrespondence {
     }
 
     static func depthCM(focalPixels: Float, baselineMM: Float, disparity: Int) -> Float {
+        depthCM(focalPixels: focalPixels, baselineMM: baselineMM, subpixelDisparity: Float(disparity))
+    }
+
+    static func depthCM(focalPixels: Float, baselineMM: Float, subpixelDisparity: Float) -> Float {
         guard focalPixels.isFinite, focalPixels > 0, baselineMM.isFinite,
-              baselineMM > 0, disparity > 0 else { return .nan }
-        let cm = focalPixels * (baselineMM / 10) / Float(disparity)
+              baselineMM > 0, subpixelDisparity.isFinite, subpixelDisparity > 0 else { return .nan }
+        let cm = focalPixels * (baselineMM / 10) / subpixelDisparity
         return cm.isFinite ? cm : .nan
     }
 
     static func disparity(left: [Int], right: [Int], width: Int, height: Int,
                           x: Int, y: Int, maxShift: Int) -> Int? {
+        matchDisparity(left: left, right: right, width: width, height: height,
+            x: x, y: y, maxShift: maxShift).map { Int($0.rounded()) }
+    }
+
+    static func matchDisparity(left: [Int], right: [Int], width: Int, height: Int,
+                               x: Int, y: Int, maxShift: Int) -> Float? {
         let radius = 2
         guard width > 2 * radius, height > 2 * radius, left.count == width * height,
               right.count == left.count, x >= radius, x < width - radius,
               y >= radius, y < height - radius, maxShift > 0 else { return nil }
 
-        func match(_ reference: [Int], _ target: [Int], at center: Int, direction: Int) -> Int? {
+        func match(_ reference: [Int], _ target: [Int], at center: Int, direction: Int) -> Float? {
             var best = Int.max
             var second = Int.max
             var shift = 0
@@ -109,6 +119,7 @@ enum StereoCorrespondence {
             }
             guard high - low >= 18 else { return nil }
 
+            var costs = [Int](repeating: Int.max, count: maxShift + 1)
             for candidate in 0...maxShift {
                 let destination = center + direction * candidate
                 guard destination >= radius, destination < width - radius else { break }
@@ -122,6 +133,7 @@ enum StereoCorrespondence {
                     }
                 }
                 guard valid else { continue }
+                costs[candidate] = score
                 if score < best {
                     second = best
                     best = score
@@ -132,12 +144,18 @@ enum StereoCorrespondence {
             }
             guard shift > 0, best <= 25 * 25, second < Int.max,
                   second - best >= max(35, best / 4) else { return nil }
-            return shift
+            guard shift < maxShift, costs[shift - 1] < Int.max, costs[shift + 1] < Int.max else {
+                return Float(shift)
+            }
+            let leftCost = Float(costs[shift - 1]), rightCost = Float(costs[shift + 1])
+            let curvature = leftCost + rightCost - 2 * Float(best)
+            let offset = curvature > 0 ? (leftCost - rightCost) / (2 * curvature) : 0
+            return Float(shift) + offset
         }
 
         guard let shift = match(left, right, at: x, direction: -1),
-              let reverse = match(right, left, at: x - shift, direction: 1),
-              shift == reverse else { return nil }
+              let reverse = match(right, left, at: x - Int(shift.rounded()), direction: 1),
+              abs(shift - reverse) <= 0.75 else { return nil }
         return shift
     }
 }

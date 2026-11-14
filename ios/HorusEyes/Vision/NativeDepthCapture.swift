@@ -129,11 +129,11 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     private var extrinsics: simd_float4x3?
     private var observers: [NSObjectProtocol] = []
     private var calibration: StereoCalibration?
-    private var snapshot: ((URL?) -> Void)?
+    private var snapshot: (id: UUID, completion: (URL?) -> Void)?
     private var processingMS: Double = 0
     private var previousPairTime = -Double.infinity
     private var cameraState: [(device: AVCaptureDevice, format: AVCaptureDevice.Format,
-                               min: CMTime, max: CMTime)] = []
+                               min: CMTime, max: CMTime, focus: AVCaptureDevice.FocusMode)] = []
     let onFrame: (DepthFrame, CVPixelBuffer?) -> Void
     let onError: (String) -> Void
 
@@ -158,6 +158,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 self.session.commitConfiguration()
                 if connected, self.session.hardwareCost <= 1, self.session.systemPressureCost <= 1 {
                     self.devices = [a, b]
+                    self.lockCalibrationFocus()
                     self.extrinsics = Self.matrix(AVCaptureDevice.extrinsicMatrix(from: a, to: b), as: simd_float4x3.self)
                     configured = true
                     break
@@ -191,6 +192,21 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         }
     }
 
+    private func lockCalibrationFocus() {
+        for (index, device) in devices.enumerated() {
+            guard device.isFocusModeSupported(.locked),
+                  (try? device.lockForConfiguration()) != nil else { continue }
+            let lens = index == 0 ? calibration?.left : calibration?.right
+            if calibration?.pair == devices.map(\.uniqueID), let position = lens?.position,
+               (0...1).contains(position), device.isLockingFocusWithCustomLensPositionSupported {
+                device.setFocusModeLocked(lensPosition: position)
+            } else {
+                device.focusMode = .locked
+            }
+            device.unlockForConfiguration()
+        }
+    }
+
     private func restoreFormats() {
         session.beginConfiguration()
         for input in session.inputs { session.removeInput(input) }
@@ -201,6 +217,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 state.device.activeFormat = state.format
                 state.device.activeVideoMinFrameDuration = state.min
                 state.device.activeVideoMaxFrameDuration = state.max
+                if state.device.isFocusModeSupported(state.focus) { state.device.focusMode = state.focus }
                 state.device.unlockForConfiguration()
             }
         }
@@ -219,7 +236,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             return a.width * a.height < b.width * b.height
         }), let input = try? AVCaptureDeviceInput(device: device), session.canAddInput(input),
         (try? device.lockForConfiguration()) != nil else { return false }
-        cameraState.append((device, device.activeFormat, device.activeVideoMinFrameDuration, device.activeVideoMaxFrameDuration))
+        cameraState.append((device, device.activeFormat, device.activeVideoMinFrameDuration, device.activeVideoMaxFrameDuration, device.focusMode))
         device.activeFormat = format
         device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: 30)
         device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: 30)
@@ -272,11 +289,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         if let ext = extrinsics, let aK, let bK, let rect = StereoCalibration.rectification(ext) {
             let ids = devices.map(\.uniqueID)
             let positions = devices.map(\.lensPosition)
-            if let completion = snapshot {
-                snapshot = nil
-                let url = Self.exportPair(a, b, ids: ids, positions: positions, aK: aK, bK: bK, ext: ext, timestamp: timestamp)
-                DispatchQueue.main.async { completion(url) }
-            }
+
             let verified = calibration.flatMap { profile -> StereoCalibration? in
                 guard profile.verified(for: ids, factoryBaselineMM: rect.baseline),
                       profile.left.matches(width: CVPixelBufferGetWidth(a), height: CVPixelBufferGetHeight(a),
@@ -286,21 +299,26 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                       devices.allSatisfy({ !$0.isAdjustingFocus }) else { return nil }
                 return profile
             }
-            let w = processingMS > 95 ? 144 : 192
+            let w = processingMS > 95 ? 192 : 256
             let h = w * 3 / 4
             let focal = aK.columns.0.x * Float(w) / Float(CVPixelBufferGetWidth(a))
             if let first = Self.warp(a, rotation: rect.basis, k: aK, lens: verified?.left, focal: focal, w: w, h: h),
                let second = Self.warp(b, rotation: rect.rotation * rect.basis, k: bK, lens: verified?.right, focal: focal, w: w, h: h) {
-                let search = max(8, min(w / 3, Int((focal * rect.baseline / 230).rounded(.up))))
-                var disparities: [Int] = []
-                let step = 2
+                let search = max(8, Int(min(Float(w / 3), (focal * rect.baseline / 230).rounded(.up))))
+                let brightnessSamples = stride(from: 0, to: first.count, by: 29).map { first[$0] }.filter { $0 >= 0 }
+                let brightEnough = !brightnessSamples.isEmpty
+                    && brightnessSamples.reduce(0, +) >= 12 * brightnessSamples.count
+                var disparities: [Float] = []
+                var disparityGrid = snapshot == nil ? [] : [Float?](repeating: nil, count: w * h)
+                let step = w == 256 ? 3 : 2
                 for row in stride(from: 2, to: h - 2, by: step) {
                     for col in stride(from: 2, to: w - 2, by: step) {
-                        guard let d = StereoCorrespondence.disparity(left: first, right: second,
+                        guard let d = StereoCorrespondence.matchDisparity(left: first, right: second,
                             width: w, height: h, x: col, y: row, maxShift: search) else { continue }
                         disparities.append(d)
-                        guard let verified, d >= 2 else { continue }
-                        let rectDepth = StereoCorrespondence.depthCM(focalPixels: focal, baselineMM: verified.baselineMM, disparity: d)
+                        if !disparityGrid.isEmpty { disparityGrid[row * w + col] = d }
+                        guard brightEnough, let verified, d >= 1.5 else { continue }
+                        let rectDepth = StereoCorrespondence.depthCM(focalPixels: focal, baselineMM: verified.baselineMM, subpixelDisparity: d)
                         let ray = rect.basis * Self.rectRay(x: col, y: row, w: w, h: h, focal: focal)
                         guard let pixel = verified.left.project(ray, k: aK), pixel.x.isFinite, pixel.y.isFinite else { continue }
                         let px = Float(geometry.width - 1) - pixel.y
@@ -319,13 +337,19 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 disparities.sort()
                 let matched = disparities.count
                 let cells = confidence.filter { $0 > 0 }.count
-                let median = matched > 0 ? String(disparities[matched / 2]) : "N/A"
-                let range = matched > 0 ? "\(disparities.first!)–\(disparities.last!) px" : "N/A"
+                let median = matched > 0 ? String(format: "%.2f", disparities[matched / 2]) : "N/A"
+                let range = matched > 0 ? String(format: "%.1f–%.1f", disparities[0], disparities[matched - 1]) : "N/A"
                 let calibrationStatus = verified == nil ? "Unverified calibration" : "Verified profile"
                 detail = "\(calibrationStatus) • disparity \(median) px [\(range)] • \(matched) matches"
+                if let pending = snapshot {
+                    snapshot = nil
+                    let url = Self.exportPair(a, b, ids: ids, positions: positions, aK: aK, bK: bK, ext: ext,
+                        timestamp: timestamp, disparity: disparityGrid, width: w, height: h, focal: focal)
+                    DispatchQueue.main.async { pending.completion(url) }
+                }
                 if verified != nil {
                     if cells >= mapWidth * mapHeight / 10 { error = nil }
-                    else { error = "Distance unavailable: low texture or overlap" }
+                    else { error = brightEnough ? "Distance unavailable: low texture or overlap" : "Distance unavailable: low light" }
                 }
             }
         }
@@ -337,18 +361,20 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
 
     func requestPair(_ completion: @escaping (URL?) -> Void) {
         queue.async {
-            self.snapshot = completion
-            self.queue.asyncAfter(deadline: .now() + 2) {
-                guard let pending = self.snapshot else { return }
+            let id = UUID()
+            self.snapshot = (id, completion)
+            self.queue.asyncAfter(deadline: .now() + 3) {
+                guard let pending = self.snapshot, pending.id == id else { return }
                 self.snapshot = nil
-                DispatchQueue.main.async { pending(nil) }
+                DispatchQueue.main.async { pending.completion(nil) }
             }
         }
     }
 
     private static func exportPair(_ a: CVPixelBuffer, _ b: CVPixelBuffer, ids: [String],
                                    positions: [Float], aK: simd_float3x3, bK: simd_float3x3,
-                                   ext: simd_float4x3, timestamp: Double) -> URL? {
+                                   ext: simd_float4x3, timestamp: Double, disparity: [Float?],
+                                   width: Int, height: Int, focal: Float) -> URL? {
         func image(_ buffer: CVPixelBuffer, k: simd_float3x3, position: Float) -> [String: Any]? {
             guard CVPixelBufferIsPlanar(buffer),
                   CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
@@ -366,7 +392,9 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("stereo-\(UUID()).json")
         do {
             let data = try JSONSerialization.data(withJSONObject: ["pair": ids, "left": left, "right": right,
-                "captureSeconds": timestamp, "factoryExtrinsicsColumnsMM": transform])
+                "captureSeconds": timestamp, "factoryExtrinsicsColumnsMM": transform,
+                "rectifiedWidth": width, "rectifiedHeight": height, "rectifiedFocalPx": focal,
+                "disparityPx": disparity.map { $0.map { NSNumber(value: $0) as Any } ?? NSNull() }])
             try data.write(to: url, options: .atomic)
             return url
         } catch {
