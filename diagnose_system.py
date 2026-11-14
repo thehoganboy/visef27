@@ -849,15 +849,34 @@ def test_scenario_18_timestamp_hazard_retention(budget_mgr):
     assert k3.hazard_persistence_active is True, "LỖI 18.3: Vẫn phải coasting ở 0.50s!"
     assert k3.threat_level == "CRITICAL", "LỖI 18.3: Vẫn phải là CRITICAL!"
 
-    # Frame 4 (t = 100.75s): Đã vượt quá 0.60s duration -> Coasting hết hạn an toàn
+    # Frame 4 (t = 100.75s): Đã vượt quá 0.60s coasting (Directive 01B-A++ Task P0-01)
+    # TUYỆT ĐỐI KHÔNG được tự động chuyển thành SAFE! Mất dấu mà chưa kiểm chứng hành lang = LOST_UNRESOLVED
     k4 = kin.compute(empty_res, t_start + 0.75, frame_id=4)
-    print(f"  [Output 18 Expired 0.75s] persistence={k4.hazard_persistence_active}, threat={k4.threat_level}")
-    assert k4.hazard_persistence_active is False, "LỖI 18.4: Coasting phải hết hạn sau 0.60s!"
-    assert k4.threat_level == "SAFE", f"LỖI 18.4: Sau khi hết hạn coasting phải về SAFE, nhận {k4.threat_level}"
+    print(f"  [Output 18 Expired 0.75s] state={k4.hazard_state}, persistence={k4.hazard_persistence_active}, threat={k4.threat_level}")
+    assert k4.hazard_persistence_active is False, "LỖI 18.4: Coasting timer phải hết hạn sau 0.60s!"
+    assert k4.hazard_state == "LOST_UNRESOLVED", f"LỖI 18.4: Hết hạn coasting phải là LOST_UNRESOLVED, nhận {k4.hazard_state}"
+    assert k4.threat_level == "UNRESOLVED_HAZARD", f"LỖI 18.4: Hết hạn coasting TUYỆT ĐỐI KHÔNG được về SAFE, nhận {k4.threat_level}"
+    assert k4.guidance_state == "PATH_UNRESOLVED", f"LỖI 18.4: Guidance phải là PATH_UNRESOLVED, nhận {k4.guidance_state}"
+
+    # Bounded reminder audio check: Nhắc nhở gián đoạn, không phát CRITICAL liên tục và không MUTED
+    dec4 = budget_mgr.coordinate(empty_res, k4)
+    assert dec4.cue_mode == "CAUTION_REMINDER", f"LỖI 18.4: Audio cue mode phải là CAUTION_REMINDER, nhận {dec4.cue_mode}"
+    assert dec4.volume_factor == 0.35, f"LỖI 18.4: Audio volume phải là 0.35 (bounded), nhận {dec4.volume_factor}"
 
     # Frame 5: Duplicate timestamp guard
     k5 = kin.compute(empty_res, t_start + 0.75, frame_id=4)
     assert k5 == k4, "LỖI 18.5: Trùng timestamp phải trả về kết quả cached an toàn!"
+
+    # Frame 6 & 7: Hành lang được quan sát thông thoáng liên tiếp 3 frame -> OBSERVED_LOW_RISK (SAFE)
+    k6 = kin.compute(empty_res, t_start + 0.85, frame_id=6)
+    k7 = kin.compute(empty_res, t_start + 0.95, frame_id=7)
+    k8 = kin.compute(empty_res, t_start + 1.05, frame_id=8)
+    print(f"  [Output 18 Cleared 3-frames] state={k8.hazard_state}, threat={k8.threat_level}, guidance={k8.guidance_state}")
+    assert k8.hazard_state == "OBSERVED_LOW_RISK", f"LỖI 18.6: Sau 3 frame xác nhận phải là OBSERVED_LOW_RISK, nhận {k8.hazard_state}"
+    assert k8.threat_level == "SAFE", f"LỖI 18.6: Sau 3 frame xác nhận threat phải là SAFE, nhận {k8.threat_level}"
+    assert k8.guidance_state == "NO_HAZARD_DETECTED_IN_OBSERVED_REGION", f"LỖI 18.6: Guidance phải là NO_HAZARD_DETECTED_IN_OBSERVED_REGION, nhận {k8.guidance_state}"
+    dec8 = budget_mgr.coordinate(empty_res, k8)
+    assert dec8.is_active is False and dec8.cue_mode == "MUTED", "LỖI 18.6: Khi đã xác nhận an toàn âm thanh phải MUTED"
 
     return True
 

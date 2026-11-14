@@ -1,343 +1,444 @@
-// HorusEyes 2.0 — ContentView.swift
-// ════════════════════════════════════════════════════════════════════════════════
-// Landscape Live Camera AR HUD & Spatial Obstacle Tracking (Eyes-Free & Assistant Mode)
-// Apple HIG, WCAG AAA High-Contrast, Real-time Neural Depth Feedback
-// ════════════════════════════════════════════════════════════════════════════════
-
 import SwiftUI
 import AVFoundation
+import QuartzCore
 
-struct ContentView: View {
-    // ── Pipeline Controllers ───────────────────────────────────────────────────
-    @StateObject private var cameraManager = CameraTorchManager()
-    @StateObject private var depthEngine = DepthEngine()
-    @StateObject private var imuManager = IMUManager()
-    @StateObject private var audioEngine = SpatialAudioEngine()
+final class DemoController: ObservableObject {
+    let camera = CameraTorchManager()
+    private let audio = SpatialAudioEngine()
+    private let imu = IMUManager()
+    @Published var active = false
+    @Published var threat = "PAUSED"
+    @Published var result: ObstacleDetectionResult?
+    @Published var sourceTimestamp: Double = 0
+    @Published var advisory = DirectionalAdvisory()
+    private let lock = NSLock()
+    private let inferenceQueue = DispatchQueue(label: "com.horuseyes.inference", qos: .userInitiated)
+    private var enabled = false
+    private var busy = false
+    private var generation = 0
+    private var workerGeneration = -1
+    private var depth: DepthEngine?
+    private var kin = KinematicsEngine()
+    private var budget = AuditoryBudgetManager()
+    private var timer: Timer?
+    private var started: Double = 0
+    private var lastFrame: Double = 0
+    private var yaw: Float = 0
+    private var prevAngle: Double? = nil
+    private var isAppeared: Bool = false
+    private var lastAcceptedFrameId: UInt64 = 0
+    private var lastAcceptedTimestamp: Double = 0.0
+    private struct ObservationSnapshot {
+        let frameId: UInt64
+        let timestamp: Double
+        let threat: String
+        let state: String
+        let angleDeg: Double?
+        let confidence: Double
+        let reasonCode: String
+    }
+    private var observationHistory: [ObservationSnapshot] = []
 
-    private let kinematicsEngine = KinematicsEngine()
-    private let budgetManager = AuditoryBudgetManager()
+    func appear() {
+        guard !isAppeared else { return }
+        isAppeared = true
 
-    // ── Observable Pipeline Telemetry (Internal States) ───────────────────────
-    @State private var isSystemPaused: Bool = false
-    @State private var safeDirection: String = "RIGHT"
-    @State private var threatLevel: String = "SAFE"
-    @State private var guidanceState: String = "ESCAPE_RIGHT"
-    @State private var currentDistCM: Float = 250.0
-    @State private var currentVz: Float = 0.0
-    @State private var currentTTC: Float = Float.infinity
-    @State private var currentUncertainty: Float = 0.15
-    @State private var currentCueMode: String = "MUTED"
-    @State private var sectorDists: [String: Float] = ["LEFT": 250.0, "CENTER": 250.0, "RIGHT": 250.0]
-
-    // ── Tactile Feedback ──────────────────────────────────────────────────────
-    private let impactFeedbackHeavy = UIImpactFeedbackGenerator(style: .heavy)
-    private let impactFeedbackMedium = UIImpactFeedbackGenerator(style: .medium)
-    private let notificationFeedback = UINotificationFeedbackGenerator()
-
-    var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // ════════════════════════════════════════════════════════════
-                // LAYER 0: Hardware-Accelerated Camera Preview Background
-                // ════════════════════════════════════════════════════════════
-                CameraPreviewView(session: cameraManager.session)
-                    .ignoresSafeArea()
-
-                // ════════════════════════════════════════════════════════════
-                // LAYER 1: AR Bounding Boxes & Tracking Overlay (Cleaned)
-                // ════════════════════════════════════════════════════════════
-                TrackingOverlayView(
-                    result: depthEngine.lastResult,
-                    threatLevel: threatLevel,
-                    safeDirection: safeDirection,
-                    isPaused: isSystemPaused
+        camera.onFrameProcessed = { [weak self] buffer, frameId, settle, luma, capturedAt in
+            guard let self = self else { return }
+            self.lock.lock()
+            self.lastFrame = capturedAt
+            guard self.enabled && !self.busy else { self.lock.unlock(); return }
+            self.busy = true
+            let token = self.generation
+            let rate = self.yaw
+            self.lock.unlock()
+            self.inferenceQueue.async {
+                defer { self.lock.lock(); self.busy = false; self.lock.unlock() }
+                if self.workerGeneration != token {
+                    self.kin = KinematicsEngine(); self.budget = AuditoryBudgetManager()
+                    self.workerGeneration = token
+                }
+                if self.depth == nil { self.depth = DepthEngine() }
+                let obs = self.depth!.processFrame(
+                    pixelBuffer: buffer,
+                    frameId: frameId,
+                    sourceTimestamp: capturedAt,
+                    aeSettleFramesRemaining: settle,
+                    meanLuma: luma,
+                    isZeroLuxBlind: luma < Config.luxZeroBlindThreshold
+                )
+                let risk = self.kin.compute(
+                    obstacleResult: obs,
+                    frameId: frameId,
+                    timestamp: capturedAt,
+                    aeSettleRemaining: settle,
+                    imuYawRateRadS: rate
                 )
 
-                // ════════════════════════════════════════════════════════════
-                // LAYER 2: Non-Overlapping Landscape Peripheral HUD Bars
-                // ════════════════════════════════════════════════════════════
-                VStack {
-                    // Top Bar: Unified Cockpit Header
-                    HStack(spacing: 12) {
-                        // Brand Identifier
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(LinearGradient(colors: [Color.cyan, Color.blue], startPoint: .topLeading, endPoint: .bottomTrailing))
-                                .frame(width: 24, height: 24)
-                                .overlay(
-                                    Image(systemName: "eye.fill")
-                                        .font(.system(size: 11, weight: .bold))
-                                        .foregroundColor(.black)
-                                )
-                            Text("HORUSEYES")
-                                .font(.system(size: 13, weight: .black, design: .rounded))
-                                .foregroundColor(.white)
+                DispatchQueue.main.async {
+                    let consumedAt = CACurrentMediaTime()
+                    self.lock.lock()
+                    let current = self.enabled && self.generation == token
+                    self.lock.unlock()
+                    guard current else { return }
+
+                    let age = consumedAt - obs.timestamp
+                    guard obs.timestamp > 0 && !obs.timestamp.isNaN && !obs.timestamp.isInfinite else { return }
+                    guard age >= -0.05 && age <= 0.75 else { return }
+                    guard frameId > self.lastAcceptedFrameId && obs.timestamp >= self.lastAcceptedTimestamp else { return }
+
+                    self.lastAcceptedFrameId = frameId
+                    self.lastAcceptedTimestamp = obs.timestamp
+                    self.result = obs.isValid ? obs : nil
+                    self.sourceTimestamp = obs.timestamp
+                    self.threat = risk.threatLevel
+                    let rawAdv = estimateDirectionalAdvisory(
+                        observation: obs,
+                        threat: risk.threatLevel,
+                        now: consumedAt,
+                        prevAngle: self.prevAngle
+                    )
+
+                    var finalAdv = rawAdv
+
+                    // Evidence-Aware Temporal Stability (P0-03)
+                    if risk.threatLevel == "CRITICAL" || rawAdv.state == "STOP" {
+                        // Critical hazard: immediate preemption with ZERO smoothing delay
+                        self.observationHistory.removeAll()
+                        finalAdv = rawAdv
+                    } else if risk.threatLevel == "SENSOR_FAULT" || rawAdv.state == "UNKNOWN" {
+                        self.observationHistory.removeAll()
+                        finalAdv = rawAdv
+                    } else if rawAdv.state == "AVAILABLE" {
+                        self.observationHistory.append(ObservationSnapshot(
+                            frameId: frameId,
+                            timestamp: obs.timestamp,
+                            threat: risk.threatLevel,
+                            state: rawAdv.state,
+                            angleDeg: rawAdv.angleDeg,
+                            confidence: rawAdv.confidence ?? 0.55,
+                            reasonCode: rawAdv.reasonCode
+                        ))
+                        if self.observationHistory.count > 4 {
+                            self.observationHistory.removeFirst()
                         }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.75))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
-
-                        Spacer()
-
-                        // Center Escape Guidance Banner
-                        if !isSystemPaused, let res = depthEngine.lastResult {
-                            let isSafe = res.distCM >= Config.distSafeCM || res.modeText.hasPrefix("SAFE")
-                            let bannerColor = isSafe ? Color.green : colorForThreat(distCM: res.distCM)
-                            HStack(spacing: 8) {
-                                Image(systemName: isSafe ? "checkmark.shield.fill" : "exclamationmark.triangle.fill")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(bannerColor)
-                                if isSafe {
-                                    Text("ĐƯỜNG THOÁNG (Chưa kiểm chứng)")
-                                        .font(.system(size: 12, weight: .black, design: .rounded))
-                                        .foregroundColor(.white)
-                                } else {
-                                    Text("\(Int(res.distCM))cm • CẢNH BÁO \(hazardDirectionLabel(pan: res.pan))")
-                                        .font(.system(size: 12, weight: .black, design: .rounded))
-                                        .foregroundColor(bannerColor)
-                                }
+                        finalAdv = rawAdv
+                    } else if rawAdv.state == "UNAVAILABLE" {
+                        // Check for transient 1-frame degradation over otherwise stable, fresh observation
+                        let recentValid = self.observationHistory.filter {
+                            $0.state == "AVAILABLE" && (consumedAt - $0.timestamp) <= 0.28
+                        }
+                        if recentValid.count >= 2, let lastValid = recentValid.last, let heldAngle = lastValid.angleDeg {
+                            // Bounded transient hold: maintain direction for this single frame
+                            finalAdv = DirectionalAdvisory(
+                                state: "AVAILABLE",
+                                angleDeg: heldAngle,
+                                confidence: lastValid.confidence * 0.85,
+                                observedAngularRange: rawAdv.observedAngularRange,
+                                sourceTimestamp: lastValid.timestamp,
+                                reasonCode: "TRANSIENT_HOLD"
+                            )
+                            self.observationHistory.append(ObservationSnapshot(
+                                frameId: frameId,
+                                timestamp: obs.timestamp,
+                                threat: risk.threatLevel,
+                                state: "TRANSIENT_HOLD",
+                                angleDeg: heldAngle,
+                                confidence: lastValid.confidence * 0.85,
+                                reasonCode: "TRANSIENT_HOLD"
+                            ))
+                            if self.observationHistory.count > 4 {
+                                self.observationHistory.removeFirst()
                             }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 6)
-                            .background(Color.black.opacity(0.85))
-                            .clipShape(Capsule())
-                            .overlay(Capsule().stroke(bannerColor.opacity(0.8), lineWidth: 1.5))
-                            .shadow(color: bannerColor.opacity(0.3), radius: 6)
+                        } else {
+                            self.observationHistory.removeAll()
+                            finalAdv = rawAdv
                         }
-
-                        Spacer()
-
-                        // Operational Status Capsule
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(isSystemPaused ? Color.orange : (cameraManager.isZeroLuxBlind ? Color.red : Color.green))
-                                .frame(width: 8, height: 8)
-                                .shadow(color: isSystemPaused ? Color.orange : Color.green, radius: 4)
-
-                            Text(isSystemPaused ? "TẠM DỪNG" : (cameraManager.isZeroLuxBlind ? "THIẾU SÁNG" : "ĐANG QUÉT"))
-                                .font(.system(size: 11, weight: .black, design: .rounded))
-                                .foregroundColor(isSystemPaused ? .orange : (cameraManager.isZeroLuxBlind ? .red : .green))
-                        }
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .background(Color.black.opacity(0.75))
-                        .clipShape(Capsule())
-                        .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
                     }
-                    .padding(.horizontal, 20)
-                    .padding(.top, 8)
 
-                    Spacer()
+                    self.advisory = finalAdv
+                    self.prevAngle = finalAdv.state == "AVAILABLE" ? finalAdv.angleDeg : nil
 
-                    // Bottom Bar: Thumb Controls & 3-Sector Clearance Meter
-                    HStack(alignment: .bottom, spacing: 12) {
-                        // Left: Smart Flashlight Button
-                        Button(action: toggleTorchState) {
-                            HStack(spacing: 8) {
-                                Image(systemName: cameraManager.isTorchActive ? "flashlight.on.fill" : "flashlight.off.fill")
-                                    .font(.system(size: 16, weight: .bold))
-                                    .foregroundColor(cameraManager.isTorchActive ? .yellow : .white)
-                                Text(cameraManager.isTorchActive ? "ĐÈN BẬT" : "ĐÈN AUTO")
-                                    .font(.system(size: 11, weight: .heavy, design: .rounded))
-                                    .foregroundColor(.white)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.black.opacity(0.80))
-                            .cornerRadius(14)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(cameraManager.isTorchActive ? Color.yellow : Color.white.opacity(0.25), lineWidth: 1.2))
-                            .shadow(color: cameraManager.isTorchActive ? Color.yellow.opacity(0.3) : Color.clear, radius: 6)
-                        }
-                        .accessibilityLabel("Bật tắt đèn pin thông minh")
-
-                        Spacer()
-
-                        // Center: 3-Sector Clearance Meter
-                        if !isSystemPaused, let res = depthEngine.lastResult {
-                            HStack(spacing: 8) {
-                                sectorPill(title: "TRÁI", distCM: res.sectorDists["LEFT"] ?? 250.0)
-                                sectorPill(title: "GIỮA", distCM: res.sectorDists["CENTER"] ?? 250.0)
-                                sectorPill(title: "PHẢI", distCM: res.sectorDists["RIGHT"] ?? 250.0)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 6)
-                            .background(Color.black.opacity(0.75))
-                            .clipShape(Capsule())
-                            .overlay(Capsule().stroke(Color.white.opacity(0.2), lineWidth: 1))
-                        }
-
-                        Spacer()
-
-                        // Right: Pause / Resume Button
-                        Button(action: togglePauseState) {
-                            HStack(spacing: 8) {
-                                Image(systemName: isSystemPaused ? "play.fill" : "pause.fill")
-                                    .font(.system(size: 16, weight: .black))
-                                    .foregroundColor(isSystemPaused ? .green : .orange)
-                                Text(isSystemPaused ? "TIẾP TỤC" : "TẠM DỪNG")
-                                    .font(.system(size: 11, weight: .heavy, design: .rounded))
-                                    .foregroundColor(.white)
-                            }
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 10)
-                            .background(Color.black.opacity(0.80))
-                            .cornerRadius(14)
-                            .overlay(RoundedRectangle(cornerRadius: 14).stroke(isSystemPaused ? Color.green : Color.orange.opacity(0.8), lineWidth: 1.2))
-                            .shadow(color: isSystemPaused ? Color.green.opacity(0.3) : Color.orange.opacity(0.25), radius: 8)
-                        }
-                        .accessibilityLabel(isSystemPaused ? "Tiếp tục quét" : "Tạm dừng quét")
-                    }
-                    .padding(.horizontal, 20)
-                    .padding(.bottom, 10)
+                    // P0: Coordinate final authoritative advisory with auditory budget manager BEFORE updating audio
+                    let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk, advisory: finalAdv)
+                    self.audio.update(decision: decision)
                 }
             }
-            .contentShape(Rectangle())
-            // Eyes-free double-tap anywhere on screen toggles pause/resume
-            .onTapGesture(count: 2) {
-                togglePauseState()
+        }
+        camera.start()
+        imu.startMotionTracking()
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+    }
+
+    private func tick() {
+        lock.lock(); yaw = imu.yawRateRadS; let frameTime = lastFrame; lock.unlock()
+        guard active else { return }
+        let now = CACurrentMediaTime()
+        if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) { fault() }
+        // Preview remains live; stale boxes must disappear independently of frames.
+        if now-sourceTimestamp > 0.25 { result = nil }
+        // Expire directional advisory and guidance-dependent audio at 750ms
+        if now-sourceTimestamp > 0.75 {
+            if advisory.state == "AVAILABLE" {
+                advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: sourceTimestamp, reasonCode: "SOURCE_FRAME_STALE")
+                prevAngle = nil
+            }
+            if threat != "CRITICAL" && threat != "SENSOR_FAULT" {
+                audio.update(decision: silentDecision())
             }
         }
-        .onAppear {
-            startPipeline()
-        }
-        .onDisappear {
-            stopPipeline()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
-            let orientation = UIApplication.shared.connectedScenes
-                .compactMap { $0 as? UIWindowScene }
-                .first?.interfaceOrientation ?? .landscapeRight
-            cameraManager.updateVideoOrientation(for: orientation)
-        }
     }
 
-    // ── Sector Pill Subview ───────────────────────────────────────────────────
-    private func sectorPill(title: String, distCM: Float) -> some View {
-        let color = colorForThreat(distCM: distCM)
-        let distText = distCM >= Config.distSafeCM ? ">2.5m" : "\(Int(distCM))cm"
-        return HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text("\(title): \(distText)")
-                .font(.system(size: 10, weight: .black, design: .rounded))
-                .foregroundColor(.white)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
-        .background(Color.black.opacity(0.60))
-        .clipShape(Capsule())
+    private func silentDecision() -> BudgetDecision {
+        BudgetDecision(isActive: false, pan: 0, proximity: 0, distCM: .nan, ttc: .infinity,
+            priorityScore: 0, volumeFactor: 0, safeDirection: "NONE", cueMode: "MUTED", threatLevel: "UNKNOWN", suppressedCount: 0)
     }
 
-    private func colorForThreat(distCM: Float) -> Color {
-        if distCM <= Config.distCriticalCM {
-            return Color.red
-        } else if distCM <= Config.distDangerCM {
-            return Color.orange
-        } else if distCM <= Config.distWarningCM {
-            return Color.yellow
-        } else if distCM <= Config.distAlertCM {
-            return Color.cyan
-        } else {
-            return Color.green
-        }
+    private func fault() {
+        threat = "SENSOR_FAULT"; result = nil; advisory = DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: CACurrentMediaTime(), reasonCode: "SENSOR_FAULT"); prevAngle = nil
+        observationHistory.removeAll()
+        audio.update(decision: BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
+            ttc: .infinity, priorityScore: 99, volumeFactor: 0.35, safeDirection: "STOP",
+            cueMode: "SYSTEM_FAULT_TONE", threatLevel: "SENSOR_FAULT", suppressedCount: 0))
     }
 
-    // ── Pipeline Lifecycle ────────────────────────────────────────────────────
-    private func startPipeline() {
-        // 1. Start Sensors & Audio lazily on Main Thread
-        audioEngine.start()
-        cameraManager.start()
-        imuManager.startMotionTracking()
+    func toggle() { setActive(!active) }
 
-        // 2. Link Camera Stream to Perception & Kinematics Loop
-        cameraManager.onFrameProcessed = { pixelBuffer, frameId, aeSettle, luma in
-            guard !self.isSystemPaused else { return }
+    func setActive(_ value: Bool) {
+        lock.lock(); generation += 1; enabled = value; lock.unlock()
+        active = value; result = nil; advisory = DirectionalAdvisory(); prevAngle = nil
+        observationHistory.removeAll()
+        camera.setGuidanceActive(value)
+        if !value {
+            camera.forceTorchOff()
+        }
+        lastAcceptedFrameId = 0; lastAcceptedTimestamp = 0.0
+        started = CACurrentMediaTime(); sourceTimestamp = started
+        threat = value ? "INITIALIZING" : "PAUSED"
+        audio.update(decision: silentDecision())
+        if value { audio.start() } else { audio.stop() }
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
 
-            // Step 1: Spatial Depth Estimation + Multi-Obstacle Detection
-            let obsResult = self.depthEngine.processFrame(
-                pixelBuffer: pixelBuffer,
-                frameId: frameId,
-                aeSettleFramesRemaining: aeSettle,
-                meanLuma: luma,
-                isZeroLuxBlind: self.cameraManager.isZeroLuxBlind
+    func disappear() {
+        guard isAppeared else { return }
+        isAppeared = false
+
+        camera.setGuidanceActive(false)
+        camera.forceTorchOff()
+        setActive(false); timer?.invalidate(); timer = nil
+        camera.stop(); imu.stopMotionTracking(); audio.stop()
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// APPLE-INSPIRED LIQUID GLASS BUTTON STYLE
+// ═══════════════════════════════════════════════════════════════════════════════
+struct LiquidButtonStyle: ButtonStyle {
+    let isActive: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 30, weight: .bold))
+            .foregroundColor(isActive ? Color.white : Color(white: 0.08))
+            .frame(maxWidth: .infinity, minHeight: 124)
+            .background(
+                ZStack {
+                    if isActive {
+                        // Active DỪNG state: Apple System Red liquid gradient with specular top highlight
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 1.0, green: 0.27, blue: 0.23), Color(red: 0.85, green: 0.12, blue: 0.09)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.45), Color.white.opacity(0.1)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 1
+                            )
+                    } else {
+                        // Paused CHẠY state: Frosted glass finish with subtle specular highlight
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 0.97, green: 0.97, blue: 0.98), Color(red: 0.89, green: 0.89, blue: 0.92)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                )
+                            )
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .stroke(
+                                LinearGradient(
+                                    colors: [Color.white.opacity(0.8), Color.white.opacity(0.2)],
+                                    startPoint: .top,
+                                    endPoint: .bottom
+                                ),
+                                lineWidth: 1
+                            )
+                    }
+                }
             )
+            .shadow(color: isActive ? Color.red.opacity(0.3) : Color.black.opacity(0.25), radius: 8, x: 0, y: 4)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .animation(.spring(response: 0.24, dampingFraction: 0.68), value: configuration.isPressed)
+    }
+}
 
-            // Step 2: Kinematics Centroid Tracking & TTC Computation
-            let now = CACurrentMediaTime()
-            let kinResult = self.kinematicsEngine.compute(
-                obstacleResult: obsResult,
-                frameId: frameId,
-                timestamp: now,
-                aeSettleRemaining: aeSettle,
-                userWalkSpeedCmS: self.imuManager.estimatedWalkSpeedCmS,
-                imuYawRateRadS: self.imuManager.yawRateRadS
+// ═══════════════════════════════════════════════════════════════════════════════
+// MANUAL FLASHLIGHT BUTTON (P1-01)
+// ═══════════════════════════════════════════════════════════════════════════════
+struct FlashlightButton: View {
+    let isTorchActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color(white: 0.12).opacity(0.82))
+                    .overlay(
+                        Circle()
+                            .stroke(
+                                isTorchActive ?
+                                    Color(red: 1.0, green: 0.84, blue: 0.04).opacity(0.90) :
+                                    Color.white.opacity(0.28),
+                                lineWidth: 2.0
+                            )
+                    )
+                Image(systemName: isTorchActive ? "flashlight.on.fill" : "flashlight.off.fill")
+                    .font(.system(size: 30, weight: .semibold))
+                    .foregroundColor(isTorchActive ? Color(red: 1.0, green: 0.84, blue: 0.04) : Color.white.opacity(0.95))
+                    .shadow(color: isTorchActive ? Color.yellow.opacity(0.6) : Color.clear, radius: 8)
+            }
+            .frame(width: 66, height: 66)
+            .contentShape(Circle())
+        }
+        .accessibilityLabel(isTorchActive ? "Tắt đèn pin" : "Bật đèn pin")
+        .accessibilityHint("Nhấn để bật hoặc tắt đèn pin hỗ trợ môi trường thiếu sáng")
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN APPLICATION VIEW
+// ═══════════════════════════════════════════════════════════════════════════════
+struct ContentView: View {
+    @StateObject private var model = DemoController()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Rounded Camera Preview Container (P1-01)
+            ZStack {
+                CameraPreviewView(session: model.camera.session)
+                let isStop = model.advisory.state == "STOP" && model.threat != "PAUSED"
+                TrackingOverlayView(result: model.result, threatLevel: model.threat, isStop: isStop)
+
+                // Centered Direction Indicator & Status Badge
+                VStack(spacing: 0) {
+                    Spacer()
+                    DirectionIndicator(advisory: model.advisory, threat: model.threat)
+                        .padding(.bottom, 28)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+
+                // Top-Right Floating Flashlight Button (Enlarged)
+                VStack(spacing: 0) {
+                    HStack(spacing: 0) {
+                        Spacer()
+                        FlashlightButton(isTorchActive: model.camera.isTorchActive) {
+                            model.camera.toggleManualTorch()
+                        }
+                        .padding(.top, 16)
+                        .padding(.trailing, 16)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
             )
+            .background(Color.black)
+            .padding(.horizontal, 14)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
 
-            // Step 3: Auditory Budget Coordination & Priority Arbitration
-            let decision = self.budgetManager.coordinate(
-                obstacleResult: obsResult,
-                kinematicsResult: kinResult
-            )
+            // Enlarged Liquid START/STOP Button (P0-03)
+            Button(action: model.toggle) {
+                Text(model.active ? "DỪNG" : "CHẠY")
+            }
+            .buttonStyle(LiquidButtonStyle(isActive: model.active))
+            .accessibilityLabel(model.active ? "Dừng nhận thức tránh va chạm" : "Bắt đầu nhận thức tránh va chạm")
+            .padding(.horizontal, 16)
+            .padding(.bottom, 16)
+        }
+        .background(Color(red: 0.04, green: 0.04, blue: 0.05)) // Apple Dark Chassis (#0A0A0C)
+        .onAppear { model.appear() }
+        .onDisappear { model.disappear() }
+    }
+}
 
-            // Step 4: Spatial Audio & Acoustic Actuation
-            self.audioEngine.update(decision: decision)
+// ═══════════════════════════════════════════════════════════════════════════════
+// 3D DIRECTIONAL ADVISORY INDICATOR (P0-01)
+// ═══════════════════════════════════════════════════════════════════════════════
+struct DirectionIndicator: View {
+    let advisory: DirectionalAdvisory
+    let threat: String
 
-            // Step 5: Update Telemetry State on Main Thread
-            DispatchQueue.main.async {
-                self.safeDirection = kinResult.safeDirection
-                self.threatLevel = kinResult.threatLevel
-                self.guidanceState = kinResult.guidanceState
-                self.currentDistCM = decision.distCM
-                self.currentVz = kinResult.primaryVelocityZ
-                self.currentTTC = decision.ttc
-                self.currentUncertainty = obsResult.uncertaintyScore
-                self.currentCueMode = decision.cueMode
-                self.sectorDists = obsResult.sectorDists
+    var body: some View {
+        ZStack {
+            let isStop = advisory.state == "STOP" && threat != "PAUSED"
+            let isPaused = threat == "PAUSED"
+
+            if !isStop && !isPaused, let angle = advisory.drawableAngle(now: CACurrentMediaTime()) {
+                // Perceptual visual rotation mapping (P0-01)
+                let visualAngle = max(-45.0, min(45.0, angle * 1.4))
+                let lateralOffset = max(-35.0, min(35.0, visualAngle * 0.9))
+
+                Image(systemName: "arrow.up")
+                    .font(.system(size: 84, weight: .heavy))
+                    .rotation3DEffect(.degrees(22), axis: (x: 1, y: 0, z: 0)) // 3D road perspective
+                    .rotationEffect(.degrees(visualAngle))
+                    .offset(x: lateralOffset)
+                    .foregroundStyle(
+                        LinearGradient(
+                            colors: [Color.white, Color(red: 0.88, green: 0.88, blue: 0.92)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .shadow(color: Color.black.opacity(0.75), radius: 6, x: 0, y: 5)
+                    .animation(.spring(response: 0.22, dampingFraction: 0.75), value: angle)
+                    .accessibilityLabel("Estimated direction advisory")
+            } else {
+                let labelText = isPaused ? "PAUSED" : (isStop ? "STOP" : "UNAVAILABLE")
+                let iconName = isStop ? "hand.raised.fill" : "minus.circle"
+
+                Label(labelText, systemImage: iconName)
+                    .font(.system(size: 22, weight: .bold))
+                    .foregroundColor(isStop ? Color(red: 1.0, green: 0.23, blue: 0.19) : Color(red: 0.95, green: 0.95, blue: 0.97))
+                    .padding(.horizontal, 28)
+                    .padding(.vertical, 14)
+                    .background(
+                        RoundedRectangle(cornerRadius: 18, style: .continuous)
+                            .fill(Color(white: 0.05).opacity(0.85))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                            )
+                    )
+                    .accessibilityLabel(isStop ? "Stop. Obstacle detected" : (isPaused ? "Perception paused" : "Direction unavailable"))
             }
         }
-
-        // Link Torch Event to Earcon
-        cameraManager.onTorchToggled = { isOn in
-            self.audioEngine.playEarcon(type: isOn ? "FLASH_ON" : "FLASH_OFF")
-        }
-    }
-
-    private func stopPipeline() {
-        cameraManager.stop()
-        audioEngine.stop()
-        imuManager.stopMotionTracking()
-    }
-
-    // ── UI User Actions ───────────────────────────────────────────────────────
-    private func togglePauseState() {
-        isSystemPaused.toggle()
-        if isSystemPaused {
-            notificationFeedback.notificationOccurred(.warning)
-            audioEngine.playEarcon(type: "PAUSE")
-            audioEngine.update(decision: BudgetDecision(
-                isActive: false, pan: 0, proximity: 0, distCM: 250, ttc: .infinity,
-                priorityScore: 0, volumeFactor: 0, safeDirection: "STOP", cueMode: "MUTED",
-                threatLevel: "SAFE", suppressedCount: 0
-            ))
-        } else {
-            notificationFeedback.notificationOccurred(.success)
-            audioEngine.playEarcon(type: "MUTE")
-        }
-    }
-
-    private func hazardDirectionLabel(pan: Float) -> String {
-        if pan < Float(-0.33) {
-            return "BÊN TRÁI ◄"
-        } else if pan > Float(0.33) {
-            return "BÊN PHẢI ►"
-        } else {
-            return "TRỰC DIỆN ▲"
-        }
-    }
-
-    private func toggleTorchState() {
-        impactFeedbackMedium.impactOccurred()
-        cameraManager.toggleManualTorch()
+        .frame(maxWidth: .infinity)
     }
 }

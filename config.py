@@ -24,7 +24,7 @@ LUX_BRIGHT_OFF_THRESHOLD   = 75.0       # Hysteresis tắt Flash khi môi trư�
 FLASH_HOLD_MIN_SECONDS     = 5.0        # Thời gian giữ Flash tối thiểu giữa 2 lần chuyển đổi
 FLASH_AE_SETTLE_FRAMES     = 5          # Số frame bỏ qua biến thiên vận tốc sau khi bật/tắt Flash
 LUX_ENHANCEMENT_THRESHOLD  = 45.0       # Mean Y < 45 → áp dụng CLAHE cứu sáng
-LUX_ZERO_BLIND_THRESHOLD   = 10.0       # Mean Y < 10 sau khi đã bật Flash+CLAHE → cảm biến mù
+LUX_ZERO_BLIND_THRESHOLD   = 3.5        # Mean Y < 3.5 sau khi đã bật Flash+CLAHE → cảm biến mù (che tay / trong túi)
 LUX_DARK_CONFIRM_FRAMES    = 8          # Số frame liên tiếp tối đen để xác nhận bật Flash
 CLAHE_CLIP_LIMIT           = 2.5        # CLAHE clip limit cho cân bằng sáng cục bộ
 CLAHE_GRID_SIZE            = (8, 8)     # CLAHE tile grid size
@@ -167,3 +167,9 @@ SECTOR_RIGHT_SPLIT = 0.66                # 66% -> 100%: Vùng Phải
 # ── Visualization ─────────────────────────────────────────────────────────────
 COLORMAP           = 4                   # cv2.COLORMAP_MAGMA
 FPS_SMOOTHING      = 0.9                 # EMA cho FPS
+
+# DEMO-READY-01: content integrity of the existing self-contained MiDaS asset.
+# This pin identifies repository bytes; it is not proof of physical calibration.
+DEMO_MODEL_PATH = "android/app/src/main/assets/midas_small.onnx"
+ONNX_SHA256_HASHES["midas_small.onnx"] = "0f6727bda50b289a803b8146cdf531dae409927600f017778d07828ba6f1f82d"
+FRAME_TIMEOUT_SEC = 1.0

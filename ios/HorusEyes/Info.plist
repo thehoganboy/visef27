@@ -6,7 +6,7 @@
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>HorusEyes</string>
+    <string>VAMPIOR</string>
     <key>CFBundleExecutable</key>
     <string>HorusEyes</string>
     <key>CFBundleIdentifier</key>
@@ -14,7 +14,7 @@
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>HorusEyes</string>
+    <string>VAMPIOR</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
@@ -31,17 +31,16 @@
     </array>
     <key>UISupportedInterfaceOrientations</key>
     <array>
-        <string>UIInterfaceOrientationLandscapeRight</string>
-        <string>UIInterfaceOrientationLandscapeLeft</string>
+        <string>UIInterfaceOrientationPortrait</string>
     </array>
 
     <!-- Essential Hardware & Privacy Permissions -->
     <key>NSCameraUsageDescription</key>
-    <string>HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time.</string>
+    <string>VAMPIOR uses the rear camera to detect obstacles and guide you safely in real-time.</string>
     <key>NSMicrophoneUsageDescription</key>
-    <string>HorusEyes requires audio session access for spatial sound feedback.</string>
+    <string>VAMPIOR requires audio session access for spatial sound feedback.</string>
     <key>NSMotionUsageDescription</key>
-    <string>HorusEyes uses motion sensors to distinguish head turns from obstacle approach.</string>
+    <string>VAMPIOR uses motion sensors to distinguish head turns from obstacle approach.</string>
 
     <!-- Status Bar & Launch Screen -->
     <key>UIStatusBarStyle</key>

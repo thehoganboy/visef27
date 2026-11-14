@@ -5,6 +5,7 @@
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
+import Combine
 import CoreML
 import Vision
 import Accelerate
@@ -25,6 +26,21 @@ struct SingleObstacle: Identifiable {
     let isWall: Bool
 }
 
+struct SpatialBin {
+    let binId: Int
+    let angleMin: Float
+    let angleMax: Float
+    let angleCenter: Float
+    let validRatio: Float
+    let rawDepthStatistic: Float
+    let distCM: Float
+    let isValid: Bool
+    let hasObstacle: Bool
+    let bodyDistCM: Float
+    let groundDistCM: Float
+    let overheadDistCM: Float
+}
+
 struct ObstacleDetectionResult {
     let x: Int
     let y: Int
@@ -42,6 +58,51 @@ struct ObstacleDetectionResult {
     let isDropOffHazard: Bool
     let camWidth: Int
     let camHeight: Int
+    var isValid: Bool = true
+    var spatialBins: [SpatialBin] = []
+    var timestamp: Double = 0.0
+
+    init(
+        x: Int,
+        y: Int,
+        bbox: (x: Int, y: Int, w: Int, h: Int),
+        pan: Float,
+        proximity: Float,
+        distCM: Float,
+        modeText: String,
+        uncertaintyScore: Float,
+        isWall: Bool,
+        sectorDists: [String: Float],
+        allObstacles: [SingleObstacle],
+        isZeroLuxBlind: Bool,
+        isOverheadHazard: Bool,
+        isDropOffHazard: Bool,
+        camWidth: Int,
+        camHeight: Int,
+        isValid: Bool = true,
+        spatialBins: [SpatialBin] = [],
+        timestamp: Double = 0.0
+    ) {
+        self.x = x
+        self.y = y
+        self.bbox = bbox
+        self.pan = pan
+        self.proximity = proximity
+        self.distCM = distCM
+        self.modeText = modeText
+        self.uncertaintyScore = uncertaintyScore
+        self.isWall = isWall
+        self.sectorDists = sectorDists
+        self.allObstacles = allObstacles
+        self.isZeroLuxBlind = isZeroLuxBlind
+        self.isOverheadHazard = isOverheadHazard
+        self.isDropOffHazard = isDropOffHazard
+        self.camWidth = camWidth
+        self.camHeight = camHeight
+        self.isValid = isValid
+        self.spatialBins = spatialBins
+        self.timestamp = timestamp
+    }
 }
 
 // ── Depth Engine ───────────────────────────────────────────────────────────────
@@ -54,8 +115,8 @@ final class DepthEngine: ObservableObject {
     private let pchip: PchipInterpolator
 
     // Grid Dimensions for Processing (4:3 Landscape aspect ratio)
-    private let gridW = 64
-    private let gridH = 48
+    private let gridW = 48
+    private let gridH = 64
 
     init() {
         self.pchip = PchipInterpolator(nodes: Config.calibrationNodes)
@@ -72,16 +133,12 @@ final class DepthEngine: ObservableObject {
         if let modelUrl = Bundle.main.url(forResource: "DepthModel", withExtension: "mlmodelc") {
             loadModel(at: modelUrl, configuration: configuration)
         } else if let pkgUrl = Bundle.main.url(forResource: "DepthModel", withExtension: "mlpackage") {
-            DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-                do {
-                    let compiledUrl = try MLModel.compileModel(at: pkgUrl)
-                    self?.loadModel(at: compiledUrl, configuration: configuration)
-                } catch {
-                    print("[HorusEyes] Error compiling DepthModel.mlpackage: \(error)")
-                }
-            }
+            do {
+                let compiledUrl = try MLModel.compileModel(at: pkgUrl)
+                loadModel(at: compiledUrl, configuration: configuration)
+            } catch { print("[HorusEyes] Model compile failed: \(error)") }
         } else {
-            print("[HorusEyes] Notice: DepthModel not bundled yet; using native high-precision spatial fallback.")
+            print("[HorusEyes] DepthModel absent; perception unavailable.")
         }
     }
 
@@ -90,7 +147,7 @@ final class DepthEngine: ObservableObject {
             let model = try MLModel(contentsOf: url, configuration: configuration)
             self.mlModel = model
             self.vnModel = try VNCoreMLModel(for: model)
-            print("[HorusEyes] Core ML DepthModel loaded successfully on Apple Neural Engine.")
+            print("[HorusEyes] Core ML DepthModel loaded; computeUnits all (actual device placement unverified).")
         } catch {
             print("[HorusEyes] Failed to load Core ML model: \(error)")
         }
@@ -100,6 +157,7 @@ final class DepthEngine: ObservableObject {
     func processFrame(
         pixelBuffer: CVPixelBuffer,
         frameId: UInt64,
+        sourceTimestamp: Double = CACurrentMediaTime(),
         aeSettleFramesRemaining: Int,
         meanLuma: Float,
         isZeroLuxBlind: Bool
@@ -108,12 +166,12 @@ final class DepthEngine: ObservableObject {
         let width = CVPixelBufferGetWidth(pixelBuffer)
         let height = CVPixelBufferGetHeight(pixelBuffer)
 
-        // Step 0: Immediate Zero-Lux Blind check (Sensor Fault Mode)
-        if isZeroLuxBlind {
+        // Step 0: Immediate Zero-Lux Blind check (Sensor Fault Mode: absolute darkness / camera covered)
+        if isZeroLuxBlind || meanLuma < Config.luxZeroBlindThreshold || meanLuma > 250 {
             let blindResult = ObstacleDetectionResult(
                 x: width / 2, y: height / 2,
                 bbox: (x: width / 4, y: height / 4, w: width / 2, h: height / 2),
-                pan: 0.0, proximity: 1.0, distCM: 0.0,
+                pan: 0.0, proximity: 0.4, distCM: .nan,
                 modeText: "SENSOR_BLIND (0-Lux)",
                 uncertaintyScore: 0.95, isWall: false,
                 sectorDists: ["LEFT": 0.0, "CENTER": 0.0, "RIGHT": 0.0],
@@ -122,21 +180,47 @@ final class DepthEngine: ObservableObject {
                 isOverheadHazard: false,
                 isDropOffHazard: false,
                 camWidth: width,
-                camHeight: height
+                camHeight: height, isValid: false,
+                timestamp: sourceTimestamp
             )
             DispatchQueue.main.async { self.lastResult = blindResult }
             return blindResult
         }
 
         // Generate disparity map (via CoreML ANE Vision or Native Spatial Fallback)
-        let rawDisparity = inferDisparity(pixelBuffer: pixelBuffer)
+        guard let rawDisparity = inferDisparity(pixelBuffer: pixelBuffer),
+              rawDisparity.count == gridW * gridH else {
+            return ObstacleDetectionResult(x: 0, y: 0, bbox: (0,0,0,0), pan: 0,
+                proximity: 0.4, distCM: .nan, modeText: "MODEL_UNAVAILABLE", uncertaintyScore: 1,
+                isWall: false, sectorDists: [:], allObstacles: [], isZeroLuxBlind: false,
+                isOverheadHazard: false, isDropOffHazard: false, camWidth: width, camHeight: height,
+                isValid: false, timestamp: sourceTimestamp)
+        }
 
-        // Execute Spatial Engine v8 Rules
+        // Stage 1 — Model Integrity Check (Hard-reject completely invalid or catastrophic output)
+        var finitePositiveCount = 0
+        for val in rawDisparity {
+            if val.isFinite && val > 0 {
+                finitePositiveCount += 1
+            }
+        }
+        let validSampleRatio = Float(finitePositiveCount) / Float(rawDisparity.count)
+        if validSampleRatio < 0.20 {
+            // Catastrophic failure or completely nonfinite tensor
+            return ObstacleDetectionResult(x: 0, y: 0, bbox: (0,0,0,0), pan: 0,
+                proximity: 0.4, distCM: .nan, modeText: "MODEL_OUTPUT_INVALID", uncertaintyScore: 1,
+                isWall: false, sectorDists: [:], allObstacles: [], isZeroLuxBlind: false,
+                isOverheadHazard: false, isDropOffHazard: false, camWidth: width, camHeight: height,
+                isValid: false, timestamp: sourceTimestamp)
+        }
+
+        // Stage 2 — Local Observation Validity & Spatial Engine v8
         let result = evaluateSpatialEngineV8(
             rawDisparity: rawDisparity,
             w: width,
             h: height,
-            meanLuma: meanLuma
+            meanLuma: meanLuma,
+            sourceTimestamp: sourceTimestamp
         )
 
         let elapsedMs = Float((CACurrentMediaTime() - startTime) * 1000.0)
@@ -149,7 +233,7 @@ final class DepthEngine: ObservableObject {
     }
 
     // ── Disparity Inference ───────────────────────────────────────────────────
-    private func inferDisparity(pixelBuffer: CVPixelBuffer) -> [Float] {
+    private func inferDisparity(pixelBuffer: CVPixelBuffer) -> [Float]? {
         if let vn = self.vnModel {
             var extractedGrid: [Float]?
             let request = VNCoreMLRequest(model: vn) { [weak self] req, err in
@@ -170,108 +254,22 @@ final class DepthEngine: ObservableObject {
             }
         }
 
-        // Native Spatial Disparity Estimator from Plane 0 (Multi-frequency Sobel + Texture)
-        return computeNativeSpatialDisparityFallback(pixelBuffer: pixelBuffer)
+        return nil
     }
 
-    private func extractDisparityGrid(from multiArray: MLMultiArray) -> [Float] {
-        let shape = multiArray.shape.map { $0.intValue }
-        let mW: Int
-        let mH: Int
-        if shape.count >= 2 {
-            mW = shape[shape.count - 1]
-            mH = shape[shape.count - 2]
-        } else {
-            mW = 256
-            mH = 256
-        }
-
-        var disparity = [Float](repeating: 200.0, count: gridW * gridH)
-
-        if multiArray.dataType == .float16 {
-            let ptr = multiArray.dataPointer.bindMemory(to: Float16.self, capacity: multiArray.count)
-            for gy in 0..<gridH {
-                let my = min(mH - 1, max(0, (gy * mH) / gridH))
-                let rowOffset = my * mW
-                for gx in 0..<gridW {
-                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
-                    disparity[gy * gridW + gx] = Float(ptr[rowOffset + mx])
-                }
-            }
-        } else if multiArray.dataType == .double {
-            let ptr = multiArray.dataPointer.bindMemory(to: Double.self, capacity: multiArray.count)
-            for gy in 0..<gridH {
-                let my = min(mH - 1, max(0, (gy * mH) / gridH))
-                let rowOffset = my * mW
-                for gx in 0..<gridW {
-                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
-                    disparity[gy * gridW + gx] = Float(ptr[rowOffset + mx])
-                }
-            }
-        } else {
-            let ptr = multiArray.dataPointer.bindMemory(to: Float.self, capacity: multiArray.count)
-            for gy in 0..<gridH {
-                let my = min(mH - 1, max(0, (gy * mH) / gridH))
-                let rowOffset = my * mW
-                for gx in 0..<gridW {
-                    let mx = min(mW - 1, max(0, (gx * mW) / gridW))
-                    disparity[gy * gridW + gx] = ptr[rowOffset + mx]
-                }
+    private func extractDisparityGrid(from array: MLMultiArray) -> [Float]? {
+        let shape = array.shape.map { $0.intValue }
+        guard shape == [1, 256, 192] else { return nil }
+        // MLMultiArray indexing respects strides and data type, unlike pointer
+        // assumptions about a contiguous Float32 buffer.
+        var grid = [Float](repeating: 0, count: gridW * gridH)
+        for y in 0..<gridH {
+            for x in 0..<gridW {
+                grid[y * gridW + x] = array[[0, NSNumber(value: y * 256 / gridH),
+                    NSNumber(value: x * 192 / gridW)]].floatValue
             }
         }
-        return disparity
-    }
-
-    private func computeNativeSpatialDisparityFallback(pixelBuffer: CVPixelBuffer) -> [Float] {
-        CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
-        defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
-
-        guard let yPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else {
-            return [Float](repeating: 200.0, count: gridW * gridH)
-        }
-
-        let origW = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
-        let origH = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
-        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-        let ptr = yPlane.assumingMemoryBound(to: UInt8.self)
-
-        var disparity = [Float](repeating: 200.0, count: gridW * gridH)
-
-        let stepX = max(1, origW / gridW)
-        let stepY = max(1, origH / gridH)
-
-        // Compute local horizontal and vertical gradient (Sobel-like difference)
-        for gy in 1..<(gridH - 1) {
-            let py = gy * stepY
-            let rowOffset = py * bytesPerRow
-            let rowAbove = (py - stepY) * bytesPerRow
-            let rowBelow = (py + stepY) * bytesPerRow
-
-            for gx in 1..<(gridW - 1) {
-                let px = gx * stepX
-                let left = Float(ptr[rowOffset + px - stepX])
-                let right = Float(ptr[rowOffset + px + stepX])
-                let up = Float(ptr[rowAbove + px])
-                let down = Float(ptr[rowBelow + px])
-                let center = Float(ptr[rowOffset + px])
-
-                let gradH = abs(right - left)
-                let gradV = abs(down - up)
-                let edgeMag = gradH + gradV
-
-                // Perspective ground slope & center corridor weighting
-                let normY = Float(gy) / Float(gridH)
-                let normX = (Float(gx) / Float(gridW)) - 0.5
-                let groundBase = normY * 180.0
-                let corridorBonus = max(0.0, 1.0 - abs(normX) * 2.0) * 40.0
-
-                // Edge and contrast response simulates object proximity
-                let rawVal = 160.0 + groundBase + (edgeMag * 4.5) + (center * 0.4) + corridorBonus
-                disparity[gy * gridW + gx] = max(135.0, min(1200.0, rawVal))
-            }
-        }
-
-        return disparity
+        return grid
     }
 
     // ── Non-Linear Proximity Mapping (100% Parity with Python dist_to_proximity) ──
@@ -290,11 +288,12 @@ final class DepthEngine: ObservableObject {
     }
 
     // ── Spatial Engine v8 Multi-Hazard Safety Arbiter ─────────────────────────
-    private func evaluateSpatialEngineV8(
+    func evaluateSpatialEngineV8(
         rawDisparity: [Float],
         w: Int,
         h: Int,
-        meanLuma: Float
+        meanLuma: Float,
+        sourceTimestamp: Double = CACurrentMediaTime()
     ) -> ObstacleDetectionResult {
         // Step 1: Lens Saturation check (>25% center area >= 800.0 raw)
         let centerBoxX1 = Int(Double(gridW) * 0.25)
@@ -326,6 +325,7 @@ final class DepthEngine: ObservableObject {
                 proximity: 1.0, distCM: satDist, modeText: "CRITICAL_SATURATED",
                 uncertaintyScore: 0.05, isWall: false
             )
+            let satBins = computeSpatialBins(rawDisparity: rawDisparity, w: w, h: h, detectedObstacles: [satObs])
             return ObstacleDetectionResult(
                 x: w / 2, y: h / 2, bbox: satBbox, pan: 0.0, proximity: 1.0,
                 distCM: satDist, modeText: "CRITICAL_SATURATED",
@@ -336,7 +336,9 @@ final class DepthEngine: ObservableObject {
                 isOverheadHazard: false,
                 isDropOffHazard: false,
                 camWidth: w,
-                camHeight: h
+                camHeight: h,
+                spatialBins: satBins,
+                timestamp: sourceTimestamp
             )
         }
 
@@ -351,71 +353,93 @@ final class DepthEngine: ObservableObject {
 
         for y in activeY1..<activeY2 {
             for x in 0..<secW {
-                leftRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { leftRaws.append(v) }
             }
             for x in secW..<(2 * secW) {
-                centerRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { centerRaws.append(v) }
             }
             for x in (2 * secW)..<gridW {
-                rightRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { rightRaws.append(v) }
             }
         }
 
-        let rawL = Self.percentile(leftRaws, 0.80)
-        let rawC = Self.percentile(centerRaws, 0.80)
-        let rawR = Self.percentile(rightRaws, 0.80)
+        let totalExpectedPerSec = secW * (activeY2 - activeY1)
+        let minValidPerSec = max(4, Int(Float(totalExpectedPerSec) * 0.15))
 
-        let distL = pchip.interpolate(rawL)
-        let distC = pchip.interpolate(rawC)
-        let distR = pchip.interpolate(rawR)
-        let sectorDists: [String: Float] = ["LEFT": distL, "CENTER": distC, "RIGHT": distR]
+        let distL: Float = leftRaws.count >= minValidPerSec ? pchip.interpolate(Self.percentile(leftRaws, 0.80)) : .nan
+        let distC: Float = centerRaws.count >= minValidPerSec ? pchip.interpolate(Self.percentile(centerRaws, 0.80)) : .nan
+        let distR: Float = rightRaws.count >= minValidPerSec ? pchip.interpolate(Self.percentile(rightRaws, 0.80)) : .nan
 
-        // Step 3: Overhead Hazard Check (top 15% ROI)
+        var sectorDists: [String: Float] = [:]
+        if distL.isFinite && distL > 0 { sectorDists["LEFT"] = distL }
+        if distC.isFinite && distC > 0 { sectorDists["CENTER"] = distC }
+        if distR.isFinite && distR > 0 { sectorDists["RIGHT"] = distR }
+
+        // Step 3: Overhead Hazard Check (top 15% ROI, Evidence Quality Guard)
         var isOverhead = false
         let topCut = max(1, Int(Double(gridH) * Double(Config.topMaskRatio)))
         var topRaws = [Float]()
         for y in 0..<topCut {
             for x in 0..<gridW {
-                topRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { topRaws.append(v) }
             }
         }
-        if !topRaws.isEmpty {
+        let totalTopSamples = topCut * gridW
+        let minValidTop = max(10, Int(Double(totalTopSamples) * 0.25))
+        if topRaws.count >= minValidTop {
             let topFgRaw = Self.percentile(topRaws, 0.85)
-            let topFgDist = pchip.interpolate(topFgRaw)
             let topBgRaw = Self.percentile(topRaws, 0.30)
-            let topBgDist = pchip.interpolate(topBgRaw)
-            if topFgDist < (topBgDist - Config.overheadDepthDeltaCM) && topFgDist < Config.distWarningCM {
-                isOverhead = true
+            if topFgRaw.isFinite && topBgRaw.isFinite {
+                let topFgDist = pchip.interpolate(topFgRaw)
+                let topBgDist = pchip.interpolate(topBgRaw)
+                if topFgDist.isFinite && topBgDist.isFinite && topFgDist < (topBgDist - Config.overheadDepthDeltaCM) && topFgDist < Config.distWarningCM {
+                    isOverhead = true
+                }
             }
         }
 
-        // Step 4: Drop-Off Hazard Check (bottom 15% ROI)
+        // Step 4: Drop-Off Hazard Check (bottom 15% ROI, P1-D: Robust Ground Evidence Quality Guard)
         var isDropOff = false
         let botCut = Int(Double(gridH) * (1.0 - Double(Config.bottomMaskRatio)))
         var groundRaws = [Float]()
         var aboveGroundRaws = [Float]()
         for y in botCut..<gridH {
             for x in 0..<gridW {
-                groundRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { groundRaws.append(v) }
             }
         }
         let aboveYStart = max(0, botCut - Int(Double(gridH) * 0.05))
         for y in aboveYStart..<botCut {
             for x in 0..<gridW {
-                aboveGroundRaws.append(rawDisparity[y * gridW + x])
+                let v = rawDisparity[y * gridW + x]
+                if v.isFinite && v > 0 { aboveGroundRaws.append(v) }
             }
         }
-        if !groundRaws.isEmpty && !aboveGroundRaws.isEmpty {
+        let totalGroundSamples = (gridH - botCut) * gridW
+        let totalAboveSamples = (botCut - aboveYStart) * gridW
+        let minValidGround = max(10, Int(Double(totalGroundSamples) * 0.25))
+        let minValidAbove = max(6, Int(Double(totalAboveSamples) * 0.25))
+
+        // P1-D: Do not evaluate drop-off gradient unless BOTH ground regions meet required observation quality.
+        // Insufficient or all-NaN ground evidence must be treated as UNKNOWN, never as confirmed drop-off.
+        if groundRaws.count >= minValidGround && aboveGroundRaws.count >= minValidAbove {
             let groundMed = Self.median(groundRaws)
             let aboveMed = Self.median(aboveGroundRaws)
-            let gradRatio = abs(aboveMed - groundMed) / max(aboveMed, 1.0)
-            if gradRatio > Config.dropOffGradientThresh && groundMed < aboveMed * 0.6 {
-                isDropOff = true
+            if groundMed.isFinite && aboveMed.isFinite && groundMed > 0 && aboveMed > 0 {
+                let gradRatio = abs(aboveMed - groundMed) / max(aboveMed, 1.0)
+                if gradRatio > Config.dropOffGradientThresh && groundMed < aboveMed * 0.6 {
+                    isDropOff = true
+                }
             }
         }
 
         // Step 5: Multi-Obstacle Blob Clustering (Connected-Component Search)
-        let peakRaw = rawDisparity.max() ?? 200.0
+        let peakRaw = rawDisparity.reduce(200.0 as Float) { $1.isFinite && $1 > $0 ? $1 : $0 }
         let clusterThresh = max(Config.baseActivationRaw, peakRaw - 160.0)
 
         var visited = [Bool](repeating: false, count: gridW * gridH)
@@ -424,7 +448,8 @@ final class DepthEngine: ObservableObject {
         for y in activeY1..<activeY2 {
             for x in 0..<gridW {
                 let idx = y * gridW + x
-                if !visited[idx] && rawDisparity[idx] >= clusterThresh {
+                let v = rawDisparity[idx]
+                if !visited[idx] && v.isFinite && v >= clusterThresh {
                     // BFS Flood fill
                     var q = [(x, y)]
                     visited[idx] = true
@@ -435,7 +460,10 @@ final class DepthEngine: ObservableObject {
                     while head < q.count {
                         let (cx, cy) = q[head]
                         head += 1
-                        cVals.append(rawDisparity[cy * gridW + cx])
+                        let qv = rawDisparity[cy * gridW + cx]
+                        if qv.isFinite && qv > 0 {
+                            cVals.append(qv)
+                        }
                         cMinX = min(cMinX, cx); cMaxX = max(cMaxX, cx)
                         cMinY = min(cMinY, cy); cMaxY = max(cMaxY, cy)
 
@@ -444,7 +472,8 @@ final class DepthEngine: ObservableObject {
                         for (nx, ny) in neighbors {
                             if nx >= 0 && nx < gridW && ny >= activeY1 && ny < activeY2 {
                                 let nIdx = ny * gridW + nx
-                                if !visited[nIdx] && rawDisparity[nIdx] >= clusterThresh {
+                                let nv = rawDisparity[nIdx]
+                                if !visited[nIdx] && nv.isFinite && nv >= clusterThresh {
                                     visited[nIdx] = true
                                     q.append((nx, ny))
                                 }
@@ -516,7 +545,7 @@ final class DepthEngine: ObservableObject {
         if let first = detectedObstacles.first {
             primaryObs = first
         } else {
-            let safeDist = Config.distSafeCM
+            let safeDist = distC
             let dummyBbox = (x: w / 4, y: h / 4, w: w / 2, h: h / 2)
             primaryObs = SingleObstacle(
                 id: 1, x: w / 2, y: h / 2, bbox: dummyBbox, pan: 0.0,
@@ -534,6 +563,10 @@ final class DepthEngine: ObservableObject {
             modeText = "SAFE (Clear Path)"
         }
 
+        let bins = computeSpatialBins(rawDisparity: rawDisparity, w: w, h: h, detectedObstacles: detectedObstacles)
+        let validBinsCount = bins.filter { $0.isValid }.count
+        let isResultValid = validBinsCount >= 3
+
         return ObstacleDetectionResult(
             x: primaryObs.x,
             y: primaryObs.y,
@@ -550,19 +583,151 @@ final class DepthEngine: ObservableObject {
             isOverheadHazard: isOverhead,
             isDropOffHazard: isDropOff,
             camWidth: w,
-            camHeight: h
+            camHeight: h,
+            isValid: isResultValid,
+            spatialBins: bins,
+            timestamp: sourceTimestamp
         )
     }
 
     // ── Numerical Utilities ───────────────────────────────────────────────────
     private static func percentile(_ array: [Float], _ p: Float) -> Float {
-        guard !array.isEmpty else { return 0.0 }
-        let sorted = array.sorted()
+        let valid = array.filter { $0.isFinite && $0 > 0 }
+        guard !valid.isEmpty else { return .nan }
+        let sorted = valid.sorted()
         let idx = min(sorted.count - 1, max(0, Int(Float(sorted.count - 1) * p)))
         return sorted[idx]
     }
 
     private static func median(_ array: [Float]) -> Float {
         Self.percentile(array, 0.50)
+    }
+
+    func computeSpatialBins(
+        rawDisparity: [Float],
+        w: Int,
+        h: Int,
+        detectedObstacles: [SingleObstacle] = [],
+        numBins: Int = 24,
+        hfovDeg: Float = 65.0
+    ) -> [SpatialBin] {
+        let cx = Float(w) / 2.0
+        let halfFov = hfovDeg / 2.0
+        let fx = cx / tan(halfFov * .pi / 180.0)
+
+        // Multi-band vertical boundaries in 48x64 disparity grid
+        let cy1B = Int(Float(gridH) * 0.20) // ~12
+        let cy2B = Int(Float(gridH) * 0.65) // ~41
+        let cy1G = Int(Float(gridH) * 0.65) // ~41
+        let cy2G = Int(Float(gridH) * 0.85) // ~54
+        let cy1O = 0
+        let cy2O = Int(Float(gridH) * 0.20) // ~12
+
+        let colsPerBin = max(1, gridW / numBins) // 48 / 24 = 2 columns per bin
+        let binW = Float(w) / Float(numBins)
+
+        var bins: [SpatialBin] = []
+
+        for i in 0..<numBins {
+            let x1 = Int(round(Float(i) * binW))
+            let x2 = max(x1 + 1, min(w, Int(round(Float(i + 1) * binW))))
+
+            let angMin = atan2(Float(x1) - cx, fx) * 180.0 / .pi
+            let angMax = atan2(Float(x2) - cx, fx) * 180.0 / .pi
+            let angCenter = (angMin + angMax) / 2.0
+
+            let gx1 = i * colsPerBin
+            let gx2 = min(gridW, (i + 1) * colsPerBin)
+
+            var validRatio: Float = 0.0
+            var rawP80: Float = .nan
+            var bodyDistCM: Float = .nan
+            var groundDistCM: Float = .nan
+            var overheadDistCM: Float = .nan
+            var distCM: Float = .nan
+            var isValid = false
+
+            // 1. Body band [0.20h, 0.65h]
+            var bodySamples: [Float] = []
+            var totalBody = 0
+            for y in cy1B..<cy2B {
+                for x in gx1..<gx2 {
+                    totalBody += 1
+                    let v = rawDisparity[y * gridW + x]
+                    if v.isFinite && v > 0 {
+                        bodySamples.append(v)
+                    }
+                }
+            }
+            validRatio = totalBody > 0 ? Float(bodySamples.count) / Float(totalBody) : 0.0
+            if validRatio >= 0.35 && !bodySamples.isEmpty {
+                rawP80 = Self.percentile(bodySamples, 0.80)
+                bodyDistCM = pchip.interpolate(rawP80)
+                distCM = bodyDistCM
+                isValid = bodyDistCM.isFinite && bodyDistCM > 0
+            }
+
+            // 2. Ground band [0.65h, 0.85h]
+            var groundSamples: [Float] = []
+            var totalGround = 0
+            for y in cy1G..<cy2G {
+                for x in gx1..<gx2 {
+                    totalGround += 1
+                    let v = rawDisparity[y * gridW + x]
+                    if v.isFinite && v > 0 {
+                        groundSamples.append(v)
+                    }
+                }
+            }
+            if totalGround > 0 && Float(groundSamples.count) / Float(totalGround) >= 0.35 && !groundSamples.isEmpty {
+                let gP80 = Self.percentile(groundSamples, 0.80)
+                groundDistCM = pchip.interpolate(gP80)
+            }
+
+            // 3. Overhead band [0.0h, 0.20h]
+            var overheadSamples: [Float] = []
+            var totalOverhead = 0
+            for y in cy1O..<cy2O {
+                for x in gx1..<gx2 {
+                    totalOverhead += 1
+                    let v = rawDisparity[y * gridW + x]
+                    if v.isFinite && v > 0 {
+                        overheadSamples.append(v)
+                    }
+                }
+            }
+            if totalOverhead > 0 && Float(overheadSamples.count) / Float(totalOverhead) >= 0.35 && !overheadSamples.isEmpty {
+                let oP80 = Self.percentile(overheadSamples, 0.80)
+                overheadDistCM = pchip.interpolate(oP80)
+            }
+
+            // Obstacle overlap
+            var hasObs = false
+            for obs in detectedObstacles {
+                let ox1 = obs.bbox.x
+                let ox2 = obs.bbox.x + obs.bbox.w
+                if !(x2 <= ox1 || x1 >= ox2) {
+                    hasObs = true
+                    break
+                }
+            }
+
+            bins.append(SpatialBin(
+                binId: i,
+                angleMin: round(angMin * 100) / 100,
+                angleMax: round(angMax * 100) / 100,
+                angleCenter: round(angCenter * 100) / 100,
+                validRatio: round(validRatio * 1000) / 1000,
+                rawDepthStatistic: rawP80,
+                distCM: distCM,
+                isValid: isValid,
+                hasObstacle: hasObs,
+                bodyDistCM: bodyDistCM,
+                groundDistCM: groundDistCM,
+                overheadDistCM: overheadDistCM
+            ))
+        }
+
+        return bins
     }
 }

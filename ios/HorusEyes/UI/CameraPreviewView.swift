@@ -26,14 +26,11 @@ struct CameraPreviewView: UIViewRepresentable {
 
         func updateOrientation() {
             guard let conn = videoPreviewLayer.connection, conn.isVideoOrientationSupported else { return }
-            let orientation = window?.windowScene?.interfaceOrientation ?? .landscapeRight
-            switch orientation {
-            case .landscapeLeft:
-                conn.videoOrientation = .landscapeLeft
-            case .landscapeRight:
-                conn.videoOrientation = .landscapeRight
-            default:
-                conn.videoOrientation = .landscapeRight
+            if conn.videoOrientation != .portrait {
+                conn.videoOrientation = .portrait
+            }
+            if conn.isVideoMirroringSupported && conn.isVideoMirrored {
+                conn.isVideoMirrored = false
             }
         }
     }
@@ -42,7 +39,7 @@ struct CameraPreviewView: UIViewRepresentable {
         let view = PreviewUIView()
         view.backgroundColor = .black
         view.videoPreviewLayer.session = session
-        view.videoPreviewLayer.videoGravity = .resizeAspectFill
+        view.videoPreviewLayer.videoGravity = .resizeAspect
         view.updateOrientation()
         return view
     }

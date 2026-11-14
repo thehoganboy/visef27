@@ -139,8 +139,7 @@ def _verify_onnx_sha256(filepath: str) -> bool:
     basename = os.path.basename(filepath)
     expected_hash = config.ONNX_SHA256_HASHES.get(basename)
     if expected_hash is None:
-        # Hash chưa được cấu hình → bỏ qua kiểm tra (chế độ dev)
-        return True
+        return False  # Unregistered assets are not accepted by the runtime.
     try:
         sha256 = hashlib.sha256()
         with open(filepath, 'rb') as f:
@@ -238,6 +237,22 @@ class SingleObstacle:
 
 
 @dataclass
+class SpatialBin:
+    bin_id: int                     # Chỉ số bin 0..N-1
+    angle_min: float                # Góc ngang cực tiểu (độ)
+    angle_max: float                # Góc ngang cực đại (độ)
+    angle_center: float             # Góc ngang trung tâm (độ)
+    valid_ratio: float              # Tỷ lệ pixel hợp lệ trong bin [0.0, 1.0]
+    depth_raw_p80: float            # Phân vị 80 disparity raw
+    dist_cm: float                  # Khoảng cách ước lượng metric (cm)
+    is_valid: bool                  # Cờ dữ liệu hợp lệ
+    has_obstacle: bool = False      # Cờ có vật cản cắt qua bin
+    body_dist_cm: float = float("nan")     # Khoảng cách vùng thân/vật cản [0.20h, 0.65h]
+    ground_dist_cm: float = float("nan")   # Khoảng cách vùng cận sàn [0.65h, 0.85h]
+    overhead_dist_cm: float = float("nan") # Khoảng cách vùng trần/nhô cao [0.0h, 0.20h]
+
+
+@dataclass
 class ObstacleDetectionResult:
     x: int                          # Tọa độ X vật cản chính (gần nhất)
     y: int                          # Tọa độ Y vật cản chính
@@ -260,6 +275,8 @@ class ObstacleDetectionResult:
     measurement_basis: str = "METRIC_ESTIMATED_UNVERIFIED" # Directive 01B Principle B
     quality_state: str = "OBSERVABLE" # "OBSERVABLE", "DEGRADED", "UNOBSERVABLE", "UNKNOWN" (Directive 01B-A+ Task A+3)
     quality_reasons: List[str] = field(default_factory=list)
+    spatial_bins: Optional[List[SpatialBin]] = None # 16-32 horizontal spatial occupancy bins
+    timestamp: float = 0.0 # Source capture timestamp in monotonic seconds
 
 
 def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, List[str], dict]:
@@ -290,20 +307,28 @@ def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, L
         return "UNKNOWN", ["INVALID_FRAME_NDIM"], {}
 
     h, w = gray.shape[:2]
-    total_pixels = float(h * w)
+    # Tối ưu hóa hiệu năng (Directive 01B-A++ Task P1-01):
+    # Tính toán thống kê trên thumbnail 160x120 để giảm thời gian xử lý từ ~28ms xuống ~1.5ms
+    if h > 120 or w > 160:
+        thumb = cv2.resize(gray, (160, 120), interpolation=cv2.INTER_AREA)
+    else:
+        thumb = gray
+
+    th_h, th_w = thumb.shape[:2]
+    total_pixels = float(th_h * th_w)
 
     # 1. Thống kê độ sáng & phơi sáng (Luminance & Exposure statistics)
-    lum_mean = float(np.mean(gray))
-    lum_std  = float(np.std(gray))
-    under_ratio = float(np.sum(gray < 10)) / total_pixels
-    over_ratio  = float(np.sum(gray > 248)) / total_pixels
+    lum_mean = float(np.mean(thumb))
+    lum_std  = float(np.std(thumb))
+    under_ratio = float(np.count_nonzero(thumb < 10)) / total_pixels
+    over_ratio  = float(np.count_nonzero(thumb > 248)) / total_pixels
 
-    # 2. Độ sắc nét & vi sai Laplacian (Laplacian variance)
-    lap = cv2.Laplacian(gray, cv2.CV_64F)
+    # 2. Độ sắc nét & vi sai Laplacian (CV_16S thay vì CV_64F để tránh phân bổ bộ nhớ nặng)
+    lap = cv2.Laplacian(thumb, cv2.CV_16S)
     lap_var = float(np.var(lap))
 
     # 3. Mật độ thông tin hình ảnh (Shannon Entropy)
-    hist = cv2.calcHist([gray], [0], None, [256], [0, 256])
+    hist = cv2.calcHist([thumb], [0], None, [256], [0, 256])
     hist = hist / (total_pixels + 1e-7)
     non_zero = hist[hist > 0]
     entropy = float(-np.sum(non_zero * np.log2(non_zero)))
@@ -359,6 +384,118 @@ def assess_visual_observability(frame_bgr: Optional[np.ndarray]) -> Tuple[str, L
     return quality_state, reasons, stats
 
 
+def compute_spatial_bins(
+    depth_raw: Optional[np.ndarray],
+    scale_factor: float = 1.0,
+    w: int = 640,
+    h: int = 480,
+    detected_list: Optional[List[SingleObstacle]] = None,
+    num_bins: int = 24,
+    hfov_deg: float = 65.0
+) -> List[SpatialBin]:
+    """
+    Compute 16-32 horizontal localized spatial occupancy bins (Directive Final UX Section 2.2).
+    Multi-band vertical pooling separates floor corridor, obstacle/body height, and overhead
+    (P0-03 Problem B):
+      - Body/obstacle band: [0.20h, 0.65h] (primary for forward clearance)
+      - Lower/ground-adjacent band: [0.65h, 0.85h] (detect drop-offs, low curbs, step hazards)
+      - Overhead band: [0.0h, 0.20h] (detect overhangs, signboards)
+    """
+    if detected_list is None:
+        detected_list = []
+    cx = w / 2.0
+    half_fov = hfov_deg / 2.0
+    fx = cx / math.tan(math.radians(half_fov))
+
+    # Multi-band vertical boundaries
+    cy1_b, cy2_b = int(0.20 * h), int(0.65 * h)
+    cy1_g, cy2_g = int(0.65 * h), int(0.85 * h)
+    cy1_o, cy2_o = 0, int(0.20 * h)
+
+    bins: List[SpatialBin] = []
+    bin_w = w / float(num_bins)
+
+    has_depth = (
+        depth_raw is not None and isinstance(depth_raw, np.ndarray) and
+        depth_raw.ndim == 2 and depth_raw.shape[0] >= 10 and depth_raw.shape[1] >= 10
+    )
+
+    for i in range(num_bins):
+        bx1 = int(round(i * bin_w))
+        bx2 = int(round((i + 1) * bin_w))
+        bx2 = max(bx1 + 1, min(w, bx2))
+
+        ang_min = math.degrees(math.atan2(bx1 - cx, fx))
+        ang_max = math.degrees(math.atan2(bx2 - cx, fx))
+        ang_center = (ang_min + ang_max) / 2.0
+
+        if has_depth:
+            # 1. Main body / obstacle band: [0.20h, 0.65h]
+            raw_b = depth_raw[cy1_b:cy2_b, bx1:bx2]
+            mask_b = np.isfinite(raw_b) & (raw_b > 0)
+            valid_ratio = float(np.mean(mask_b)) if raw_b.size > 0 else 0.0
+            if valid_ratio >= 0.35 and np.any(mask_b):
+                raw_p80 = float(np.percentile(raw_b[mask_b], 80))
+                body_dist_cm = compute_metric_distance_cm(raw_p80, scale_factor)
+                dist_cm = body_dist_cm
+                is_valid = True
+            else:
+                raw_p80 = float("nan")
+                body_dist_cm = float("nan")
+                dist_cm = float("nan")
+                is_valid = False
+
+            # 2. Lower / ground-adjacent band: [0.65h, 0.85h]
+            raw_g = depth_raw[cy1_g:cy2_g, bx1:bx2]
+            mask_g = np.isfinite(raw_g) & (raw_g > 0)
+            if raw_g.size > 0 and np.mean(mask_g) >= 0.35 and np.any(mask_g):
+                p80_g = float(np.percentile(raw_g[mask_g], 80))
+                ground_dist_cm = compute_metric_distance_cm(p80_g, scale_factor)
+            else:
+                ground_dist_cm = float("nan")
+
+            # 3. Overhead band: [0.0h, 0.20h]
+            raw_o = depth_raw[cy1_o:cy2_o, bx1:bx2]
+            mask_o = np.isfinite(raw_o) & (raw_o > 0)
+            if raw_o.size > 0 and np.mean(mask_o) >= 0.35 and np.any(mask_o):
+                p80_o = float(np.percentile(raw_o[mask_o], 80))
+                overhead_dist_cm = compute_metric_distance_cm(p80_o, scale_factor)
+            else:
+                overhead_dist_cm = float("nan")
+        else:
+            valid_ratio = 0.0
+            raw_p80 = float("nan")
+            body_dist_cm = float("nan")
+            ground_dist_cm = float("nan")
+            overhead_dist_cm = float("nan")
+            dist_cm = float("nan")
+            is_valid = False
+
+        has_obs = False
+        for obs in detected_list:
+            if obs.bbox and len(obs.bbox) >= 4:
+                ox, oy, ow, oh = obs.bbox[:4]
+                if not (bx2 <= ox or bx1 >= ox + ow):
+                    has_obs = True
+                    break
+
+        bins.append(SpatialBin(
+            bin_id=i,
+            angle_min=round(ang_min, 2),
+            angle_max=round(ang_max, 2),
+            angle_center=round(ang_center, 2),
+            valid_ratio=round(valid_ratio, 3),
+            depth_raw_p80=raw_p80,
+            dist_cm=dist_cm,
+            is_valid=is_valid,
+            has_obstacle=has_obs,
+            body_dist_cm=body_dist_cm,
+            ground_dist_cm=ground_dist_cm,
+            overhead_dist_cm=overhead_dist_cm
+        ))
+    return bins
+
+
 class DepthEstimator:
     """
     Module quản lý mô hình suy luận độ sâu và phát hiện vật cản không gian.
@@ -367,81 +504,24 @@ class DepthEstimator:
     """
 
     def __init__(self, device: str = None):
-        self.use_onnx = False
-        onnx_candidates = [
-            os.path.join(os.path.dirname(__file__), "midas_small_160.onnx"),
-            os.path.join(os.path.dirname(__file__), "midas_small_192.onnx"),
-            "midas_small_160.onnx",
-            "midas_small_192.onnx",
-        ]
-        chosen_onnx = None
-        for cand in onnx_candidates:
-            if os.path.exists(cand):
-                chosen_onnx = cand
-                break
-
-        if chosen_onnx:
-            # Xác thực SHA-256 trước khi nạp
-            if not _verify_onnx_sha256(chosen_onnx):
-                raise RuntimeError(
-                    f"[SECURITY] File ONNX '{chosen_onnx}' KHÔNG vượt qua kiểm tra SHA-256! "
-                    "Có thể đã bị giả mạo. Hủy nạp mô hình."
-                )
-            try:
-                import onnxruntime as ort
-                sess_opts = ort.SessionOptions()
-                sess_opts.intra_op_num_threads = min(6, max(4, os.cpu_count() or 4))
-                sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-                self.ort_session = ort.InferenceSession(chosen_onnx, sess_opts, providers=['CPUExecutionProvider'])
-                self.ort_input_name = self.ort_session.get_inputs()[0].name
-                self.input_size = (160, 160) if "160" in chosen_onnx else (192, 192)
-                self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
-                self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
-                self.use_onnx = True
-                print(f"[DepthEstimator] ONNX Runtime Ready ({chosen_onnx}, input {self.input_size}). Latency target < 45ms.")
-            except Exception as e:
-                print(f"[DepthEstimator] Khong the nap ONNX Runtime: {e}.")
-
-        if not self.use_onnx:
-            # Fallback: Chỉ nạp model PyTorch từ file CỤC BỘ, KHÔNG dùng torch.hub.load từ GitHub
-            try:
-                import torch
-                import torch.nn.functional as F
-                self._torch = torch
-                self._F = F
-            except ImportError as err:
-                raise RuntimeError(f"Cả ONNX Runtime và PyTorch đều không khả dụng: {err}")
-
-            if device is None:
-                if torch.cuda.is_available():
-                    self.device = torch.device("cuda")
-                    print(f"[DepthEstimator] Using GPU: {torch.cuda.get_device_name(0)}")
-                else:
-                    self.device = torch.device("cpu")
-                    print("[DepthEstimator] Using CPU")
-            else:
-                self.device = torch.device(device)
-
-            if self.device.type == "cpu":
-                try:
-                    torch.set_num_threads(max(2, torch.get_num_threads()))
-                except Exception:
-                    pass
-
-            # Tìm model cục bộ trước, KHÔNG tải từ internet
-            local_model_path = os.path.join(os.path.dirname(__file__), "model-small.onnx")
-            hub_cache_dir = os.path.join(os.path.expanduser("~"), ".cache", "torch", "hub")
-
-            # 100% Offline Edge Security: Tuyệt đối không dùng torch.hub.load lúc runtime
-            raise RuntimeError(
-                "[DepthEstimator] KHÔNG THỂ nạp mô hình PyTorch MiDaS lúc runtime. "
-                "Hệ thống bắt buộc chạy 100% Offline Edge qua mô hình ONNX đã xác thực SHA-256. "
-                "Vui lòng cung cấp file ONNX hợp lệ (ví dụ midas_small_160.onnx)."
-            )
-
-            self.model.to(self.device).eval()
-            self.transform = transforms.small_transform
-            print("[DepthEstimator] Mo hinh MiDaS_small PyTorch san sang (Ready).")
+        # The small desktop graphs require untracked external weights. Use the
+        # self-contained, portrait MiDaS export already shipped on Android.
+        import onnxruntime as ort
+        model_path = os.path.join(os.path.dirname(__file__), config.DEMO_MODEL_PATH)
+        if not _verify_onnx_sha256(model_path):
+            raise RuntimeError("MiDaS asset missing or integrity check failed")
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = min(4, os.cpu_count() or 1)
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        self.ort_session = ort.InferenceSession(model_path, opts, providers=['CPUExecutionProvider'])
+        tensor = self.ort_session.get_inputs()[0]
+        if tensor.shape != [1, 3, 256, 192] or tensor.type != 'tensor(float)':
+            raise RuntimeError(f"Unsupported MiDaS input contract: {tensor.shape} {tensor.type}")
+        self.ort_input_name = tensor.name
+        self.input_size = (192, 256)
+        self.mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+        self.std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        self.use_onnx = True
 
     def infer_depth(self, frame_bgr: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """
@@ -452,26 +532,13 @@ class DepthEstimator:
             - depth_raw: float32 disparity gốc từ MiDaS
         """
         h, w = frame_bgr.shape[:2]
-        if self.use_onnx:
-            rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-            resized = cv2.resize(rgb, self.input_size, interpolation=cv2.INTER_LINEAR)
-            norm = ((resized.astype(np.float32) / 255.0 - self.mean) / self.std).transpose(2, 0, 1)[np.newaxis, ...]
-            out = self.ort_session.run(None, {self.ort_input_name: norm})[0].squeeze()
-            depth_raw = cv2.resize(out, (w, h), interpolation=cv2.INTER_LINEAR)
-        else:
-            torch = self._torch
-            F = self._F
-            with torch.inference_mode():
-                frame_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                input_batch = self.transform(frame_rgb).to(self.device)
-                prediction = self.model(input_batch)
-                prediction = F.interpolate(
-                    prediction.unsqueeze(1),
-                    size=frame_bgr.shape[:2],
-                    mode="bilinear",
-                    align_corners=False,
-                ).squeeze()
-                depth_raw = prediction.cpu().numpy().astype(np.float32)
+        rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+        resized = cv2.resize(rgb, self.input_size, interpolation=cv2.INTER_LINEAR)
+        norm = np.ascontiguousarray(((resized.astype(np.float32) / 255.0 - self.mean) / self.std).transpose(2, 0, 1)[None])
+        output = self.ort_session.run(None, {self.ort_input_name: norm})[0]
+        if output.shape != (1, 256, 192) or not np.isfinite(output).all() or np.all(output <= 0):
+            raise RuntimeError("Invalid MiDaS output tensor")
+        depth_raw = cv2.resize(output[0], (w, h), interpolation=cv2.INTER_LINEAR)
 
         d_min = depth_raw.min()
         d_max = depth_raw.max()
@@ -518,7 +585,8 @@ class DepthEstimator:
             spatial_validity=spatial_validity,
             measurement_basis="UNKNOWN",
             quality_state=quality_state,
-            quality_reasons=quality_reasons
+            quality_reasons=quality_reasons,
+            spatial_bins=compute_spatial_bins(None, w=w, h=h)
         )
 
     def detect_obstacle(
@@ -678,7 +746,8 @@ class DepthEstimator:
                 is_valid=False,
                 is_scale_uncalibrated=True,
                 validity_state="DEGRADED",
-                spatial_validity=spatial_validity
+                spatial_validity=spatial_validity,
+                spatial_bins=compute_spatial_bins(None, w=w, h=h)
             )
 
         # ── Lens Saturation Check ──
@@ -714,7 +783,8 @@ class DepthEstimator:
                 is_valid=True,
                 is_scale_uncalibrated=True,
                 validity_state="VALID",
-                spatial_validity=spatial_validity
+                spatial_validity=spatial_validity,
+                spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [single_sat])
             )
 
         # ════════════════════════════════════════════════════════════════════════
@@ -747,19 +817,22 @@ class DepthEstimator:
             if overhead_fg_cm < overhead_bg_cm - config.OVERHEAD_DEPTH_DELTA_CM and overhead_fg_cm < config.DIST_WARNING_CM:
                 overhead_hazard = True
 
-        # ── Phân tích Ground/Curb ROI (15% đáy) ──
+        # ── Phân tích Ground/Curb ROI (15% đáy, P1-D: Robust Ground Evidence Quality Guard) ──
         drop_off_hazard = False
         ground_roi_raw = depth_raw[bot_cut:, :]
         if ground_roi_raw.size > 0:
-            # So sánh gradient dọc: đáy frame so với vùng ngay trên đáy
             above_bot = depth_raw[bot_cut - int(0.05 * h):bot_cut, :]
-            if above_bot.size > 0:
-                above_median = float(np.median(above_bot))
-                below_median = float(np.median(ground_roi_raw))
-                # Gradient bất thường: đáy xa hơn (depth nhỏ hơn) rất nhiều → bậc thềm xuống
-                gradient_ratio = abs(above_median - below_median) / max(above_median, 1.0)
-                if gradient_ratio > config.DROP_OFF_GRADIENT_THRESH and below_median < above_median * 0.6:
-                    drop_off_hazard = True
+            valid_ground = ground_roi_raw[np.isfinite(ground_roi_raw) & (ground_roi_raw > 0)]
+            valid_above = above_bot[np.isfinite(above_bot) & (above_bot > 0)]
+            min_valid_ground = max(10, int(0.25 * ground_roi_raw.size))
+            min_valid_above = max(6, int(0.25 * above_bot.size))
+            if valid_ground.size >= min_valid_ground and valid_above.size >= min_valid_above:
+                above_median = float(np.median(valid_above))
+                below_median = float(np.median(valid_ground))
+                if math.isfinite(above_median) and math.isfinite(below_median) and above_median > 0 and below_median > 0:
+                    gradient_ratio = abs(above_median - below_median) / max(above_median, 1.0)
+                    if gradient_ratio > config.DROP_OFF_GRADIENT_THRESH and below_median < above_median * 0.6:
+                        drop_off_hazard = True
 
         # ════════════════════════════════════════════════════════════════════════
         # BƯỚC 2: Phát hiện vật cản Sobel/Discontinuity (C) + Vách tường (D)
@@ -808,7 +881,8 @@ class DepthEstimator:
             return ObstacleDetectionResult(
                 x=w // 2, y=h // 2, bbox=safe_dummy.bbox, pan=0.0, proximity=0.0,
                 dist_cm=config.DIST_SAFE_CM, mode_text=safe_dummy.mode_text,
-                uncertainty_score=0.05, is_wall=False, sector_dists=sector_dists, all_obstacles=[safe_dummy]
+                uncertainty_score=0.05, is_wall=False, sector_dists=sector_dists, all_obstacles=[safe_dummy],
+                spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [safe_dummy])
             )
 
         # ── Kịch bản C: Phân đoạn vật cản nổi bật (Discontinuity & Gradient Filter) ──
@@ -829,14 +903,14 @@ class DepthEstimator:
         for c in cnts:
             area = cv2.contourArea(c)
             bx, by, bw, bh = cv2.boundingRect(c)
-            # Hỗ trợ bắt vật cản mảnh (cột, gậy, cành cây: bh >= 0.18*h và bw >= 3px)
-            is_thin_obstacle = (bh >= int(0.18 * h) and bw >= 3 and area >= 80)
+            # Hỗ trợ bắt vật cản mảnh (cột, gậy, cành cây, khung cửa: bh >= 0.15*h và bw >= 3px)
+            is_thin_obstacle = (bh >= int(0.15 * h) and bw >= 3 and area >= 50)
             if (area / (h * w) >= config.MIN_OBSTACLE_AREA_RATIO) or is_thin_obstacle:
                 valid_cnts.append((area, c))
         valid_cnts.sort(key=lambda x: x[0], reverse=True)
 
         candidates = []
-        for _, c in valid_cnts[:5]:
+        for _, c in valid_cnts[:8]:
             bx, by, bw, bh = cv2.boundingRect(c)
             aspect = bw / max(1, bh)
 
@@ -844,7 +918,8 @@ class DepthEstimator:
                 continue
             if bw > 0.45 * w and bh < 0.25 * h and aspect > 3.0 and d_peak < 0.70:
                 continue
-            if (bx <= int(0.02 * w) or bx + bw >= int(0.98 * w)) and bw < int(0.06 * w):
+            # Chống drop nhầm cột/khung cửa mép màn hình: chỉ drop nếu thực sự là nhiễu góc nhỏ
+            if (bx <= int(0.02 * w) or bx + bw >= int(0.98 * w)) and bw < int(0.04 * w) and bh < int(0.20 * h):
                 continue
 
             pad = 18
@@ -902,7 +977,7 @@ class DepthEstimator:
         detected_list = []
         if candidates:
             candidates.sort(key=lambda item: item[1], reverse=True)
-            for idx, cand in enumerate(candidates[:3]):
+            for idx, cand in enumerate(candidates[:5]):
                 c_item, c_raw, c_d, c_step, c_grad, bx, by, bw, bh, c_obs_std = cand
                 moments = cv2.moments(c_item)
                 if moments["m00"] > 0:
@@ -1091,7 +1166,8 @@ class DepthEstimator:
                     spatial_validity=spatial_validity,
                     measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
                     quality_state=vis_quality_state,
-                    quality_reasons=vis_reasons
+                    quality_reasons=vis_reasons,
+                    spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [safe_dummy])
                 )
 
             # Nếu vẫn không có gì nhưng không đủ điều kiện CLEAR → trả về trạng thái mặc định
@@ -1120,7 +1196,8 @@ class DepthEstimator:
                 spatial_validity=spatial_validity,
                 measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
                 quality_state=vis_quality_state,
-                quality_reasons=vis_reasons
+                quality_reasons=vis_reasons,
+                spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, [safe_dummy])
             )
 
         # Đánh số ID thứ tự 1, 2, 3...
@@ -1143,5 +1220,6 @@ class DepthEstimator:
             spatial_validity=spatial_validity,
             measurement_basis="METRIC_ESTIMATED_UNVERIFIED",
             quality_state=vis_quality_state,
-            quality_reasons=vis_reasons
+            quality_reasons=vis_reasons,
+            spatial_bins=compute_spatial_bins(depth_raw, scale_factor, w, h, detected_list)
         )

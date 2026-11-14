@@ -94,9 +94,9 @@ def _open_capture(source) -> cv2.VideoCapture:
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAM_HEIGHT)
 
     # Đợi mở camera với timeout
-    start_time = time.perf_counter()
+    start_time = time.monotonic()
     while not cap.isOpened():
-        if time.perf_counter() - start_time > config.CONNECTION_TIMEOUT:
+        if time.monotonic() - start_time > config.CONNECTION_TIMEOUT:
             cap.release()
             raise RuntimeError(
                 f"[Camera] TIMEOUT: Không thể kết nối tới {label} sau {config.CONNECTION_TIMEOUT:.0f}s."
@@ -104,7 +104,7 @@ def _open_capture(source) -> cv2.VideoCapture:
         time.sleep(0.1)
 
     # Đọc thử 1 frame để xác nhận luồng hoạt động
-    deadline = time.perf_counter() + config.CONNECTION_TIMEOUT
+    deadline = time.monotonic() + config.CONNECTION_TIMEOUT
     while True:
         ret, test_frame = cap.read()
         if ret and test_frame is not None:
@@ -117,7 +117,7 @@ def _open_capture(source) -> cv2.VideoCapture:
                     f"Giới hạn: {config.MAX_FRAME_PIXELS} pixels."
                 )
             break
-        if time.perf_counter() > deadline:
+        if time.monotonic() > deadline:
             cap.release()
             raise RuntimeError(
                 f"[Camera] Đã mở {label} nhưng không nhận được khung hình sau {config.CONNECTION_TIMEOUT:.0f}s."
@@ -340,7 +340,7 @@ class ThreadedCamera:
             processed, lighting = self.torch_controller.process_frame(resized)
             with self._lock:
                 self._latest_frame = processed
-                self._latest_ts = time.perf_counter()
+                self._latest_ts = time.monotonic()
                 self._lighting_status = lighting
             self.frame_id = 1
             self.frame_timestamp = time.monotonic()
@@ -410,7 +410,7 @@ class ThreadedCamera:
             if grabbed:
                 consecutive_failures = 0
                 ret, frame = self._cap.retrieve()
-                now = time.perf_counter()
+                now = time.monotonic()
                 if ret and frame is not None:
                     resized = self._resize_frame(frame)
                     # AutoTorch & CLAHE processing
@@ -421,9 +421,9 @@ class ThreadedCamera:
                         self._latest_ts = now
                         self._lighting_status = lighting
 
-                    # Cập nhật frame_id và timestamp (atomic writes - int/float are GIL-safe)
-                    self.frame_id += 1
-                    self.frame_timestamp = time.monotonic()
+                        # Frame, identity and capture timestamp are one snapshot.
+                        self.frame_id += 1
+                        self.frame_timestamp = now
             else:
                 consecutive_failures += 1
                 if consecutive_failures >= MAX_FAILURES:

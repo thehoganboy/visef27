@@ -4,6 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
+import Combine
 import AVFoundation
 import UIKit
 import CoreVideo
@@ -15,6 +16,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     @Published var isZeroLuxBlind: Bool = false
     @Published var meanLuma: Float = 128.0
     @Published var fps: Float = 0.0
+    @Published var isGuidanceActive: Bool = false
 
     // Public access to capture session for SwiftUI preview layer
     var session: AVCaptureSession { captureSession }
@@ -24,6 +26,8 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private var videoDevice: AVCaptureDevice?
     private let sessionQueue = DispatchQueue(label: "com.visef.horuseyes.cameraQueue", qos: .userInitiated)
     private var isSessionConfigured: Bool = false
+    private var sessionGeneration: Int = 0
+    private var guidanceActiveInternal: Bool = false
 
     // Watchdog & Timing
     private var lastFrameTimestamp: CFTimeInterval = 0.0
@@ -35,6 +39,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private var darkFrameCount: Int = 0
     private var blindFrameCount: Int = 0
     private var isTorchForcedManual: Bool = false
+    private var lastTorchToggleTime: CFTimeInterval = 0.0
 
     // FPS Meter
     private var fpsCounter: Int = 0
@@ -44,7 +49,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     private let hapticGenerator = UIImpactFeedbackGenerator(style: .heavy)
 
     // Callbacks
-    var onFrameProcessed: ((_ pixelBuffer: CVPixelBuffer, _ frameId: UInt64, _ aeSettle: Int, _ luma: Float) -> Void)?
+    var onFrameProcessed: ((_ pixelBuffer: CVPixelBuffer, _ frameId: UInt64, _ aeSettle: Int, _ luma: Float, _ sourceTimestamp: Double) -> Void)?
     var onTorchToggled: ((_ isOn: Bool) -> Void)?
 
     // ── Health Watchdog ────────────────────────────────────────────────────────
@@ -96,10 +101,12 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
                 // Lock to 30 FPS safely if supported
                 do {
                     try device.lockForConfiguration()
-                    let targetFps = Int32(Config.defaultFPS)
-                    if device.activeFormat.videoSupportedFrameRateRanges.contains(where: { $0.maxFrameRate >= Double(targetFps) }) {
-                        device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: targetFps)
-                        device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: targetFps)
+                    let targetFps = Double(Config.defaultFPS)
+                    if let range = device.activeFormat.videoSupportedFrameRateRanges.first(where: {
+                        $0.minFrameRate <= targetFps && targetFps <= $0.maxFrameRate
+                    }) {
+                        device.activeVideoMinFrameDuration = CMTime(value: 1, timescale: Int32(targetFps))
+                        device.activeVideoMaxFrameDuration = CMTime(value: 1, timescale: Int32(targetFps))
                     }
                     if device.isLowLightBoostSupported {
                         device.automaticallyEnablesLowLightBoostWhenAvailable = true
@@ -114,8 +121,17 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
             let videoOutput = AVCaptureVideoDataOutput()
             videoOutput.alwaysDiscardsLateVideoFrames = true
+            let availableFormats = videoOutput.availableVideoPixelFormatTypes
+            var chosenFormat: OSType = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+            if !availableFormats.contains(chosenFormat) {
+                if availableFormats.contains(kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange) {
+                    chosenFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+                } else if let first = availableFormats.first {
+                    chosenFormat = first
+                }
+            }
             videoOutput.videoSettings = [
-                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)
+                kCVPixelBufferPixelFormatTypeKey as String: Int(chosenFormat)
             ]
             videoOutput.setSampleBufferDelegate(self, queue: self.sessionQueue)
 
@@ -125,7 +141,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
             if let connection = videoOutput.connection(with: .video) {
                 if connection.isVideoOrientationSupported {
-                    connection.videoOrientation = .landscapeRight
+                    connection.videoOrientation = .portrait
                 }
                 if connection.isVideoMirroringSupported {
                     connection.isVideoMirrored = false
@@ -181,15 +197,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     func updateVideoOrientation(for interfaceOrientation: UIInterfaceOrientation) {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
-            let videoOrientation: AVCaptureVideoOrientation
-            switch interfaceOrientation {
-            case .landscapeLeft:
-                videoOrientation = .landscapeLeft
-            case .landscapeRight:
-                videoOrientation = .landscapeRight
-            default:
-                videoOrientation = .landscapeRight
-            }
+            let videoOrientation: AVCaptureVideoOrientation = .portrait
             if let output = self.captureSession.outputs.first as? AVCaptureVideoDataOutput,
                let conn = output.connection(with: .video),
                conn.isVideoOrientationSupported {
@@ -216,8 +224,12 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             self?.meanLuma = luma
         }
 
-        // 0-Lux Automatic Flash Safety State Machine
-        processTorchLogic(meanY: luma, currentTime: now)
+        // 0-Lux Automatic Flash Safety State Machine (Evaluated only during active guidance session)
+        if guidanceActiveInternal {
+            processTorchLogic(meanY: luma, currentTime: now)
+        } else {
+            darkFrameCount = 0
+        }
 
         if aeSettleFramesRemaining > 0 {
             aeSettleFramesRemaining -= 1
@@ -234,28 +246,43 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             lastFpsTimestamp = now
         }
 
-        onFrameProcessed?(pixelBuffer, frameId, aeSettleFramesRemaining, luma)
+        onFrameProcessed?(pixelBuffer, frameId, aeSettleFramesRemaining, luma, now)
     }
 
-    // ── Fast Plane 0 Luma Computation ─────────────────────────────────────────
+    // ── Fast Plane 0 Luma Computation (Planar & Non-Planar Crash-Proof) ─────
     private func calculateMeanLuma(pixelBuffer: CVPixelBuffer) -> Float {
         CVPixelBufferLockBaseAddress(pixelBuffer, .readOnly)
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, .readOnly) }
 
-        guard let yPlane = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0) else {
+        let isPlanar = CVPixelBufferIsPlanar(pixelBuffer)
+        let planeCount = CVPixelBufferGetPlaneCount(pixelBuffer)
+        let baseAddr: UnsafeMutableRawPointer?
+        let width: Int
+        let height: Int
+        let bytesPerRow: Int
+
+        if isPlanar && planeCount > 0 {
+            baseAddr = CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0)
+            width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
+            height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
+            bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
+        } else {
+            baseAddr = CVPixelBufferGetBaseAddress(pixelBuffer)
+            width = CVPixelBufferGetWidth(pixelBuffer)
+            height = CVPixelBufferGetHeight(pixelBuffer)
+            bytesPerRow = CVPixelBufferGetBytesPerRow(pixelBuffer)
+        }
+
+        guard let buffer = baseAddr, width > 0, height > 0, bytesPerRow > 0 else {
             return 128.0
         }
 
-        let width = CVPixelBufferGetWidthOfPlane(pixelBuffer, 0)
-        let height = CVPixelBufferGetHeightOfPlane(pixelBuffer, 0)
-        let bytesPerRow = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0)
-
-        let bufferPtr = yPlane.assumingMemoryBound(to: UInt8.self)
+        let bufferPtr = buffer.assumingMemoryBound(to: UInt8.self)
         var sum: UInt64 = 0
         var samplesCount: UInt64 = 0
 
-        let stepX = 8
-        let stepY = 8
+        let stepX = max(4, width / 24)
+        let stepY = max(4, height / 32)
 
         for y in stride(from: 0, to: height, by: stepY) {
             let rowOffset = y * bytesPerRow
@@ -313,7 +340,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
 
     // ── Hardware Torch Actuator ───────────────────────────────────────────────
     private func setHardwareTorch(on: Bool) {
-        guard let device = videoDevice, device.hasTorch else { return }
+        guard let device = videoDevice, device.hasTorch, device.isTorchAvailable else { return }
 
         do {
             try device.lockForConfiguration()
@@ -325,23 +352,78 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
             device.unlockForConfiguration()
 
             DispatchQueue.main.async { [weak self] in
-                self?.isTorchActive = on
+                guard let self = self else { return }
+                self.isTorchActive = on
+                self.aeSettleFramesRemaining = Config.flashAeSettleFrames
+                self.onTorchToggled?(on)
             }
         } catch {
             print("[HorusEyes] Error setting torch: \(error)")
+            // Hardware failure: do not report successful toggle; sync to physical state
+            DispatchQueue.main.async { [weak self] in
+                guard let self = self else { return }
+                self.isTorchActive = (self.videoDevice?.torchMode == .on)
+            }
         }
     }
 
     // ── Manual Override Toggle ────────────────────────────────────────────────
     func toggleManualTorch() {
+        let now = CACurrentMediaTime()
+        // P1-E: Debounce rapid repeated taps (250ms guard) to prevent desynchronization
+        guard now - lastTorchToggleTime >= 0.25 else { return }
+        // Manual toggle is accepted only during an active guidance session
+        guard isGuidanceActive else { return }
+        lastTorchToggleTime = now
         hapticGenerator.impactOccurred()
+        let token = sessionGeneration
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+            // Ensure manual torch action cannot race with session stop/restart and guidance remains active
+            guard self.sessionGeneration == token && self.guidanceActiveInternal else { return }
             let newState = !self.isTorchActive
-            self.isTorchForcedManual = newState
+            self.isTorchForcedManual = true // Lock manual choice for this running session
             self.setHardwareTorch(on: newState)
-            self.aeSettleFramesRemaining = Config.flashAeSettleFrames
-            self.onTorchToggled?(newState)
+        }
+    }
+
+    func setGuidanceActive(_ active: Bool) {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.sessionGeneration += 1
+            self.guidanceActiveInternal = active
+            self.darkFrameCount = 0
+            self.blindFrameCount = 0
+            if !active {
+                self.isTorchForcedManual = false
+                self.setHardwareTorch(on: false)
+            } else {
+                // Restore automatic lighting policy on new CHẠY session
+                self.isTorchForcedManual = false
+            }
+            DispatchQueue.main.async {
+                self.isGuidanceActive = active
+            }
+        }
+    }
+
+    func resetManualTorchLock() {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.isTorchForcedManual = false
+        }
+    }
+
+    func forceTorchOff() {
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+            self.sessionGeneration += 1
+            self.guidanceActiveInternal = false
+            self.isTorchForcedManual = false
+            self.setHardwareTorch(on: false)
+            DispatchQueue.main.async {
+                self.isGuidanceActive = false
+            }
         }
     }
 }

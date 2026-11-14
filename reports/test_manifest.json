@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "HorusEyes 2.0 Test Manifest (Phase 01B-A+ & 01B-B0 Revision)",
-  "version": "2.2.0",
-  "generated_date": "2026-11-08",
+  "title": "HorusEyes 2.0 Test Manifest (Final Phase 01B-A++ Revision)",
+  "version": "2.4.0",
+  "generated_date": "2026-11-09",
   "description": "Scientific, reproducible test specifications with explicit test classifications (UNIT, INTEGRATION, REPLAY, HARDWARE, FIELD) adhering to Engineering Directive 01A.",
   "suites": [
     {
@@ -469,6 +469,106 @@
           "expected": "PASS",
           "actual": "PASS",
           "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-09-PHASE01B-A-PLUS-PLUS-ADVERSARIAL",
+      "name": "Phase 01B-A++ Adversarial Safety & Failure Boundary Suite",
+      "classification": "UNIT",
+      "command": "python tests/test_phase01b_a_plus_plus_adversarial.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "TEST-9.1",
+          "name": "Startup Safe-State Defaulting",
+          "assertion": "App starts up in INITIALIZING / UNKNOWN / PATH_UNVERIFIED, never asserting verified safe",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.2",
+          "name": "Camera Rotation Does Not Clear Hazard",
+          "assertion": "Panning away does not trigger OBSERVED_LOW_RISK; hazard state preserved",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.3",
+          "name": "Phone Rotation Hazard Loss and Observation Recovery",
+          "assertion": "OBSERVED_HAZARD -> COASTING_HAZARD -> OBSERVATION_RECOVERED, CRITICAL preserved",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.4",
+          "name": "Preemption by New Critical Hazard During Coasting",
+          "assertion": "Stale coasting hazard immediately preempted by incoming critical hazard",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.5",
+          "name": "Coasting Expiration Never Falsely Transitions to SAFE",
+          "assertion": "Coasting expiration transitions to LOST_UNRESOLVED (UNRESOLVED_HAZARD), never SAFE",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.6",
+          "name": "FPS-Independent Caution Reminder Duration",
+          "assertion": "Emits bounded CAUTION_REMINDER (vol 0.35) for exactly <= 1.5s real time across 5, 10, 30 FPS, then silences to STANDBY_UNRESOLVED",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.7",
+          "name": "Camera Freeze Frame Watchdog Timeout",
+          "assertion": "Camera freeze > 1.0s triggers SENSOR_FAULT / CAMERA_STALLED, never preserving stale safe state",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        },
+        {
+          "id": "TEST-9.8",
+          "name": "Monotonic Timestamp Anomaly & Duplicate Protection",
+          "assertion": "Zero/negative dt handled gracefully via state caching, zero div-by-zero",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P0"
+        }
+      ]
+    },
+    {
+      "id": "SUITE-10-CONTROLLED-PROFILING-BENCHMARK",
+      "name": "Controlled Pipeline Stage Profiling Suite (Task P1-F03)",
+      "classification": "INTEGRATION",
+      "command": "python tests/benchmark_controlled_p1_f03.py",
+      "environment": "host_python",
+      "execution_status": "PASSED",
+      "tests": [
+        {
+          "id": "TEST-10.1",
+          "name": "500-Frame Controlled Per-Stage Timing Profiling",
+          "assertion": "T1-T6 individual stage times recorded; core perception isolated from HUD; raw JSON and CSV written",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
+        },
+        {
+          "id": "TEST-10.2",
+          "name": "Observability Optimization Comparative Validation",
+          "assertion": "160x120 CV_16S vs 640x480 CV_64F achieves >= 5x speedup under identical input and quality retention",
+          "expected": "PASS",
+          "actual": "PASS",
+          "severity": "P1"
         }
       ]
     }

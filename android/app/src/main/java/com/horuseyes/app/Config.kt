@@ -16,7 +16,7 @@ object Config {
     const val LUX_BRIGHT_OFF_THRESHOLD: Float = 75.0f    // Ngưỡng tắt Flash chống nhấp nháy
     const val FLASH_HOLD_MIN_SECONDS: Float = 5.0f       // Thời gian giữ Flash tối thiểu giữa 2 lần chuyển đổi
     const val FLASH_AE_SETTLE_FRAMES: Int = 5            // Số frame bỏ qua biến thiên vận tốc chờ Auto-Exposure
-    const val LUX_ZERO_BLIND_THRESHOLD: Float = 10.0f    // Dưới 10.0 Y -> Cảm biến bị che đen hoặc 0-Lux tuyệt đối
+    const val LUX_ZERO_BLIND_THRESHOLD: Float = 3.5f    // Dưới 3.5 Y -> Cảm biến bị che đen hoặc 0-Lux tuyệt đối (trong túi)
     const val CLAHE_CLIP_LIMIT: Float = 2.5f
 
     // ── Geometric Filtering Masks ──

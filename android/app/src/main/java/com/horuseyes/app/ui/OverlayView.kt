@@ -1,460 +1,602 @@
 package com.horuseyes.app.ui
 
 import android.content.Context
-import android.graphics.Canvas
-import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Path
-import android.graphics.RectF
-import android.graphics.Typeface
+import android.graphics.*
+import android.os.SystemClock
 import android.util.AttributeSet
 import android.view.View
-import com.horuseyes.app.Config
-import com.horuseyes.app.budget.BudgetDecision
-import com.horuseyes.app.kinematics.KinematicsResult
 import com.horuseyes.app.vision.DepthResult
-import java.util.Locale
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
-/**
- * Custom View hiển thị Telemetry HUD trực quan chuẩn ViSEF:
- * - Viền hộp bao nổi bật, tương phản cao, bo tròn góc với hiệu ứng ánh sáng (Glowing Tint Fill)
- * - Khung ngắm góc vuông (Corner Brackets) dày 8px tạo cảm giác khóa mục tiêu hiện đại
- * - Tâm ngắm Reticle (Crosshair & Target Circle) ngay tại trọng tâm vật cản
- * - Huy hiệu thông số chi tiết: ID mục tiêu, Trạng thái (TIẾN TỚI / LÙI XA / TĨNH), Cự ly cm, Vận tốc v_z, TTC
- * - Mũi tên vector chỉ hướng chuyển động tiếp cận / lùi xa
- * - Chỉ dẫn né thoát an toàn (Safe Escape Guidance Pill)
- * - Banner báo đường thoáng an toàn (Clear Path Indicator) khi phòng trống
- * - Màn hình trạng thái Tạm dừng (Paused Overlay)
- */
-class OverlayView @JvmOverloads constructor(
-    context: Context,
-    attrs: AttributeSet? = null,
-    defStyleAttr: Int = 0
-) : View(context, attrs, defStyleAttr) {
+// Optional angle is camera-relative: negative left, positive right.
+// Directional advice represents a lower-estimated-collision-risk heading within the observed FOV.
+data class DirectionalAdvisory(
+    val state: String = "UNKNOWN",
+    val angleDeg: Float? = null,
+    val confidence: Float? = null,
+    val observedRange: Pair<Float, Float>? = null,
+    val sourceNanos: Long = 0,
+    val reasonCode: String = "UNSPECIFIED"
+) {
+    fun drawableAngle(now: Long): Float? {
+        val a = angleDeg ?: return null
+        val range = observedRange ?: return null
+        if (state != "AVAILABLE" || !a.isFinite() || (now - sourceNanos) !in 0L..750_000_000L ||
+            confidence == null || confidence <= 0 || confidence > 1 ||
+            range.first < -90 || range.second > 90 || a < range.first || a > range.second) return null
+        return a
+    }
+}
 
-    private var depthResult: DepthResult? = null
-    private var kinematicsResult: KinematicsResult? = null
-    private var decision: BudgetDecision? = null
-    private var fps: Float = 30.0f
-    private var latencyMs: Float = 35.0f
+fun advisoryForRisk(threat: String, timestampNanos: Long = 0L): DirectionalAdvisory {
+    val state: String
+    val code: String
+    when (threat) {
+        "CRITICAL" -> {
+            state = "STOP"
+            code = "CRITICAL_OBSTACLE"
+        }
+        "SAFE", "WARNING" -> {
+            state = "UNAVAILABLE"
+            code = "LOCAL_DEPTH_MISSING"
+        }
+        "PAUSED" -> {
+            state = "UNKNOWN"
+            code = "PAUSED"
+        }
+        "SENSOR_FAULT" -> {
+            state = "UNKNOWN"
+            code = "SENSOR_FAULT"
+        }
+        else -> {
+            state = "UNKNOWN"
+            code = "UNSPECIFIED"
+        }
+    }
+    return DirectionalAdvisory(state, sourceNanos = timestampNanos, reasonCode = code)
+}
 
-    @Volatile
-    var isPaused: Boolean = false
-        set(value) {
-            field = value
-            postInvalidate()
+fun estimateDirectionalAdvisory(
+    depth: DepthResult?,
+    threat: String,
+    nowNanos: Long,
+    hfovDeg: Float = 65f,
+    prevAngle: Float? = null
+): DirectionalAdvisory {
+    if (threat == "PAUSED") {
+        return DirectionalAdvisory("UNKNOWN", sourceNanos = nowNanos, reasonCode = "PAUSED")
+    }
+    if (threat == "INITIALIZING") {
+        return DirectionalAdvisory("UNKNOWN", sourceNanos = nowNanos, reasonCode = "INITIALIZING")
+    }
+    if (threat == "SENSOR_FAULT") {
+        return DirectionalAdvisory("UNKNOWN", sourceNanos = nowNanos, reasonCode = "SENSOR_FAULT")
+    }
+    if (depth == null || !depth.isValid) {
+        return DirectionalAdvisory("UNKNOWN", sourceNanos = nowNanos, reasonCode = "MODEL_OUTPUT_INVALID")
+    }
+
+    val halfFov = hfovDeg / 2f
+    val obsRange = Pair(-halfFov, halfFov)
+
+    // Spatial observation freshness check (reject missing, invalid, or stale observations > 750ms)
+    if (depth.timestampNanos <= 0L) {
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = nowNanos, reasonCode = "SOURCE_FRAME_MISSING")
+    }
+    val ageSeconds = (nowNanos - depth.timestampNanos) / 1_000_000_000.0
+    if (ageSeconds < -0.05 || ageSeconds > 0.75) {
+        return DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = depth.timestampNanos, reasonCode = "SOURCE_FRAME_STALE")
+    }
+    val advNanos = depth.timestampNanos
+
+    val camW = if (depth.width > 0) depth.width.toFloat() else 192f
+    val cx = camW / 2f
+    val fx = cx / kotlin.math.tan(Math.toRadians(halfFov.toDouble())).toFloat()
+
+    // Explicit validity-aware sector extraction (no fabricated 250cm defaults)
+    val zLeftRaw = depth.sectorDists["LEFT"]
+    val validL = zLeftRaw != null && zLeftRaw.isFinite() && zLeftRaw > 0f
+    val zLeft = if (validL) zLeftRaw!! else Float.NaN
+
+    var zCenterRaw = depth.sectorDists["CENTER"] ?: depth.distCm
+    val validC = zCenterRaw.isFinite() && zCenterRaw > 0f
+    val zCenter = if (validC) zCenterRaw else Float.NaN
+
+    val zRightRaw = depth.sectorDists["RIGHT"]
+    val validR = zRightRaw != null && zRightRaw.isFinite() && zRightRaw > 0f
+    val zRight = if (validR) zRightRaw!! else Float.NaN
+
+    // Completely obstructed check if all sectors are valid and close
+    if (validC && zCenter < 50f && validL && zLeft < 60f && validR && zRight < 60f) {
+        if (depth.spatialBins.isNotEmpty()) {
+            val cBins = depth.spatialBins.filter { abs(it.angleCenter) <= 6.0f && it.isValid }
+            val cDists = cBins.map { it.estimatedDistanceCm }
+            val finiteCDists = cDists.filter { it.isFinite() && it > 0f }
+            if (finiteCDists.size == cBins.size && finiteCDists.isNotEmpty() && finiteCDists.all { it >= 75f }) {
+                // Central corridor is genuinely open with valid distance readings (doorway clearance)
+            } else {
+                return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "CORRIDOR_OBSTRUCTED")
+            }
+        } else {
+            return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "CORRIDOR_OBSTRUCTED")
+        }
+    }
+
+    // Overhead or drop-off hazard under CRITICAL threat forces immediate STOP
+    val isOverhead = depth.overheadHazard || depth.modeText == "OVERHEAD" || depth.allObstacles.any { it.modeText == "OVERHEAD" }
+    val isDropOff = depth.dropOffHazard || depth.modeText == "DROP_OFF" || depth.allObstacles.any { it.modeText == "DROP_OFF" }
+    if (threat == "CRITICAL" && isOverhead) {
+        return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "OVERHEAD_HAZARD")
+    }
+    if (threat == "CRITICAL" && isDropOff) {
+        return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "DROP_OFF_HAZARD")
+    }
+
+    data class ObsProfile(val angCenter: Float, val radius: Float, val weight: Float, val zObs: Float, val isValidDist: Boolean)
+    val profiles = mutableListOf<ObsProfile>()
+
+    for (o in depth.allObstacles) {
+        val l = if (o.bbox.right > o.bbox.left) o.bbox.left.toFloat() else (o.x - 20f)
+        val r = if (o.bbox.right > o.bbox.left) o.bbox.right.toFloat() else (o.x + 20f)
+        val isDistValid = o.distCm.isFinite() && o.distCm > 0f
+        val angLeft = Math.toDegrees(kotlin.math.atan2((l - cx).toDouble(), fx.toDouble())).toFloat()
+        val angRight = Math.toDegrees(kotlin.math.atan2((r - cx).toDouble(), fx.toDouble())).toFloat()
+        val angCenter = (angLeft + angRight) / 2f
+        val angHalfW = max(2f, (angRight - angLeft) / 2f)
+        val totalRadius: Float
+        val weight: Float
+        val zVal: Float
+        if (isDistValid) {
+            zVal = max(10f, o.distCm)
+            val marginDeg = min(22f, max(4f, Math.toDegrees(kotlin.math.atan2(20.0, zVal.toDouble())).toFloat()))
+            totalRadius = angHalfW + marginDeg
+            weight = when {
+                zVal < 50f -> 20f
+                zVal < 80f -> 10f
+                zVal < 150f -> 4f
+                else -> 1f
+            }
+        } else {
+            // Unknown-distance obstacle: retain image-space angular occupancy without fabricating 100cm
+            zVal = Float.NaN
+            val marginDeg = 8f
+            totalRadius = angHalfW + marginDeg
+            weight = 12f
+        }
+        profiles.add(ObsProfile(angCenter, totalRadius, weight, zVal, isDistValid))
+    }
+
+    val bins = depth.spatialBins
+
+    // Clear observation with no detected obstacles (P0-02 & P0-B)
+    if (profiles.isEmpty()) {
+        var centerSupported = false
+        var centerCoverageOk = false
+        var candDist = if (validC && zCenter.isFinite() && zCenter > 0f) zCenter else Float.NaN
+        if (bins.isNotEmpty()) {
+            val cBins = bins.filter { abs(it.angleCenter) <= 5.0f }
+            val validCList = cBins.filter { it.isValid }
+            if (validCList.size >= max(1, (cBins.size * 0.75f).toInt())) {
+                centerCoverageOk = true
+                val dists = validCList.map { it.estimatedDistanceCm }.filter { it.isFinite() && it > 0f }
+                if (dists.isNotEmpty()) {
+                    candDist = dists.minOrNull() ?: Float.NaN
+                    centerSupported = true
+                }
+            }
+        } else if (validC) {
+            centerCoverageOk = true
+            if (zCenter.isFinite() && zCenter > 0f) {
+                centerSupported = true
+            }
         }
 
-    // ── Paint cho Mục tiêu chính (Primary Target) ──
-    private val primaryBoxPaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 6f
-        isAntiAlias = true
+        if (centerSupported && candDist.isFinite() && candDist > 0f && candDist >= 75.0f) {
+            var angleOut = 0.0f
+            if (prevAngle != null && prevAngle.isFinite()) {
+                angleOut = 0.3f * angleOut + 0.7f * prevAngle
+            }
+            return DirectionalAdvisory(
+                state = "AVAILABLE",
+                angleDeg = kotlin.math.round(angleOut * 10f) / 10f,
+                confidence = 0.55f,
+                observedRange = obsRange,
+                sourceNanos = advNanos,
+                reasonCode = "AVAILABLE_FORWARD"
+            )
+        } else if (centerSupported && candDist.isFinite() && candDist < 40.0f) {
+            return DirectionalAdvisory(
+                state = "STOP",
+                observedRange = obsRange,
+                sourceNanos = advNanos,
+                reasonCode = "CRITICAL_OBSTACLE"
+            )
+        } else {
+            val reason = if (!centerCoverageOk) {
+                "CENTER_COVERAGE_INSUFFICIENT"
+            } else if (!centerSupported || !candDist.isFinite() || candDist <= 0f) {
+                "LOCAL_DEPTH_MISSING"
+            } else {
+                "NO_SUPPORTED_CANDIDATE"
+            }
+            return DirectionalAdvisory(
+                state = "UNAVAILABLE",
+                observedRange = obsRange,
+                sourceNanos = advNanos,
+                reasonCode = reason
+            )
+        }
     }
 
-    private val primaryFillPaint = Paint().apply {
-        style = Paint.Style.FILL
-        isAntiAlias = true
+    // Step 5A: Generate all candidate headings across observed FOV
+    val allCandidateAngles = mutableListOf<Float>()
+    var aStep = -halfFov + 2.5f
+    while (aStep <= halfFov - 2.5f + 1e-4f) {
+        allCandidateAngles.add(aStep)
+        aStep += 2.5f
     }
 
-    private val cornerBracketPaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 8f
-        strokeCap = Paint.Cap.ROUND
-        isAntiAlias = true
+    // Step 5B: Determine eligibility for each candidate heading (P0-01 Hard Rejection)
+    data class Candidate(val ang: Float, val zSec: Float, val risk: Float)
+    val eligibleCandidates = mutableListOf<Candidate>()
+    var obstructedCount = 0
+
+    for (cand in allCandidateAngles) {
+        var candSupported = false
+        var candDist = Float.NaN
+
+        if (bins.isNotEmpty()) {
+            val cMin = cand - 5.0f
+            val cMax = cand + 5.0f
+            val kMin = cand - 2.5f
+            val kMax = cand + 2.5f
+            val wCorr = cMax - cMin  // 10.0 deg
+            val wCore = kMax - kMin  // 5.0 deg
+
+            var validCorrCov = 0.0f
+            var validCoreCov = 0.0f
+            val validDists = mutableListOf<Float>()
+
+            for (b in bins) {
+                if (b.angleMax <= b.angleMin) continue
+                val ovCorr = max(0.0f, min(b.angleMax, cMax) - max(b.angleMin, cMin))
+                val ovCore = max(0.0f, min(b.angleMax, kMax) - max(b.angleMin, kMin))
+
+                if (b.isValid) {
+                    validCorrCov += ovCorr
+                    validCoreCov += ovCore
+                    if (ovCorr > 0.0f && b.estimatedDistanceCm.isFinite() && b.estimatedDistanceCm > 0f) {
+                        validDists.add(b.estimatedDistanceCm)
+                    }
+                }
+            }
+
+            val corrRatio = validCorrCov / wCorr
+            val coreRatio = validCoreCov / wCore
+
+            // Candidate corridor requires >= 75% valid coverage and central core >= 90%
+            if (corrRatio >= 0.75f && coreRatio >= 0.90f && validDists.isNotEmpty()) {
+                candSupported = true
+                candDist = validDists.minOrNull() ?: Float.NaN
+            }
+        } else {
+            // 3-sector fallback for legacy mocks or tests without spatialBins
+            val (secValid, zSec) = when {
+                cand < -10f -> Pair(validL, zLeft)
+                cand > 10f -> Pair(validR, zRight)
+                else -> Pair(validC, zCenter)
+            }
+            if (secValid) {
+                candSupported = true
+                candDist = zSec
+            }
+        }
+
+        if (!candSupported) continue
+
+        var isBlocked = false
+        if (candDist < 40f) isBlocked = true
+
+        if (!isBlocked) {
+            for (p in profiles) {
+                val dAng = abs(cand - p.angCenter)
+                if (!p.isValidDist) {
+                    if (dAng < p.radius) { isBlocked = true; break }
+                } else {
+                    if (p.zObs < 50f && dAng < p.radius) { isBlocked = true; break }
+                    if (p.zObs < 35f && dAng < (p.radius + 2f)) { isBlocked = true; break }
+                }
+            }
+        }
+
+        if (isBlocked) {
+            obstructedCount++
+            continue
+        }
+
+        var risk = 0f
+        for (p in profiles) {
+            val dAng = abs(cand - p.angCenter)
+            if (dAng < p.radius) {
+                val penetration = 1f - (dAng / p.radius)
+                risk += p.weight * (penetration * penetration) * 15f
+            } else {
+                val dEdge = dAng - p.radius
+                if (dEdge < 15f) {
+                    risk += p.weight * kotlin.math.exp(-((dEdge * dEdge) / 40f)).toFloat() * 2f
+                }
+            }
+        }
+
+        if (candDist < 80f) risk += ((80f - candDist) / 10f) * 4f
+        else if (candDist < 150f) risk += ((150f - candDist) / 70f) * 1.5f
+
+        risk += 0.05f * abs(cand)
+
+        if (prevAngle != null && prevAngle.isFinite() && abs(cand - prevAngle) <= 3.5f) {
+            risk -= 1.0f
+        }
+
+        eligibleCandidates.add(Candidate(cand, candDist, risk))
     }
 
-    private val reticleCirclePaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2.5f
-        isAntiAlias = true
+    // Step 5C: Evaluate outcomes when no candidate is eligible
+    if (eligibleCandidates.isEmpty()) {
+        return if (obstructedCount > 0 && (obstructedCount >= allCandidateAngles.size / 2 || (validC && zCenter < 50f))) {
+            DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "CORRIDOR_OBSTRUCTED")
+        } else {
+            val cBins = bins.filter { abs(it.angleCenter) <= 5.0f }
+            val centerValidCount = cBins.filter { it.isValid }.size
+            val centerMissing = bins.isNotEmpty() && (centerValidCount < max(1, (cBins.size * 0.70f).toInt()))
+            val code = if (centerMissing) "CENTER_COVERAGE_INSUFFICIENT" else "NO_SUPPORTED_CANDIDATE"
+            DirectionalAdvisory("UNAVAILABLE", observedRange = obsRange, sourceNanos = advNanos, reasonCode = code)
+        }
     }
 
-    private val reticleCenterPaint = Paint().apply {
-        style = Paint.Style.FILL
-        isAntiAlias = true
+    // ── Step 6: Hierarchical Movement Policy (P0-02 Corridor Evidence) ──
+
+    // Priority 1: HOLD FORWARD
+    var fwdEligible = false
+    var fwdDist = Float.NaN
+    var fwdRisk = Float.MAX_VALUE
+    for (c in eligibleCandidates) {
+        if (abs(c.ang - 0f) < 1.5f) {
+            fwdEligible = true
+            fwdDist = c.zSec
+            fwdRisk = c.risk
+            break
+        }
     }
 
-    // ── Paint cho Mục tiêu phụ (Secondary Targets) ──
-    private val secondaryBoxPaint = Paint().apply {
-        color = Color.parseColor("#00E5FF") // Electric Cyan nổi bật
-        style = Paint.Style.STROKE
-        strokeWidth = 4f
-        isAntiAlias = true
+    val fwdEncroached = profiles.any { p -> abs(p.angCenter) < p.radius }
+
+    if (fwdEligible && !fwdEncroached && fwdDist >= 75f && fwdRisk <= 4f) {
+        var angleOut = 0f
+        if (prevAngle != null && prevAngle.isFinite()) {
+            angleOut = 0.35f * 0f + 0.65f * prevAngle
+            if (abs(angleOut) < 1.0f) angleOut = 0f
+        }
+        return DirectionalAdvisory("AVAILABLE", angleOut, 0.55f, obsRange, sourceNanos = advNanos, reasonCode = "AVAILABLE_FORWARD")
     }
 
-    private val secondaryFillPaint = Paint().apply {
-        color = Color.parseColor("#1800E5FF") // Tint nhẹ Cyan
-        style = Paint.Style.FILL
-        isAntiAlias = true
+    // Priority 2: SMALL CORRECTION
+    val smallCandidates = eligibleCandidates.filter { abs(it.ang) <= 12.5f }
+    if (smallCandidates.isNotEmpty()) {
+        val bestSc = smallCandidates.minByOrNull { it.risk + 0.08f * abs(it.ang) }!!
+        if (bestSc.risk < 20f && (!fwdEligible || fwdEncroached || bestSc.risk < fwdRisk - 0.5f)) {
+            var scAngle = bestSc.ang
+            if (prevAngle != null && prevAngle.isFinite()) {
+                scAngle = 0.45f * scAngle + 0.55f * prevAngle
+            }
+            scAngle = max(-halfFov, min(halfFov, scAngle))
+            val conf = max(0.35f, min(0.55f, 1f - (bestSc.risk / 35f)))
+            return DirectionalAdvisory("AVAILABLE", scAngle, conf, obsRange, sourceNanos = advNanos, reasonCode = "AVAILABLE_CORRECTION")
+        }
     }
 
-    // ── Paint Huy hiệu (Badge) & Chữ (Text) ──
-    private val badgeBgPaint = Paint().apply {
-        color = Color.parseColor("#E60F172A") // Nền kính tối sâu 90%
-        style = Paint.Style.FILL
-        isAntiAlias = true
+    // Priority 3: ALTERNATIVE HEADING
+    var bestCand = 0f
+    var minCost = Float.MAX_VALUE
+    for (c in eligibleCandidates) {
+        var cost = c.risk + 0.08f * abs(c.ang)
+        if (prevAngle != null && prevAngle.isFinite()) {
+            cost += 0.05f * abs(c.ang - prevAngle)
+        }
+        if (cost < minCost) {
+            minCost = cost
+            bestCand = c.ang
+        }
     }
 
-    private val badgeBorderPaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
-        isAntiAlias = true
+    if (minCost > 30f) {
+        return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "NO_SAFE_PATH")
     }
 
-    private val badgeTextPaint = Paint().apply {
-        textSize = 28f
-        isAntiAlias = true
-        typeface = Typeface.DEFAULT_BOLD
+    if (threat == "CRITICAL" && validC) {
+        // Immediate frontal collision (< 25cm) forces emergency STOP
+        if (zCenter < 25f) {
+            return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "CRITICAL_OBSTACLE")
+        }
+        // Constrained center hazard (< 40cm): allow alternative heading only if genuinely safe and has clearance
+        if (zCenter < 40f && (minCost > 15f || !eligibleCandidates.any { abs(it.ang - bestCand) < 1.5f && it.zSec >= 60f })) {
+            return DirectionalAdvisory("STOP", observedRange = obsRange, sourceNanos = advNanos, reasonCode = "CRITICAL_OBSTACLE")
+        }
     }
 
-    private val secBadgeTextPaint = Paint().apply {
-        color = Color.parseColor("#00E5FF")
-        textSize = 24f
-        isAntiAlias = true
-        typeface = Typeface.DEFAULT_BOLD
+    val conf = max(0.30f, min(0.55f, 1f - (minCost / 35f)))
+    var selected = bestCand
+    if (prevAngle != null && prevAngle.isFinite()) {
+        selected = 0.45f * selected + 0.55f * prevAngle
+    }
+    selected = max(-halfFov, min(halfFov, selected))
+
+    return DirectionalAdvisory("AVAILABLE", selected, conf, obsRange, sourceNanos = advNanos, reasonCode = "AVAILABLE_ALTERNATIVE")
+}
+
+class OverlayView(context: Context, attrs: AttributeSet?) : View(context, attrs) {
+    private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private var depth: DepthResult? = null
+    private var threat = "PAUSED"
+    private var timestamp = 0L
+    private var prevAngle: Float? = null
+    var advisory = DirectionalAdvisory()
+
+    fun getThreat(): String = threat
+
+    fun withdrawStaleAdvisory() {
+        if (advisory.state == "AVAILABLE") {
+            advisory = DirectionalAdvisory(state = "UNAVAILABLE", sourceNanos = timestamp, reasonCode = "SOURCE_FRAME_STALE")
+            prevAngle = null
+            invalidate()
+        }
     }
 
-    // ── Paint Mũi tên vector chuyển động (Motion Arrow) ──
-    private val arrowPaint = Paint().apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 5f
-        strokeCap = Paint.Cap.ROUND
-        isAntiAlias = true
+    fun setState(state: String) {
+        threat = state; depth = null; advisory = DirectionalAdvisory(); prevAngle = null
+        contentDescription = if (state == "PAUSED") "Perception paused" else "Direction unavailable"
+        invalidate()
     }
 
-    private val arrowHeadPaint = Paint().apply {
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
-
-    private val arrowPath = Path()
-
-    // ── Paint Chỉ dẫn né thoát an toàn (Guidance Pill) ──
-    private val guidanceBgPaint = Paint().apply {
-        color = Color.parseColor("#E60F172A")
-        style = Paint.Style.FILL
-        isAntiAlias = true
-    }
-
-    private val guidanceBorderPaint = Paint().apply {
-        color = Color.parseColor("#00E676")
-        style = Paint.Style.STROKE
-        strokeWidth = 3f
-        isAntiAlias = true
-    }
-
-    private val guidanceTextPaint = Paint().apply {
-        color = Color.parseColor("#00E676")
-        textSize = 32f
-        textAlign = Paint.Align.CENTER
-        isAntiAlias = true
-        typeface = Typeface.DEFAULT_BOLD
-    }
-
-    // ── Paint Banner An toàn (Clear Path) ──
-    private val safeBannerPaint = Paint().apply {
-        color = Color.parseColor("#00E676")
-        textSize = 30f
-        textAlign = Paint.Align.CENTER
-        isAntiAlias = true
-        typeface = Typeface.DEFAULT_BOLD
-    }
-
-    // ── Paint Màn hình Tạm dừng (Paused Overlay) ──
-    private val pausedBgPaint = Paint().apply {
-        color = Color.parseColor("#B3000000")
-        style = Paint.Style.FILL
-    }
-
-    private val pausedTextTitlePaint = Paint().apply {
-        color = Color.parseColor("#FFA000")
-        textSize = 52f
-        textAlign = Paint.Align.CENTER
-        isAntiAlias = true
-        typeface = Typeface.DEFAULT_BOLD
-    }
-
-    private val pausedTextSubPaint = Paint().apply {
-        color = Color.parseColor("#CBD5E1")
-        textSize = 32f
-        textAlign = Paint.Align.CENTER
-        isAntiAlias = true
-    }
-
-    fun updateTelemetry(
-        depthRes: DepthResult,
-        kinRes: KinematicsResult,
-        dec: BudgetDecision,
-        currentFps: Float,
-        currentLatency: Float
-    ) {
-        this.depthResult = depthRes
-        this.kinematicsResult = kinRes
-        this.decision = dec
-        this.fps = currentFps
-        this.latencyMs = currentLatency
-        postInvalidate()
+    fun update(result: DepthResult, state: String, nowNanos: Long = SystemClock.elapsedRealtimeNanos()) {
+        depth = result; threat = state; timestamp = result.timestampNanos
+        advisory = estimateDirectionalAdvisory(result, state, nowNanos, prevAngle = prevAngle)
+        prevAngle = if (advisory.state == "AVAILABLE") advisory.angleDeg else null
+        val isStop = advisory.state == "STOP" || state == "CRITICAL"
+        contentDescription = if (isStop) "Stop. Obstacle detected" else "Direction advisory"
+        invalidate()
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        val now = SystemClock.elapsedRealtimeNanos()
+        val density = resources.displayMetrics.density
 
-        val viewW = width.toFloat()
-        val viewH = height.toFloat()
+        // Preview is live. Suppress brackets older than 250 ms rather than show
+        // geometrically correct but temporally misleading stale detections.
+        depth?.takeIf { now - timestamp <= 250_000_000L }?.let { d ->
+            val sh = 1f; val sw = d.sourceAspect
+            val scale = min(width / sw, height / sh)
+            val ox = (width - sw * scale) / 2; val oy = (height - scale) / 2
 
-        // ── 0. Hiển thị màn hình Tạm dừng nếu đang PAUSED ──
-        if (isPaused) {
-            canvas.drawRect(0f, 0f, viewW, viewH, pausedBgPaint)
-            val centerY = viewH * 0.45f
-            canvas.drawText("❚❚ ĐÃ TẠM DỪNG", viewW / 2f, centerY, pausedTextTitlePaint)
-            canvas.drawText("Nhấn nút START bên dưới để tiếp tục quét", viewW / 2f, centerY + 65f, pausedTextSubPaint)
-            return
-        }
+            val isStop = advisory.state == "STOP" || threat == "CRITICAL"
+            val primaryColor = when {
+                isStop -> Color.rgb(255, 59, 48)       // Apple Red
+                threat == "WARNING" -> Color.rgb(255, 149, 0) // Apple Orange
+                else -> Color.rgb(242, 242, 247)             // Apple Crisp White
+            }
 
-        val dRes = depthResult ?: return
-        val kRes = kinematicsResult ?: return
+            for (o in d.allObstacles) {
+                val l = ox + o.bbox.left.toFloat() / d.width * sw * scale
+                val r = ox + o.bbox.right.toFloat() / d.width * sw * scale
+                val t = oy + o.bbox.top.toFloat() / d.height * scale
+                val b = oy + o.bbox.bottom.toFloat() / d.height * scale
+                val leg = min(26f * density, min(r - l, b - t) / 2.8f)
 
-        // Căn chỉnh khung hình chuẩn tỷ lệ CameraX FILL_CENTER
-        val dW = dRes.width.toFloat()   // 192f
-        val dH = dRes.height.toFloat()  // 256f
-
-        val scale = max(viewW / dW, viewH / dH)
-        val offsetX = (viewW - dW * scale) / 2f
-        val offsetY = (viewH - dH * scale) / 2f
-
-        fun toScreenX(x: Float): Float = offsetX + x * scale
-        fun toScreenY(y: Float): Float = offsetY + y * scale
-
-        val allObs = dRes.allObstacles
-
-        // ── 1. Trường hợp không phát hiện vật cản nào (Phòng trống / Thoáng an toàn >1.5m) ──
-        if (allObs.isEmpty()) {
-            val safePillW = 500f
-            val safePillH = 54f
-            val safePillX = (viewW - safePillW) / 2f
-            val safePillY = 170f
-            val safeRect = RectF(safePillX, safePillY, safePillX + safePillW, safePillY + safePillH)
-
-            canvas.drawRoundRect(safeRect, 27f, 27f, guidanceBgPaint)
-            canvas.drawRoundRect(safeRect, 27f, 27f, guidanceBorderPaint)
-            canvas.drawText("● AN TOÀN — ĐƯỜNG THOÁNG (>1.5m)", viewW / 2f, safePillY + 38f, safeBannerPaint)
-            return
-        }
-
-        // ── 2. Vẽ các mục tiêu phụ (Secondary Obstacles) trước để không che mục tiêu chính ──
-        if (allObs.size > 1) {
-            for (i in 1 until allObs.size) {
-                val secObs = allObs[i]
-                val sLeft = toScreenX(secObs.bbox.left.toFloat())
-                val sTop = toScreenY(secObs.bbox.top.toFloat())
-                val sRight = toScreenX(secObs.bbox.right.toFloat())
-                val sBottom = toScreenY(secObs.bbox.bottom.toFloat())
-                val sRect = RectF(sLeft, sTop, sRight, sBottom)
-
-                // Vùng phủ bán trong suốt màu Cyan
-                canvas.drawRoundRect(sRect, 12f, 12f, secondaryFillPaint)
-                // Khung viền nét liền 4px màu Cyan
-                canvas.drawRoundRect(sRect, 12f, 12f, secondaryBoxPaint)
-
-                // Huy hiệu mục tiêu phụ
-                val secDetail = kRes.trackDetails[secObs.id]
-                val secMotion = secDetail?.motionStatus ?: "STATIC"
-                val secMotionTag = when (secMotion) {
-                    "APPROACHING" -> "TIẾN TỚI"
-                    "RECEDING" -> "LÙI XA"
-                    else -> "TĨNH"
+                // Pass 1: Outer dark outline for high contrast against bright scenes
+                paint.color = Color.argb(220, 0, 0, 0)
+                paint.strokeWidth = 7.0f * density
+                paint.strokeCap = Paint.Cap.ROUND
+                for ((x, y, dx, dy) in listOf(listOf(l, t, 1f, 1f), listOf(r, t, -1f, 1f), listOf(l, b, 1f, -1f), listOf(r, b, -1f, -1f))) {
+                    canvas.drawLine(x, y, x + dx * leg, y, paint)
+                    canvas.drawLine(x, y, x, y + dy * leg, paint)
                 }
-                val secBadgeText = "[#${secObs.id}] PHỤ: ${secObs.distCm.toInt()}cm | $secMotionTag"
-                val secTextW = secBadgeTextPaint.measureText(secBadgeText)
-                val secBadgeH = 38f
-                val secBadgeTop = (sTop - secBadgeH - 8f).coerceAtLeast(160f)
-                val secBadgeRect = RectF(sLeft, secBadgeTop, sLeft + secTextW + 24f, secBadgeTop + secBadgeH)
 
-                canvas.drawRoundRect(secBadgeRect, 8f, 8f, badgeBgPaint)
-                badgeBorderPaint.color = Color.parseColor("#00E5FF")
-                canvas.drawRoundRect(secBadgeRect, 8f, 8f, badgeBorderPaint)
-                canvas.drawText(secBadgeText, sLeft + 12f, secBadgeTop + 27f, secBadgeTextPaint)
+                // Pass 2: Vivid inner colored stroke
+                paint.color = primaryColor
+                paint.strokeWidth = 4.5f * density
+                paint.strokeCap = Paint.Cap.ROUND
+                for ((x, y, dx, dy) in listOf(listOf(l, t, 1f, 1f), listOf(r, t, -1f, 1f), listOf(l, b, 1f, -1f), listOf(r, b, -1f, -1f))) {
+                    canvas.drawLine(x, y, x + dx * leg, y, paint)
+                    canvas.drawLine(x, y, x, y + dy * leg, paint)
+                }
             }
         }
 
-        // ── 3. Vẽ mục tiêu chính (Primary Threat Target) ──
-        val primaryObs = allObs.first()
-        val pLeft = toScreenX(primaryObs.bbox.left.toFloat())
-        val pTop = toScreenY(primaryObs.bbox.top.toFloat())
-        val pRight = toScreenX(primaryObs.bbox.right.toFloat())
-        val pBottom = toScreenY(primaryObs.bbox.bottom.toFloat())
-        val pRect = RectF(pLeft, pTop, pRight, pBottom)
+        val cx = width / 2f
+        val cy = height * 0.86f
+        val angle = advisory.drawableAngle(now)
 
-        val pDetail = kRes.trackDetails[primaryObs.id]
-        val pMotion = pDetail?.motionStatus ?: "STATIC"
-        val pVz = pDetail?.vzSmooth ?: (kRes.obstacleVzs[primaryObs.id] ?: 0f)
-        val pTtc = pDetail?.ttc ?: (kRes.obstacleTtcs[primaryObs.id] ?: Float.POSITIVE_INFINITY)
+        if (angle != null && threat != "PAUSED") {
+            // Perceptual visual rotation mapping (P0-01)
+            val visualAngle = (angle * 1.4f).coerceIn(-45f, 45f)
+            val lateralOffset = (visualAngle * 0.9f * density).coerceIn(-35f * density, 35f * density)
 
-        val isCritical = kRes.threatLevel == "CRITICAL" || primaryObs.distCm <= Config.DIST_CRITICAL_CM
-        val isWarning = kRes.threatLevel == "WARNING" || pMotion == "APPROACHING" || primaryObs.distCm <= Config.DIST_DANGER_CM
+            canvas.save()
+            canvas.translate(cx + lateralOffset, cy)
+            canvas.scale(1.10f, 0.75f) // 3D road-projected perspective
+            canvas.rotate(visualAngle)
 
-        // Bảng màu trạng thái
-        val themeColor = when {
-            isCritical -> Color.parseColor("#FF1744") // Đỏ Neon Khẩn Cấp
-            isWarning -> Color.parseColor("#FF9100")  // Cam Neon Cảnh Báo
-            else -> Color.parseColor("#00E676")       // Xanh Lá Neon An Toàn
+            // Scaled 1.25x 3D arrow path with wider arrowhead
+            val path = Path().apply {
+                moveTo(-16f * density, 32f * density)
+                lineTo(16f * density, 32f * density)
+                lineTo(16f * density, -20f * density)
+                lineTo(38f * density, -20f * density)
+                lineTo(0f, -68f * density) // Prominent arrowhead tip
+                lineTo(-38f * density, -20f * density)
+                lineTo(-16f * density, -20f * density)
+                close()
+            }
+
+            // Outer drop shadow
+            paint.style = Paint.Style.FILL
+            paint.color = Color.argb(160, 0, 0, 0)
+            canvas.save()
+            canvas.translate(0f, 6f * density)
+            canvas.drawPath(path, paint)
+            canvas.restore()
+
+            // Outer dark stroke for maximum edge contrast
+            paint.style = Paint.Style.STROKE
+            paint.color = Color.argb(120, 0, 0, 0)
+            paint.strokeWidth = 2.5f * density
+            canvas.drawPath(path, paint)
+
+            // Front surface: Crisp silver-white gradient
+            paint.style = Paint.Style.FILL
+            paint.shader = android.graphics.LinearGradient(
+                0f, -68f * density, 0f, 32f * density,
+                Color.WHITE, Color.rgb(209, 209, 214),
+                android.graphics.Shader.TileMode.CLAMP
+            )
+            canvas.drawPath(path, paint)
+            paint.shader = null
+
+            canvas.restore()
+        } else {
+            val isStop = (advisory.state == "STOP" || threat == "CRITICAL") && threat != "PAUSED"
+            val isPaused = threat == "PAUSED"
+            val text = when {
+                isPaused -> "PAUSED"
+                isStop -> "STOP"
+                else -> "UNAVAILABLE"
+            }
+            paint.style = Paint.Style.FILL
+            paint.textSize = 22f * density
+            paint.textAlign = Paint.Align.CENTER
+            paint.isFakeBoldText = true
+
+            // Pill badge background
+            paint.color = Color.argb(215, 12, 14, 18)
+            val badgeHalfW = 120f * density
+            val badgeH = 26f * density
+            canvas.drawRoundRect(cx - badgeHalfW, cy - badgeH, cx + badgeHalfW, cy + badgeH, 18f * density, 18f * density, paint)
+
+            // Pill subtle border
+            paint.style = Paint.Style.STROKE
+            paint.strokeWidth = 1f * density
+            paint.color = Color.argb(60, 255, 255, 255)
+            canvas.drawRoundRect(cx - badgeHalfW, cy - badgeH, cx + badgeHalfW, cy + badgeH, 18f * density, 18f * density, paint)
+
+            // Text
+            paint.style = Paint.Style.FILL
+            paint.color = if (isStop) Color.rgb(255, 59, 48) else Color.rgb(242, 242, 247)
+            canvas.drawText(text, cx, cy + 8f * density, paint)
+            paint.isFakeBoldText = false
         }
 
-        val fillColor = when {
-            isCritical -> Color.parseColor("#33FF1744")
-            isWarning -> Color.parseColor("#28FF9100")
-            else -> Color.parseColor("#2000E676")
-        }
-
-        // 3a. Phủ vùng đệm màu bán trong suốt để vật cản tách biệt khỏi hậu cảnh
-        primaryFillPaint.color = fillColor
-        canvas.drawRoundRect(pRect, 14f, 14f, primaryFillPaint)
-
-        // 3b. Đường viền bao quanh nét liền dày 6px
-        primaryBoxPaint.color = themeColor
-        canvas.drawRoundRect(pRect, 14f, 14f, primaryBoxPaint)
-
-        // 3c. Khung ngắm góc vuông (Corner Brackets) dày 8px tạo điểm nhấn khóa mục tiêu
-        drawCornerBrackets(canvas, pLeft, pTop, pRight, pBottom, themeColor)
-
-        // 3d. Tâm ngắm Reticle (Crosshair & Circle) tại tọa độ trọng tâm vật thể
-        val ox = toScreenX(primaryObs.x.toFloat())
-        val oy = toScreenY(primaryObs.y.toFloat())
-        reticleCirclePaint.color = themeColor
-        reticleCenterPaint.color = themeColor
-
-        canvas.drawCircle(ox, oy, 22f, reticleCirclePaint)
-        canvas.drawCircle(ox, oy, 5f, reticleCenterPaint)
-        // 4 vạch dấu thập ngắn
-        canvas.drawLine(ox - 30f, oy, ox - 18f, oy, reticleCirclePaint)
-        canvas.drawLine(ox + 18f, oy, ox + 30f, oy, reticleCirclePaint)
-        canvas.drawLine(ox, oy - 30f, ox, oy - 18f, reticleCirclePaint)
-        canvas.drawLine(ox, oy + 18f, ox, oy + 30f, reticleCirclePaint)
-
-        // 3e. Mũi tên vector chỉ hướng chuyển động tiếp cận / lùi xa
-        if (pMotion == "APPROACHING") {
-            val arrowLen = (pVz * 0.8f).coerceIn(28f, 90f)
-            drawMotionArrow(canvas, ox, oy, isApproaching = true, length = arrowLen, color = Color.parseColor("#FF1744"))
-        } else if (pMotion == "RECEDING") {
-            val arrowLen = (kotlin.math.abs(pVz) * 0.8f).coerceIn(28f, 90f)
-            drawMotionArrow(canvas, ox, oy, isApproaching = false, length = arrowLen, color = Color.parseColor("#38BDF8"))
-        }
-
-        // 3f. Huy hiệu thông số mục tiêu chính (Primary Target Badge)
-        val statusPrefix = when {
-            isCritical -> "● NGUY HIỂM"
-            isWarning -> "▲ CẢNH BÁO"
-            else -> "✓ AN TOÀN"
-        }
-
-        val motionText = when (pMotion) {
-            "APPROACHING" -> "TIẾN TỚI +${pVz.toInt()}cm/s"
-            "RECEDING" -> "LÙI XA ${pVz.toInt()}cm/s"
-            else -> "VẬT TĨNH"
-        }
-
-        val ttcText = if (pTtc < 10.0f) " | TTC: ${String.format(Locale.US, "%.1fs", pTtc)}" else ""
-        val badgeText = "[#${primaryObs.id}] $statusPrefix: ${primaryObs.distCm.toInt()}cm | $motionText$ttcText"
-
-        val textWidth = badgeTextPaint.measureText(badgeText)
-        val badgeH = 46f
-        val badgeTop = (pTop - badgeH - 12f).coerceAtLeast(160f)
-        val badgeRect = RectF(pLeft, badgeTop, pLeft + textWidth + 28f, badgeTop + badgeH)
-
-        canvas.drawRoundRect(badgeRect, 10f, 10f, badgeBgPaint)
-        badgeBorderPaint.color = themeColor
-        canvas.drawRoundRect(badgeRect, 10f, 10f, badgeBorderPaint)
-
-        badgeTextPaint.color = themeColor
-        canvas.drawText(badgeText, pLeft + 14f, badgeTop + 32f, badgeTextPaint)
-
-        // ── 4. Chỉ dẫn hướng né an toàn (Safe Escape Direction Pill) & Deadlock STOP ──
-        if (kRes.guidanceState == "HAZARD_BLOCKED" || kRes.safeDirection == "STOP") {
-            val stopW = 520f
-            val stopH = 64f
-            val stopY = viewH - 240f
-            val midX = viewW * 0.5f
-            val flashOn = (System.currentTimeMillis() / 250) % 2 == 0L
-            val stopBorderColor = if (flashOn) Color.parseColor("#FF1744") else Color.parseColor("#B71C1C")
-            val stopTextColor = if (flashOn) Color.parseColor("#FF1744") else Color.parseColor("#E57373")
-
-            val stopRect = RectF((viewW - stopW) / 2f, stopY, (viewW + stopW) / 2f, stopY + stopH)
-            canvas.drawRoundRect(stopRect, 32f, 32f, guidanceBgPaint)
-            guidanceBorderPaint.color = stopBorderColor
-            guidanceBorderPaint.strokeWidth = 4f
-            canvas.drawRoundRect(stopRect, 32f, 32f, guidanceBorderPaint)
-            guidanceTextPaint.color = stopTextColor
-            canvas.drawText("[STOP - PATH BLOCKED]", midX, stopY + 43f, guidanceTextPaint)
-        } else if (kRes.threatLevel != "SAFE") {
-            val guideW = 460f
-            val guideH = 56f
-            val guideY = viewH - 240f
-            val midX = viewW * 0.5f
-
-            val hazardDir = if (dRes.pan < -0.33f) "BÊN TRÁI" else if (dRes.pan > 0.33f) "BÊN PHẢI" else "TRỰC DIỆN"
-            val distCmInt = dRes.distCm.toInt()
-            val hazardText = "MỐI NGUY: $hazardDir (${distCmInt}cm)"
-
-            val escRect = RectF((viewW - guideW) / 2f, guideY, (viewW + guideW) / 2f, guideY + guideH)
-            canvas.drawRoundRect(escRect, 28f, 28f, guidanceBgPaint)
-            val bannerColor = if (kRes.threatLevel == "CRITICAL") Color.parseColor("#FF1744") else Color.parseColor("#FFA000")
-            guidanceBorderPaint.color = bannerColor
-            guidanceBorderPaint.strokeWidth = 3f
-            canvas.drawRoundRect(escRect, 28f, 28f, guidanceBorderPaint)
-            guidanceTextPaint.color = bannerColor
-            canvas.drawText(hazardText, midX, guideY + 39f, guidanceTextPaint)
-        }
-    }
-
-    private fun drawCornerBrackets(
-        canvas: Canvas,
-        left: Float,
-        top: Float,
-        right: Float,
-        bottom: Float,
-        color: Int
-    ) {
-        cornerBracketPaint.color = color
-        val len = min(36f, min((right - left) / 3f, (bottom - top) / 3f))
-        // Góc trên-trái
-        canvas.drawLine(left, top, left + len, top, cornerBracketPaint)
-        canvas.drawLine(left, top, left, top + len, cornerBracketPaint)
-        // Góc trên-phải
-        canvas.drawLine(right, top, right - len, top, cornerBracketPaint)
-        canvas.drawLine(right, top, right, top + len, cornerBracketPaint)
-        // Góc dưới-trái
-        canvas.drawLine(left, bottom, left + len, bottom, cornerBracketPaint)
-        canvas.drawLine(left, bottom, left, bottom - len, cornerBracketPaint)
-        // Góc dưới-phải
-        canvas.drawLine(right, bottom, right - len, bottom, cornerBracketPaint)
-        canvas.drawLine(right, bottom, right, bottom - len, cornerBracketPaint)
-    }
-
-    private fun drawMotionArrow(
-        canvas: Canvas,
-        cx: Float,
-        cy: Float,
-        isApproaching: Boolean,
-        length: Float,
-        color: Int
-    ) {
-        arrowPaint.color = color
-        arrowHeadPaint.color = color
-        val dir = if (isApproaching) 1f else -1f
-        val startY = cy + dir * 26f
-        val endY = startY + dir * length
-        canvas.drawLine(cx, startY, cx, endY, arrowPaint)
-
-        // Đầu mũi tên hình tam giác
-        arrowPath.reset()
-        val headSize = 14f
-        arrowPath.moveTo(cx, endY + dir * 8f)
-        arrowPath.lineTo(cx - headSize, endY)
-        arrowPath.lineTo(cx + headSize, endY)
-        arrowPath.close()
-        canvas.drawPath(arrowPath, arrowHeadPaint)
+        if (depth != null) postInvalidateDelayed(250)
     }
 }

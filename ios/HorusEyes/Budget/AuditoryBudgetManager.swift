@@ -28,6 +28,7 @@ final class AuditoryBudgetManager {
 
     // Uncertainty Hysteresis Memory
     private var currentCueMode: String = "SHARP_PING"
+    private var unresolvedReminderCount: Int = 0
 
     // Configuration Constants
     private let hysteresisBoost: Float = 1.15
@@ -59,35 +60,160 @@ final class AuditoryBudgetManager {
 
     func coordinate(
         obstacleResult: ObstacleDetectionResult,
-        kinematicsResult: KinematicsResult
+        kinematicsResult: KinematicsResult,
+        advisory: DirectionalAdvisory? = nil
     ) -> BudgetDecision {
         let distCM = obstacleResult.distCM
         let ttc = kinematicsResult.primaryTTC
         let threatLevel = kinematicsResult.threatLevel
-        let safeDir = kinematicsResult.safeDirection
+        var safeDir = kinematicsResult.safeDirection
         _ = obstacleResult.uncertaintyScore
         let isEvading = kinematicsResult.isEvading
 
         // ── 0. Sensor Fault / 0-Lux Blind Override ────────────────────────────
-        if obstacleResult.isZeroLuxBlind || obstacleResult.modeText.contains("SENSOR_BLIND") {
+        if !obstacleResult.isValid || obstacleResult.isZeroLuxBlind || threatLevel == "SENSOR_FAULT" || threatLevel == "UNKNOWN" || (advisory?.state == "UNKNOWN" && advisory?.reasonCode == "SENSOR_FAULT") {
             return BudgetDecision(
                 isActive: true,
                 pan: 0.0,
                 proximity: 1.0,
                 distCM: 0.0,
-                ttc: 0.0,
+                ttc: .infinity,
                 priorityScore: 99.0,
                 volumeFactor: 1.0,
                 safeDirection: "STOP",
                 cueMode: "SYSTEM_FAULT_TONE",
-                threatLevel: "CRITICAL",
+                threatLevel: "SENSOR_FAULT",
                 suppressedCount: 0
             )
         }
 
+        if threatLevel == "PAUSED" || advisory?.reasonCode == "PAUSED" {
+            return BudgetDecision(
+                isActive: false,
+                pan: 0.0,
+                proximity: 0.0,
+                distCM: distCM,
+                ttc: .infinity,
+                priorityScore: 0.0,
+                volumeFactor: 0.0,
+                safeDirection: "NONE",
+                cueMode: "MUTED",
+                threatLevel: "PAUSED",
+                suppressedCount: 0
+            )
+        }
+
+        // ── 0A. Authoritative Directional STOP Audio Synchronization (P0) ─────
+        if let adv = advisory, adv.state == "STOP" {
+            currentActiveId = 1
+            activeHoldCounter = 1
+            pendingSwitchId = nil
+            pendingSwitchCounter = 0
+            currentCueMode = "SHARP_PING"
+
+            let isImmediateDanger = (threatLevel == "CRITICAL" ||
+                                     adv.reasonCode == "CRITICAL_OBSTACLE" ||
+                                     adv.reasonCode == "OVERHEAD_HAZARD" ||
+                                     adv.reasonCode == "DROP_OFF_HAZARD")
+
+            if isImmediateDanger {
+                return BudgetDecision(
+                    isActive: true,
+                    pan: 0.0,
+                    proximity: 1.0,
+                    distCM: distCM.isFinite ? distCM : .nan,
+                    ttc: ttc.isFinite ? ttc : .infinity,
+                    priorityScore: 99.0,
+                    volumeFactor: 1.0,
+                    safeDirection: "STOP",
+                    cueMode: "SHARP_PING",
+                    threatLevel: "CRITICAL",
+                    suppressedCount: max(0, obstacleResult.allObstacles.count - 1)
+                )
+            } else {
+                // STOP caused by lack of supported continuation (e.g. CORRIDOR_OBSTRUCTED):
+                // Halt without falsely claiming an imminent collision (finite TTC not fabricated)
+                return BudgetDecision(
+                    isActive: true,
+                    pan: 0.0,
+                    proximity: 0.70,
+                    distCM: distCM.isFinite ? distCM : .nan,
+                    ttc: .infinity,
+                    priorityScore: 50.0,
+                    volumeFactor: 0.85,
+                    safeDirection: "STOP",
+                    cueMode: "SHARP_PING",
+                    threatLevel: "WARNING",
+                    suppressedCount: max(0, obstacleResult.allObstacles.count - 1)
+                )
+            }
+        }
+
+        if let adv = advisory, adv.state == "UNAVAILABLE" {
+            safeDir = "NONE"
+            if threatLevel == "SAFE" {
+                return BudgetDecision(
+                    isActive: false,
+                    pan: 0.0,
+                    proximity: 0.0,
+                    distCM: distCM,
+                    ttc: .infinity,
+                    priorityScore: 0.0,
+                    volumeFactor: 0.0,
+                    safeDirection: "NONE",
+                    cueMode: "MUTED",
+                    threatLevel: "SAFE",
+                    suppressedCount: max(1, obstacleResult.allObstacles.count)
+                )
+            }
+        }
+
+        if kinematicsResult.hazardState == "COASTING_HAZARD" {
+            return BudgetDecision(isActive: true, pan: 0, proximity: threatLevel == "CRITICAL" ? 1 : 0.7,
+                distCM: .nan, ttc: .infinity, priorityScore: 99, volumeFactor: 1, safeDirection: "NONE",
+                cueMode: "SHARP_PING", threatLevel: threatLevel, suppressedCount: 0)
+        }
+
+        // ── 0B. Directive 01B-A++ Task P1-F02: Monotonic Time-Based Bounded Reminder Policy (FPS-Independent) ──
+        if kinematicsResult.hazardState == "LOST_UNRESOLVED" || threatLevel == "UNRESOLVED_HAZARD" {
+            let lostTs = kinematicsResult.lostUnresolvedTimestamp
+            let nowTs = kinematicsResult.timestamp
+            let elapsedUnresolved = (lostTs > 0.0 && nowTs >= lostTs) ? (nowTs - lostTs) : 0.0
+
+            if elapsedUnresolved <= 1.5 {
+                return BudgetDecision(
+                    isActive: true,
+                    pan: 0.0,
+                    proximity: 0.40,
+                    distCM: distCM,
+                    ttc: Float.infinity,
+                    priorityScore: 15.0,
+                    volumeFactor: 0.35,
+                    safeDirection: "NONE",
+                    cueMode: "CAUTION_REMINDER",
+                    threatLevel: "UNRESOLVED_HAZARD",
+                    suppressedCount: 0
+                )
+            } else {
+                return BudgetDecision(
+                    isActive: false,
+                    pan: 0.0,
+                    proximity: 0.0,
+                    distCM: distCM,
+                    ttc: Float.infinity,
+                    priorityScore: 0.0,
+                    volumeFactor: 0.0,
+                    safeDirection: "NONE",
+                    cueMode: "STANDBY_UNRESOLVED",
+                    threatLevel: "UNRESOLVED_HAZARD",
+                    suppressedCount: 0
+                )
+            }
+        }
+
         // ── 1. Total Auditory Suppression Rule ────────────────────────────────
         // Complete silence if in safe region to prevent cognitive fatigue
-        let isSuppressed = (threatLevel == "SAFE" || distCM >= Config.distSafeCM ||
+        let isSuppressed = threatLevel == "SAFE" && (distCM >= Config.distSafeCM ||
                             obstacleResult.modeText.hasPrefix("SAFE") ||
                             (distCM >= Config.distAlertCM && ttc > Config.ttcWarning))
 
@@ -127,7 +253,7 @@ final class AuditoryBudgetManager {
 
         var scored = [(score: Float, rawScore: Float, obs: SingleObstacle, ttc: Float)]()
         for obs in allObstacles {
-            let obsTtc = ttc
+            let obsTtc = (obs.pan == obstacleResult.pan && obs.distCM == obstacleResult.distCM) ? ttc : Float.infinity
             let rawScore = AuditoryBudgetManager.computeThreatScore(
                 ttc: obsTtc, proximity: obs.proximity, distCM: obs.distCM, uncertainty: obs.uncertaintyScore
             )
@@ -188,8 +314,21 @@ final class AuditoryBudgetManager {
         }
 
         // ── 3. Direct Spatial Hazard Localization (FIX-M01 & TASK 01A-2) ──────
+        let finalSafeDir: String
+        if let adv = advisory {
+            if adv.state == "UNAVAILABLE" {
+                finalSafeDir = "NONE"
+            } else if adv.state == "AVAILABLE" {
+                finalSafeDir = adv.reasonCode == "AVAILABLE_FORWARD" ? "FORWARD" : ((adv.angleDeg ?? 0) > 0 ? "RIGHT" : "LEFT")
+            } else {
+                finalSafeDir = safeDir
+            }
+        } else {
+            finalSafeDir = safeDir
+        }
+
         let outputPan: Float
-        if safeDir == "STOP" {
+        if finalSafeDir == "STOP" {
             outputPan = 0.0
         } else {
             outputPan = max(Float(-1.0), min(Float(1.0), winnerObs.pan))
@@ -206,7 +345,7 @@ final class AuditoryBudgetManager {
         } else if winnerObs.uncertaintyScore <= Config.uncertaintyBlurOff {
             cueMode = "SHARP_PING"
         } else {
-            cueMode = currentCueMode
+            cueMode = ["SHARP_PING", "ACOUSTIC_BLUR"].contains(currentCueMode) ? currentCueMode : "ACOUSTIC_BLUR"
         }
         currentCueMode = cueMode
 
@@ -220,7 +359,7 @@ final class AuditoryBudgetManager {
             ttc: winnerTtc,
             priorityScore: winnerScore,
             volumeFactor: volumeFactor,
-            safeDirection: safeDir,
+            safeDirection: finalSafeDir,
             cueMode: cueMode,
             threatLevel: threatLevel,
             suppressedCount: suppressedCount

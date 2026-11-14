@@ -1,0 +1,4633 @@
+{
+  "schema_version": "2.0",
+  "directive": "PRE-MOBILE-RETEST FINAL CORRECTIVE ORDER Section 6",
+  "description": "16 Cross-Platform Golden Directional Guidance Scenarios for Python, Android Kotlin, and iOS Swift",
+  "scenarios": [
+    {
+      "id": 1,
+      "name": "Clear forward corridor",
+      "threat": "SAFE",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 220.0,
+        "CENTER": 220.0,
+        "RIGHT": 220.0
+      },
+      "all_obstacles": [],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": 0.0,
+        "direction_sign": "FORWARD",
+        "angle_range": [
+          -1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "Doorway centered",
+      "threat": "WARNING",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 60.0,
+        "CENTER": 220.0,
+        "RIGHT": 60.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 150,
+          "y": 240,
+          "bbox": [
+            120,
+            100,
+            60,
+            280
+          ],
+          "pan": -0.5,
+          "proximity": 0.8,
+          "dist_cm": 60.0,
+          "mode_text": "DOORPOST_L",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        },
+        {
+          "id": 2,
+          "x": 490,
+          "y": 240,
+          "bbox": [
+            460,
+            100,
+            60,
+            280
+          ],
+          "pan": 0.5,
+          "proximity": 0.8,
+          "dist_cm": 60.0,
+          "mode_text": "DOORPOST_R",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": 0.0,
+        "direction_sign": "FORWARD",
+        "angle_range": [
+          -2.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "id": 3,
+      "name": "Doorway offset left",
+      "threat": "WARNING",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 220.0,
+        "CENTER": 180.0,
+        "RIGHT": 55.0
+      },
+      "all_obstacles": [
+        {
+          "id": 2,
+          "x": 420,
+          "y": 240,
+          "bbox": [
+            390,
+            100,
+            60,
+            280
+          ],
+          "pan": 0.3,
+          "proximity": 0.9,
+          "dist_cm": 55.0,
+          "mode_text": "DOORPOST_R",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": -10.0,
+        "direction_sign": "LEFT",
+        "angle_range": [
+          -15.0,
+          -1.0
+        ]
+      }
+    },
+    {
+      "id": 4,
+      "name": "Doorway offset right",
+      "threat": "WARNING",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 55.0,
+        "CENTER": 180.0,
+        "RIGHT": 220.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 220,
+          "y": 240,
+          "bbox": [
+            190,
+            100,
+            60,
+            280
+          ],
+          "pan": -0.3,
+          "proximity": 0.9,
+          "dist_cm": 55.0,
+          "mode_text": "DOORPOST_L",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 220.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": 10.0,
+        "direction_sign": "RIGHT",
+        "angle_range": [
+          1.0,
+          15.0
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "name": "Invalid outer image edge",
+      "threat": "SAFE",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 200.0,
+        "CENTER": 200.0,
+        "RIGHT": 200.0
+      },
+      "all_obstacles": [],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": 0.0,
+        "direction_sign": "FORWARD",
+        "angle_range": [
+          -1.0,
+          1.0
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "name": "Center obstacle with a supported side route",
+      "threat": "WARNING",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 60.0,
+        "CENTER": 65.0,
+        "RIGHT": 190.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 320,
+          "y": 240,
+          "bbox": [
+            290,
+            100,
+            60,
+            280
+          ],
+          "pan": 0.0,
+          "proximity": 0.6,
+          "dist_cm": 65.0,
+          "mode_text": "CENTER_OBS",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 65.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 65.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 65.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 65.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 65.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 190.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": 20.0,
+        "direction_sign": "RIGHT",
+        "angle_range": [
+          10.0,
+          25.0
+        ]
+      }
+    },
+    {
+      "id": 7,
+      "name": "All supported directions obstructed",
+      "threat": "CRITICAL",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 35.0,
+        "CENTER": 35.0,
+        "RIGHT": 35.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 320,
+          "y": 240,
+          "bbox": [
+            0,
+            50,
+            640,
+            380
+          ],
+          "pan": 0.0,
+          "proximity": 1.0,
+          "dist_cm": 35.0,
+          "mode_text": "WALL",
+          "uncertainty_score": 0.05,
+          "is_wall": true
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 35.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "STOP",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    },
+    {
+      "id": 8,
+      "name": "Narrow door below clearance requirement",
+      "threat": "CRITICAL",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 45.0,
+        "CENTER": 45.0,
+        "RIGHT": 45.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 290,
+          "y": 240,
+          "bbox": [
+            260,
+            100,
+            60,
+            280
+          ],
+          "pan": -0.1,
+          "proximity": 0.9,
+          "dist_cm": 45.0,
+          "mode_text": "POST_L",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        },
+        {
+          "id": 2,
+          "x": 350,
+          "y": 240,
+          "bbox": [
+            320,
+            100,
+            60,
+            280
+          ],
+          "pan": 0.1,
+          "proximity": 0.9,
+          "dist_cm": 45.0,
+          "mode_text": "POST_R",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "STOP",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    },
+    {
+      "id": 9,
+      "name": "Unknown central region",
+      "threat": "SAFE",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 180.0,
+        "CENTER": null,
+        "RIGHT": 180.0
+      },
+      "all_obstacles": [],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 0.0,
+          "raw_depth_statistic": null,
+          "dist_cm": null,
+          "is_valid": false,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 180.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "UNAVAILABLE",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    },
+    {
+      "id": 10,
+      "name": "Strong near-field hazard",
+      "threat": "CRITICAL",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 150.0,
+        "CENTER": 20.0,
+        "RIGHT": 150.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 320,
+          "y": 240,
+          "bbox": [
+            260,
+            80,
+            120,
+            350
+          ],
+          "pan": 0.0,
+          "proximity": 1.0,
+          "dist_cm": 20.0,
+          "mode_text": "CLOSE_OBS",
+          "uncertainty_score": 0.05,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 20.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "STOP",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    },
+    {
+      "id": 11,
+      "name": "Camera rotation",
+      "threat": "SAFE",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": 15.0,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 200.0,
+        "CENTER": 200.0,
+        "RIGHT": 200.0
+      },
+      "all_obstacles": [],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": 10.5,
+        "direction_sign": "RIGHT",
+        "angle_range": [
+          8.0,
+          12.0
+        ]
+      }
+    },
+    {
+      "id": 12,
+      "name": "Stale observation",
+      "threat": "SAFE",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 98.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 200.0,
+        "CENTER": 200.0,
+        "RIGHT": 200.0
+      },
+      "all_obstacles": [],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 200.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "UNAVAILABLE",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    },
+    {
+      "id": 13,
+      "name": "Model failure",
+      "threat": "SENSOR_FAULT",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": false,
+      "sector_dists": {},
+      "all_obstacles": [],
+      "spatial_bins": [],
+      "expected": {
+        "state": "UNKNOWN",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    },
+    {
+      "id": 14,
+      "name": "Overhead obstacle",
+      "threat": "CRITICAL",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 45.0,
+        "CENTER": 45.0,
+        "RIGHT": 45.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 320,
+          "y": 60,
+          "bbox": [
+            200,
+            0,
+            240,
+            100
+          ],
+          "pan": 0.0,
+          "proximity": 0.8,
+          "dist_cm": 45.0,
+          "mode_text": "OVERHEAD",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 45.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "STOP",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    },
+    {
+      "id": 15,
+      "name": "Multiple moving obstacles",
+      "threat": "WARNING",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": null,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 55.0,
+        "CENTER": 170.0,
+        "RIGHT": 60.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 140,
+          "y": 240,
+          "bbox": [
+            110,
+            100,
+            60,
+            280
+          ],
+          "pan": -0.5,
+          "proximity": 0.7,
+          "dist_cm": 55.0,
+          "mode_text": "MOVING_L",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        },
+        {
+          "id": 2,
+          "x": 500,
+          "y": 240,
+          "bbox": [
+            470,
+            100,
+            60,
+            280
+          ],
+          "pan": 0.5,
+          "proximity": 0.7,
+          "dist_cm": 60.0,
+          "mode_text": "MOVING_R",
+          "uncertainty_score": 0.1,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 55.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 170.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 60.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "AVAILABLE",
+        "angle_deg": 0.0,
+        "direction_sign": "FORWARD",
+        "angle_range": [
+          -2.0,
+          2.0
+        ]
+      }
+    },
+    {
+      "id": 16,
+      "name": "Immediate critical hazard during steering",
+      "threat": "CRITICAL",
+      "cam_width": 640,
+      "cam_height": 480,
+      "hfov_deg": 65.0,
+      "prev_angle": 12.0,
+      "now": 100.0,
+      "obs_timestamp": 100.0,
+      "is_valid": true,
+      "sector_dists": {
+        "LEFT": 150.0,
+        "CENTER": 22.0,
+        "RIGHT": 150.0
+      },
+      "all_obstacles": [
+        {
+          "id": 1,
+          "x": 320,
+          "y": 240,
+          "bbox": [
+            260,
+            80,
+            120,
+            350
+          ],
+          "pan": 0.0,
+          "proximity": 1.0,
+          "dist_cm": 22.0,
+          "mode_text": "CLOSE_OBS",
+          "uncertainty_score": 0.05,
+          "is_wall": false
+        }
+      ],
+      "spatial_bins": [
+        {
+          "bin_id": 0,
+          "angle_min": -32.5,
+          "angle_max": -30.26,
+          "angle_center": -31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 1,
+          "angle_min": -30.26,
+          "angle_max": -27.99,
+          "angle_center": -29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 2,
+          "angle_min": -27.99,
+          "angle_max": -25.54,
+          "angle_center": -26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 3,
+          "angle_min": -25.54,
+          "angle_max": -22.98,
+          "angle_center": -24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 4,
+          "angle_min": -22.98,
+          "angle_max": -20.42,
+          "angle_center": -21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 5,
+          "angle_min": -20.42,
+          "angle_max": -17.67,
+          "angle_center": -19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 6,
+          "angle_min": -17.67,
+          "angle_max": -14.83,
+          "angle_center": -16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 7,
+          "angle_min": -14.83,
+          "angle_max": -12.03,
+          "angle_center": -13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 8,
+          "angle_min": -12.03,
+          "angle_max": -9.05,
+          "angle_center": -10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 9,
+          "angle_min": -9.05,
+          "angle_max": -6.02,
+          "angle_center": -7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 10,
+          "angle_min": -6.02,
+          "angle_max": -3.08,
+          "angle_center": -4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 11,
+          "angle_min": -3.08,
+          "angle_max": 0.0,
+          "angle_center": -1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 12,
+          "angle_min": 0.0,
+          "angle_max": 3.08,
+          "angle_center": 1.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 13,
+          "angle_min": 3.08,
+          "angle_max": 6.02,
+          "angle_center": 4.55,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 14,
+          "angle_min": 6.02,
+          "angle_max": 9.05,
+          "angle_center": 7.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 15,
+          "angle_min": 9.05,
+          "angle_max": 12.03,
+          "angle_center": 10.54,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 16,
+          "angle_min": 12.03,
+          "angle_max": 14.83,
+          "angle_center": 13.43,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 17,
+          "angle_min": 14.83,
+          "angle_max": 17.67,
+          "angle_center": 16.25,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 18,
+          "angle_min": 17.67,
+          "angle_max": 20.42,
+          "angle_center": 19.05,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 19,
+          "angle_min": 20.42,
+          "angle_max": 22.98,
+          "angle_center": 21.7,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 20,
+          "angle_min": 22.98,
+          "angle_max": 25.54,
+          "angle_center": 24.26,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 21,
+          "angle_min": 25.54,
+          "angle_max": 27.99,
+          "angle_center": 26.77,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 22,
+          "angle_min": 27.99,
+          "angle_max": 30.26,
+          "angle_center": 29.12,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        },
+        {
+          "bin_id": 23,
+          "angle_min": 30.26,
+          "angle_max": 32.5,
+          "angle_center": 31.38,
+          "valid_ratio": 1.0,
+          "raw_depth_statistic": 250.0,
+          "dist_cm": 22.0,
+          "is_valid": true,
+          "has_obstacle": false
+        }
+      ],
+      "expected": {
+        "state": "STOP",
+        "angle_deg": null,
+        "direction_sign": "NONE",
+        "angle_range": null
+      }
+    }
+  ]
+}

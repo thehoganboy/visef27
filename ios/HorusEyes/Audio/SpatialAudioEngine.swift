@@ -4,6 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
+import Combine
 import AVFoundation
 import Accelerate
 import UIKit
@@ -29,6 +30,7 @@ final class SpatialAudioEngine: ObservableObject {
     private let channelCount: AVAudioChannelCount = 2
 
     // State Pointer for zero-allocation C render block access
+    private let stateLock = NSLock()
     private let statePtr: UnsafeMutablePointer<AudioRenderState>
 
     // Haptics
@@ -61,6 +63,7 @@ final class SpatialAudioEngine: ObservableObject {
         }
 
         let state = self.statePtr
+        let stateLock = self.stateLock
 
         // DSP persistent registers inside C-closure
         var phase: Float = 0.0
@@ -88,7 +91,13 @@ final class SpatialAudioEngine: ObservableObject {
 
             let frames = Int(frameCount)
             let dt = 1.0 / Float(effectiveRate)
-            let currentState = state.pointee
+            // Never block the realtime thread. A contended block is silent.
+            var currentState = AudioRenderState()
+            if stateLock.try() {
+                currentState = state.pointee
+                state.pointee.earconType = 0
+                stateLock.unlock()
+            }
 
             let isDualBuffer = abl.count >= 2
             guard let buf0 = abl[0].mData?.assumingMemoryBound(to: Float.self) else { return noErr }
@@ -207,7 +216,7 @@ final class SpatialAudioEngine: ObservableObject {
                 if phase > (2.0 * .pi) { phase -= (2.0 * .pi) }
 
                 var rawTone: Float = 0.0
-                if currentState.cueMode == 0 {
+                if currentState.cueMode == 0 || currentState.cueMode == 4 {
                     rawTone = 0.38 * sin(phase) + 0.12 * sin(2.0 * phase)
                 } else {
                     let dFmPhase = 2.0 * .pi * Config.blurFmRateHz * dt
@@ -270,7 +279,7 @@ final class SpatialAudioEngine: ObservableObject {
                         outR += eTone
                     } else {
                         activeEarconFreq = 0.0
-                        state.pointee.earconType = 0
+
                     }
                 }
 
@@ -297,6 +306,12 @@ final class SpatialAudioEngine: ObservableObject {
 
     func start() {
         guard !audioEngine.isRunning else { return }
+        // Activate hardware audio session lazily right before starting the audio engine
+        do {
+            try AVAudioSession.sharedInstance().setActive(true)
+        } catch {
+            print("[HorusEyes] AudioSession setActive notice: \(error.localizedDescription)")
+        }
         setupAudioGraphIfNeeded()
         do {
             try audioEngine.start()
@@ -310,9 +325,16 @@ final class SpatialAudioEngine: ObservableObject {
         if audioEngine.isRunning {
             audioEngine.stop()
         }
+        // Deactivate audio session to release hardware and restore background media
+        do {
+            try AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        } catch {
+            // Non-critical cleanup
+        }
     }
 
     func update(decision: BudgetDecision) {
+        stateLock.lock(); defer { stateLock.unlock() }
         if !decision.isActive {
             statePtr.pointee.isActive = false
             statePtr.pointee.cueMode = 3
@@ -326,13 +348,15 @@ final class SpatialAudioEngine: ObservableObject {
         switch decision.cueMode {
         case "ACOUSTIC_BLUR": cueModeInt = 1
         case "SYSTEM_FAULT_TONE": cueModeInt = 2
-        case "MUTED": cueModeInt = 3
-        default: cueModeInt = 0
+        case "MUTED", "STANDBY_UNRESOLVED": cueModeInt = 3
+        case "SHARP_PING": cueModeInt = 0
+        case "CAUTION_REMINDER": cueModeInt = 4
+        default: cueModeInt = 2
         }
 
         statePtr.pointee.pan = decision.pan
         statePtr.pointee.proximity = effectiveProx
-        statePtr.pointee.freq = freq
+        statePtr.pointee.freq = cueModeInt == 4 ? 300 : freq
         statePtr.pointee.isActive = true
         statePtr.pointee.volumeFactor = decision.volumeFactor
         statePtr.pointee.cueMode = cueModeInt
@@ -340,6 +364,7 @@ final class SpatialAudioEngine: ObservableObject {
     }
 
     func playEarcon(type: String) {
+        stateLock.lock(); defer { stateLock.unlock() }
         let earconId: Int
         switch type {
         case "PAUSE": earconId = 1

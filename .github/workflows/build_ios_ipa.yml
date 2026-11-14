@@ -2,7 +2,7 @@ name: Build Unsigned iOS IPA (iPhone 14 Sideloadly)
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main, master, feature/demo-ready-unified-ux ]
   workflow_dispatch:
 
 concurrency:
@@ -33,7 +33,7 @@ jobs:
       - name: Install CoreML Exporter Dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools>=7.0" "numpy<2.0.0"
+          pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools==8.3.0" "numpy<2.0.0" "onnxruntime" "Pillow"
 
       - name: Pre-cache MiDaS PyTorch Weights and Architecture
         run: |
@@ -50,9 +50,27 @@ jobs:
           [ "$SIZE" -gt 50000000 ] || { echo "FATAL: Weights file too small ($SIZE bytes)"; exit 1; }
 
           echo "=== Pre-cloning MiDaS repository to local cache ==="
-          git clone --depth 1 https://github.com/isl-org/MiDaS.git ios/scripts/MiDaS || true
-          git clone --depth 1 https://github.com/isl-org/MiDaS.git ~/.cache/torch/hub/isl-org_MiDaS_master || true
-          git clone --depth 1 https://github.com/isl-org/MiDaS.git ~/.cache/torch/hub/intel-isl_MiDaS_master || true
+          git clone https://github.com/isl-org/MiDaS.git ios/scripts/MiDaS
+          git -C ios/scripts/MiDaS checkout 454597711a62eabcbf7d1e89f3fb9f569051ac9b
+          git clone https://github.com/rwightman/gen-efficientnet-pytorch.git ios/scripts/efficientnet
+          git -C ios/scripts/efficientnet checkout 771ce082b2ce6d033f55b3d47c1f77389ad3c180
+          echo "70d6b9c891758c67f974a6097fb0c608c7ee67fb81ac3e5588847d5596d56fca  ios/scripts/midas_v21_small_256.pt" | shasum -a 256 -c -
+
+      - name: Run native Swift behavior regressions
+        run: |
+          set -euo pipefail
+          echo "=== Compiling native Swift behavior regressions ==="
+          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
+            echo "FATAL: swiftc compilation failed"
+            cat swiftc.log
+            exit 1
+          }
+          echo "=== Running native Swift behavior regressions ==="
+          /tmp/horus-behavior 2>&1 | tee behavior.log || {
+            echo "FATAL: native Swift behavior regression execution failed"
+            cat behavior.log
+            exit 1
+          }
 
       - name: Export MiDaS to Core ML (DepthModel.mlpackage)
         env:
@@ -82,7 +100,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: coreml-export-log
-          path: export.log
+          path: |
+            export.log
+            ios/model_parity.json
+            swiftc.log
+            behavior.log
           if-no-files-found: ignore
 
       - name: Generate Xcode Project via XcodeGen
@@ -138,12 +160,17 @@ jobs:
               pl = plistlib.load(f)
           pl['CFBundleExecutable'] = 'HorusEyes'
           pl['CFBundleIdentifier'] = 'com.visef.horuseyes'
-          pl['CFBundleName'] = 'HorusEyes'
-          pl['CFBundleDisplayName'] = 'HorusEyes'
+          pl['CFBundleName'] = 'VAMPIOR'
+          pl['CFBundleDisplayName'] = 'VAMPIOR'
           pl['CFBundleDevelopmentRegion'] = 'en'
           pl['CFBundleShortVersionString'] = '2.0'
           pl['CFBundleVersion'] = '1'
-          pl['UISupportedInterfaceOrientations'] = ['UIInterfaceOrientationLandscapeRight', 'UIInterfaceOrientationLandscapeLeft']
+          pl['CFBundlePackageType'] = 'APPL'
+          pl['LSRequiresIPhoneOS'] = True
+          pl['MinimumOSVersion'] = '16.0'
+          pl['UIRequiredDeviceCapabilities'] = ['arm64']
+          pl['UILaunchScreen'] = {}
+          pl['UISupportedInterfaceOrientations'] = ['UIInterfaceOrientationPortrait']
           pl['NSCameraUsageDescription'] = 'HorusEyes uses the rear camera to detect obstacles and guide you safely in real-time.'
           pl['NSMicrophoneUsageDescription'] = 'HorusEyes requires audio session access for spatial sound feedback.'
           pl['NSMotionUsageDescription'] = 'HorusEyes uses motion sensors to distinguish head turns from obstacle approach.'

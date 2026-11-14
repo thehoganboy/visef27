@@ -1,0 +1,30 @@
+[
+  {
+    "file": "frame_0.png",
+    "original_path": "E:\\visef27 project\\data\\nyu2_test\\00000_colors.png",
+    "sha256": "ecc2033477bf25f08607f81df73d89e69c65f1695d804f535d05fcc47110b98e",
+    "source": "NYU Depth V2",
+    "usage": "real-frame model and replay comparison; no measured near/far validation"
+  },
+  {
+    "file": "frame_1.png",
+    "original_path": "E:\\visef27 project\\data\\nyu2_test\\00001_colors.png",
+    "sha256": "98f326a13ff82be73e20cc2204c7ecdcc485903bd947653c078f114a66b41d25",
+    "source": "NYU Depth V2",
+    "usage": "real-frame model and replay comparison; no measured near/far validation"
+  },
+  {
+    "file": "frame_2.png",
+    "original_path": "E:\\visef27 project\\data\\nyu2_test\\00008_colors.png",
+    "sha256": "948d377e40ebaf8288af4a70faca449c6acbe27a28719613f538702f411ec256",
+    "source": "NYU Depth V2",
+    "usage": "real-frame model and replay comparison; no measured near/far validation"
+  },
+  {
+    "file": "frame_3.png",
+    "original_path": "E:\\visef27 project\\data\\rgbd_dataset_freiburg3_walking_static\\rgb\\1341846226.817920.png",
+    "sha256": "8af39ac13ccc64b3b1dcb0583a78635ff8cfb726b94dc95da8e8329b6227fc79",
+    "source": "TUM RGB-D freiburg3 walking static",
+    "usage": "real-frame model and replay comparison; no measured near/far validation"
+  }
+]

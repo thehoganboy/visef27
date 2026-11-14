@@ -19,8 +19,11 @@ struct KinematicsResult {
     let threats: [String: SectorThreat]
     let safeDirection: String   // "STOP", "NONE"
     let isEvading: Bool
-    let threatLevel: String     // "CRITICAL", "WARNING", "SAFE"
+    let threatLevel: String     // "CRITICAL", "WARNING", "SAFE", "UNRESOLVED_HAZARD"
     let guidanceState: String
+    let hazardState: String     // "INITIALIZING", "OBSERVED_HAZARD", "COASTING_HAZARD", "LOST_UNRESOLVED", "OBSERVED_LOW_RISK"
+    let lostUnresolvedTimestamp: Double
+    let timestamp: Double
 }
 
 final class KinematicsEngine {
@@ -33,8 +36,17 @@ final class KinematicsEngine {
     // Track State
     private var lastFrameId: UInt64 = 0
     private var smoothedVz: Float = 0.0
-    private var lastSafeDirection: String = "RIGHT"
+    private var lastSafeDirection: String = "NONE"
     private var cachedResult: KinematicsResult?
+
+    // Directive 01B-A++ Task P0-F01 & P1-F02: Cross-platform Hazard Coasting, Watchdog & Safe-State Semantics
+    private var lastSeenTimestamp: Double = 0.0
+    private var lastHazardDist: Float = 250.0
+    private var lastThreatLevel: String = "UNKNOWN"
+    private var clearCorridorFrames: Int = 0
+    private var lostUnresolvedTimestamp: Double = 0.0
+    private let coastingDurationSec: Double = 0.60
+    private var hazardState: String = "INITIALIZING"
 
     init() {}
 
@@ -46,8 +58,74 @@ final class KinematicsEngine {
         userWalkSpeedCmS: Float = Config.userWalkSpeedCmS,
         imuYawRateRadS: Float = 0.0
     ) -> KinematicsResult {
+        // True perception failure: invalid observation or complete zero-lux blindness
+        guard obstacleResult.isValid && !obstacleResult.isZeroLuxBlind else {
+            historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
+            return KinematicsResult(primaryTTC: .infinity, primaryVelocityZ: 0, threats: [:],
+                safeDirection: "STOP", isEvading: false, threatLevel: "SENSOR_FAULT",
+                guidanceState: "PERCEPTION_UNAVAILABLE", hazardState: "SENSOR_FAULT",
+                lostUnresolvedTimestamp: lostUnresolvedTimestamp, timestamp: timestamp)
+        }
+
+        // P0-C: Decouple local observability from coarse primary TTC distance.
+        // If perception is valid but primary object distance is missing/nonfinite,
+        // do not compute velocity/TTC, but do NOT classify as total SENSOR_FAULT.
+        guard obstacleResult.distCM.isFinite && obstacleResult.distCM > 0 else {
+            historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
+            lastFrameId = frameId
+
+            let isOverhead = obstacleResult.isOverheadHazard || obstacleResult.modeText == "OVERHEAD" || obstacleResult.allObstacles.contains(where: { $0.modeText == "OVERHEAD" })
+            let isDropOff = obstacleResult.isDropOffHazard || obstacleResult.modeText == "DROP_OFF" || obstacleResult.allObstacles.contains(where: { $0.modeText == "DROP_OFF" })
+
+            let zC = obstacleResult.sectorDists["CENTER"] ?? .nan
+            let zL = obstacleResult.sectorDists["LEFT"] ?? .nan
+            let zR = obstacleResult.sectorDists["RIGHT"] ?? .nan
+
+            let threatLevel: String
+            let safeDirection: String
+            let guidanceState: String
+            let hState: String
+
+            if isOverhead || isDropOff {
+                threatLevel = "CRITICAL"
+                safeDirection = "STOP"
+                guidanceState = "HAZARD_IMMEDIATE"
+                hState = "ACTIVE_HAZARD"
+            } else if (zC.isFinite && zC < 40.0) || (zL.isFinite && zL < 30.0) || (zR.isFinite && zR < 30.0) {
+                threatLevel = "CRITICAL"
+                safeDirection = "STOP"
+                guidanceState = "HAZARD_IMMEDIATE"
+                hState = "ACTIVE_HAZARD"
+            } else if (zC.isFinite && zC < 80.0) || (zL.isFinite && zL < 60.0) || (zR.isFinite && zR < 60.0) {
+                threatLevel = "WARNING"
+                safeDirection = "NONE"
+                guidanceState = "CLEARANCE_RESTRICTED"
+                hState = "ACTIVE_HAZARD"
+            } else {
+                threatLevel = "SAFE"
+                safeDirection = "FORWARD"
+                guidanceState = "NORMAL_CLEAR"
+                hState = "CLEAR"
+            }
+
+            let res = KinematicsResult(
+                primaryTTC: .infinity, primaryVelocityZ: 0, threats: [:],
+                safeDirection: safeDirection, isEvading: false, threatLevel: threatLevel,
+                guidanceState: guidanceState, hazardState: hState,
+                lostUnresolvedTimestamp: lostUnresolvedTimestamp, timestamp: timestamp
+            )
+            cachedResult = res
+            return res
+        }
+        // Do not fit approach across rotation, exposure changes, gaps or a primary
+        // region jump. This is still a single-region tracker, not identity proof.
+        if abs(imuYawRateRadS) > 0.15 || aeSettleRemaining > 0 ||
+           (historyT.last.map { timestamp - $0 > 1 || timestamp <= $0 } ?? false) ||
+           (historyPan.last.map { abs(obstacleResult.pan - $0) > 0.15 } ?? false) {
+            historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
+        }
         // Guard against duplicate frames or flash AE settling window
-        if frameId <= lastFrameId || aeSettleRemaining > 0 {
+        if frameId <= lastFrameId {
             if let cached = cachedResult {
                 return cached
             }
@@ -111,10 +189,8 @@ final class KinematicsEngine {
         let effectiveVz = smoothedVz
 
         // Calculate primary TTC
-        let primaryTTC: Float
-        if distZ <= Config.distCriticalCM {
-            primaryTTC = 0.5
-        } else if effectiveVz > Config.vzMinApproachCmS {
+        var primaryTTC: Float
+        if effectiveVz > Config.vzMinApproachCmS && historyT.count >= 3 && abs(imuYawRateRadS) <= 0.15 && aeSettleRemaining == 0 {
             primaryTTC = max(0.1, distZ / effectiveVz)
         } else {
             primaryTTC = Float.infinity
@@ -125,7 +201,7 @@ final class KinematicsEngine {
         if distZ <= Config.distCriticalCM || primaryTTC <= Config.ttcCritical {
             threatLevel = "CRITICAL"
         } else if distZ <= Config.distDangerCM || primaryTTC <= Config.ttcWarning {
-            threatLevel = "DANGER"
+            threatLevel = "WARNING"
         } else if distZ <= Config.distWarningCM {
             threatLevel = "WARNING"
         } else {
@@ -141,9 +217,9 @@ final class KinematicsEngine {
         let vzC = (abs(pan) <= 0.20) ? effectiveVz : 0.0
         let vzR = (pan > 0.20) ? smoothedVz : 0.0
 
-        let ttcL = (distL <= Config.distCriticalCM) ? 0.5 : (vzL > 20.0 ? distL / vzL : Float.infinity)
-        let ttcC = (distC <= Config.distCriticalCM) ? 0.5 : (vzC > 20.0 ? distC / vzC : Float.infinity)
-        let ttcR = (distR <= Config.distCriticalCM) ? 0.5 : (vzR > 20.0 ? distR / vzR : Float.infinity)
+        let ttcL = (vzL > Config.vzMinApproachCmS && primaryTTC.isFinite) ? distL / vzL : Float.infinity
+        let ttcC = (vzC > Config.vzMinApproachCmS && primaryTTC.isFinite) ? distC / vzC : Float.infinity
+        let ttcR = (vzR > Config.vzMinApproachCmS && primaryTTC.isFinite) ? distR / vzR : Float.infinity
 
         let threatL = SectorThreat(
             name: "LEFT", distCM: distL, velocityZ: vzL, ttc: ttcL,
@@ -181,17 +257,93 @@ final class KinematicsEngine {
         lastSafeDirection = safeDir
 
         // Directive 01B-A+ Task A+1: Không triệt tiêu cảnh báo chỉ vì quay camera/IMU pan.
-        // isEvading giữ nguyên false trong camera-only để bảo toàn 100% cảnh báo an toàn.
         let isEvading = false
 
+        // Directive 01B-A++ Task P0-01: Cross-Platform Hazard Coasting & Expiration State Machine
+        var activeThreatLevel = threatLevel
+        var activeGuidanceState = guidanceState
+
+        if obstacleResult.allObstacles.count > 0 && activeThreatLevel != "SAFE" {
+            hazardState = "OBSERVED_HAZARD"
+            clearCorridorFrames = 0
+            lostUnresolvedTimestamp = 0.0
+            lastThreatLevel = activeThreatLevel
+            lastHazardDist = distZ
+            lastSeenTimestamp = timestamp
+        } else {
+            let elapsedSinceLoss = (lastSeenTimestamp > 0.0) ? (timestamp - lastSeenTimestamp) : 999.0
+            if (lastThreatLevel == "CRITICAL" || lastThreatLevel == "WARNING") && lastHazardDist <= 80.0 {
+                if elapsedSinceLoss <= coastingDurationSec {
+                    // COASTING_HAZARD: retain confirmed threat level (CRITICAL stays CRITICAL!)
+                    hazardState = "COASTING_HAZARD"
+                    activeThreatLevel = lastThreatLevel
+                    activeGuidanceState = "HAZARD_DETECTED"
+                } else {
+                    // Coasting expired: do NOT automatically report SAFE!
+                    let secCenterClear = distC >= 200.0
+                    let secLeftClear = distL >= 150.0
+                    let secRightClear = distR >= 150.0
+
+                    if secCenterClear && secLeftClear && secRightClear && abs(imuYawRateRadS) < 0.15 && aeSettleRemaining == 0 {
+                        clearCorridorFrames += 1
+                    } else {
+                        clearCorridorFrames = 0
+                    }
+
+                    if clearCorridorFrames >= 3 {
+                        hazardState = "OBSERVED_LOW_RISK"
+                        activeThreatLevel = "SAFE"
+                        activeGuidanceState = "NO_HAZARD_DETECTED_IN_OBSERVED_REGION"
+                        lastThreatLevel = "SAFE"
+                        lastSeenTimestamp = 0.0
+                        lostUnresolvedTimestamp = 0.0
+                    } else {
+                        hazardState = "LOST_UNRESOLVED"
+                        activeThreatLevel = "UNRESOLVED_HAZARD"
+                        activeGuidanceState = "PATH_UNRESOLVED"
+                        if lostUnresolvedTimestamp == 0.0 {
+                            lostUnresolvedTimestamp = timestamp
+                        }
+                    }
+                }
+            } else {
+                let secCenterClear = distC >= 200.0
+                let secLeftClear = distL >= 150.0
+                let secRightClear = distR >= 150.0
+
+                if secCenterClear && secLeftClear && secRightClear && abs(imuYawRateRadS) < 0.15 && aeSettleRemaining == 0 {
+                    clearCorridorFrames = min(100, clearCorridorFrames + 1)
+                } else {
+                    clearCorridorFrames = 0
+                }
+
+                if clearCorridorFrames >= 3 {
+                    hazardState = "OBSERVED_LOW_RISK"
+                    activeThreatLevel = "SAFE"
+                    activeGuidanceState = "NO_HAZARD_DETECTED_IN_OBSERVED_REGION"
+                } else {
+                    hazardState = "INITIALIZING"
+                    activeThreatLevel = "UNKNOWN"
+                    activeGuidanceState = "PATH_UNVERIFIED"
+                }
+                lastThreatLevel = activeThreatLevel
+                lastSeenTimestamp = 0.0
+                lostUnresolvedTimestamp = 0.0
+            }
+        }
+
+        if hazardState == "COASTING_HAZARD" || hazardState == "LOST_UNRESOLVED" { primaryTTC = .infinity }
         let result = KinematicsResult(
             primaryTTC: primaryTTC,
             primaryVelocityZ: smoothedVz,
             threats: threats,
             safeDirection: safeDir,
             isEvading: isEvading,
-            threatLevel: threatLevel,
-            guidanceState: guidanceState
+            threatLevel: activeThreatLevel,
+            guidanceState: activeGuidanceState,
+            hazardState: hazardState,
+            lostUnresolvedTimestamp: lostUnresolvedTimestamp,
+            timestamp: timestamp
         )
 
         cachedResult = result

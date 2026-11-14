@@ -1,6 +1,5 @@
 opencv-python>=4.8.0
 numpy>=1.23.0
-torch>=2.0.0
-torchvision>=0.15.0
 sounddevice>=0.4.6
 scipy>=1.10.0
+onnxruntime>=1.17.0

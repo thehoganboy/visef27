@@ -4,6 +4,7 @@
 // ════════════════════════════════════════════════════════════════════════════════
 
 import Foundation
+import Combine
 import CoreMotion
 
 final class IMUManager: ObservableObject {

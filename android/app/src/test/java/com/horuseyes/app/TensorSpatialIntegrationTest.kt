@@ -1,0 +1,549 @@
+package com.horuseyes.app
+
+import android.graphics.Rect
+import com.horuseyes.app.budget.AuditoryBudgetManager
+import com.horuseyes.app.kinematics.KinematicsResult
+import com.horuseyes.app.ui.DirectionalAdvisory
+import com.horuseyes.app.ui.estimateDirectionalAdvisory
+import com.horuseyes.app.vision.DepthEngine
+import com.horuseyes.app.vision.DepthResult
+import com.horuseyes.app.vision.Obstacle
+import com.horuseyes.app.vision.SpatialBin
+import org.junit.Assert.*
+import org.junit.Test
+import kotlin.math.abs
+
+class TensorSpatialIntegrationTest {
+
+    private fun createBaseTensor(w: Int = 192, h: Int = 256, fillVal: Float = 180.0f): FloatArray {
+        return FloatArray(w * h) { fillVal }
+    }
+
+    @Test
+    fun test01_openCentralCorridor() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        assertEquals(24, bins.size)
+        assertTrue(bins.all { it.isValid })
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 200.0f,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 200.0f, "CENTER" to 200.0f, "RIGHT" to 200.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("AVAILABLE", adv.state)
+        assertEquals(0.0f, adv.angleDeg ?: -999.0f, 0.01f)
+    }
+
+    @Test
+    fun test02_nearSidewalls() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Left wall cols 0..50 (raw 750)
+        for (y in 0 until 256) {
+            for (x in 0..49) tensor[y * w + x] = 750.0f
+        }
+        // Right wall cols 142..192 (raw 750)
+        for (y in 0 until 256) {
+            for (x in 142 until 192) tensor[y * w + x] = 750.0f
+        }
+
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 200.0f,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 200.0f, "RIGHT" to 28.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("AVAILABLE", adv.state)
+        assertTrue(abs(adv.angleDeg ?: 999.0f) <= 3.0f)
+    }
+
+    @Test
+    fun test03_narrowOpeningBelowClearance() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Obstacles block left cols 0..80 and right cols 112..192, central opening only 32px (4 bins = 10.8 deg < clearance)
+        for (y in 51..165) {
+            for (x in 0..79) tensor[y * w + x] = 750.0f
+            for (x in 112 until 192) tensor[y * w + x] = 750.0f
+        }
+
+        val obsL = Obstacle(1, 40, 108, Rect(0, 51, 80, 166), -0.5f, 28.0f, 0.9f, 0.1f, isWall = true)
+        val obsR = Obstacle(2, 152, 108, Rect(112, 51, 192, 166), 0.5f, 28.0f, 0.9f, 0.1f, isWall = true)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsL, obsR), numBins = 24)
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 28.0f,
+            pan = 0.0f, proximity = 0.9f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 28.0f, "RIGHT" to 28.0f),
+            allObstacles = listOf(obsL, obsR), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "CRITICAL", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", adv.state)
+    }
+
+    @Test
+    fun test04_centralNearObstruction() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Center block cols 72..120 high disparity ~55cm (raw 600)
+        for (y in 51..165) {
+            for (x in 72..119) tensor[y * w + x] = 600.0f
+        }
+
+        val obsItem = Obstacle(1, 96, 108, Rect(72, 51, 120, 166), 0.0f, 55.0f, 0.7f, 0.1f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsItem), numBins = 24)
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 55.0f,
+            pan = 0.0f, proximity = 0.7f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 200.0f, "CENTER" to 55.0f, "RIGHT" to 200.0f),
+            allObstacles = listOf(obsItem), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "WARNING", nowNanos = 10_000_000_000L)
+        assertEquals("AVAILABLE", adv.state)
+        assertTrue("Must steer away from central obstruction", abs(adv.angleDeg ?: 0.0f) >= 5.0f)
+    }
+
+    @Test
+    fun test05_invalidOuterBins() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Left 24 cols (first 3 bins) and right 24 cols (last 3 bins) NaN
+        for (y in 0 until 256) {
+            for (x in 0..23) tensor[y * w + x] = Float.NaN
+            for (x in 168 until 192) tensor[y * w + x] = Float.NaN
+        }
+
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        assertFalse(bins[0].isValid)
+        assertFalse(bins[1].isValid)
+        assertFalse(bins[2].isValid)
+        assertFalse(bins[21].isValid)
+        assertFalse(bins[22].isValid)
+        assertFalse(bins[23].isValid)
+        assertTrue(bins[11].isValid)
+        assertTrue(bins[12].isValid)
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 180.0f,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.2f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to Float.NaN, "CENTER" to 180.0f, "RIGHT" to Float.NaN),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("AVAILABLE", adv.state)
+        assertEquals(0.0f, adv.angleDeg ?: -999.0f, 0.01f)
+    }
+
+    @Test
+    fun test06_invalidCentralBins() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Center cols 88..104 (bins 11, 12) NaN
+        for (y in 0 until 256) {
+            for (x in 88..103) tensor[y * w + x] = Float.NaN
+        }
+
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        assertFalse(bins[11].isValid)
+        assertFalse(bins[12].isValid)
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.0f, uncertaintyScore = 0.9f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 200.0f, "CENTER" to Float.NaN, "RIGHT" to 200.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("UNAVAILABLE", adv.state)
+    }
+
+    @Test
+    fun test07_upperHazardMultiBand() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Top 40 rows high disparity ~40cm (raw 650)
+        for (y in 0..39) {
+            for (x in 0 until w) tensor[y * w + x] = 650.0f
+        }
+
+        val obsItem = Obstacle(1, 96, 20, Rect(30, 0, 162, 40), 0.0f, 40.0f, 0.8f, 0.1f, modeText = "OVERHEAD")
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsItem), numBins = 24)
+        assertTrue(bins.any { it.overheadDistCm.isFinite() && it.overheadDistCm < 60.0f })
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 40.0f,
+            pan = 0.0f, proximity = 0.8f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 40.0f, "CENTER" to 40.0f, "RIGHT" to 40.0f),
+            allObstacles = listOf(obsItem), isValid = true, overheadHazard = true, modeText = "OVERHEAD",
+            spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "CRITICAL", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", adv.state)
+    }
+
+    @Test
+    fun test08_lowObstructionMultiBand() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Ground band (rows 166..217) high disparity ~30cm (raw 700)
+        for (y in 166..217) {
+            for (x in 72..119) tensor[y * w + x] = 700.0f
+        }
+
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        assertTrue(bins.any { it.groundDistCm.isFinite() && it.groundDistCm < 50.0f })
+    }
+
+    @Test
+    fun test09_partlyVisibleLateralObject() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val w = 192
+        // Right edge obstacle cols 160..192 (raw 600)
+        for (y in 51..165) {
+            for (x in 160 until 192) tensor[y * w + x] = 600.0f
+        }
+
+        val obsItem = Obstacle(1, 176, 108, Rect(160, 51, 192, 166), 0.8f, 55.0f, 0.6f, 0.15f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsItem), numBins = 24)
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 180.0f,
+            pan = 0.0f, proximity = 0.3f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 200.0f, "CENTER" to 180.0f, "RIGHT" to 55.0f),
+            allObstacles = listOf(obsItem), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "WARNING", nowNanos = 10_000_000_000L)
+        assertEquals("AVAILABLE", adv.state)
+        assertTrue(abs(adv.angleDeg ?: 999.0f) <= 15.0f)
+    }
+
+    @Test
+    fun test10_entirelyInvalidTensor() {
+        val tensor = FloatArray(192 * 256) { Float.NaN }
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        assertTrue(bins.all { !it.isValid })
+
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 0, height = 0, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.0f, uncertaintyScore = 1.0f, isSaturated = false,
+            sectorDists = emptyMap(), allObstacles = emptyList(), isValid = false,
+            spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SENSOR_FAULT", nowNanos = 10_000_000_000L)
+        assertEquals("UNKNOWN", adv.state)
+    }
+
+    @Test
+    fun test11_lowLightCorridorBelow150cm() {
+        val tensor = createBaseTensor(fillVal = 200.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 110.0f,
+            pan = 0.0f, proximity = 0.3f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 110.0f, "CENTER" to 110.0f, "RIGHT" to 110.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("AVAILABLE", adv.state)
+        assertEquals("AVAILABLE_FORWARD", adv.reasonCode)
+        assertTrue(abs(adv.angleDeg ?: 999.0f) <= 2.5f)
+    }
+
+    @Test
+    fun test12_reasonCodesAndStaleRejection() {
+        val tensor = createBaseTensor(fillVal = 200.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 110.0f,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 110.0f, "CENTER" to 110.0f, "RIGHT" to 110.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advStale = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 11_000_000_000L)
+        assertEquals("UNAVAILABLE", advStale.state)
+        assertEquals("SOURCE_FRAME_STALE", advStale.reasonCode)
+    }
+
+    @Test
+    fun test13_nonfiniteClearanceRejection() {
+        val tensor = createBaseTensor(fillVal = 200.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val corruptedBins = bins.map {
+            SpatialBin(
+                binId = it.binId, angleMin = it.angleMin, angleMax = it.angleMax, angleCenter = it.angleCenter,
+                validRatio = it.validRatio, rawDepthStatistic = it.rawDepthStatistic,
+                estimatedDistanceCm = Float.NaN, isValid = true, hasObstacle = false
+            )
+        }
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to Float.NaN, "CENTER" to Float.NaN, "RIGHT" to Float.NaN),
+            allObstacles = emptyList(), isValid = true, spatialBins = corruptedBins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("UNAVAILABLE", adv.state)
+        assertEquals("LOCAL_DEPTH_MISSING", adv.reasonCode)
+    }
+
+    @Test
+    fun test14_directionalStopUnderNonCriticalThreat() {
+        val tensor = createBaseTensor(fillVal = 750.0f) // ~28cm
+        val obsWall = Obstacle(1, 96, 128, Rect(0, 0, 192, 256), 0.0f, 28.0f, 0.9f, 0.1f, isWall = true)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsWall), numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 28.0f,
+            pan = 0.0f, proximity = 0.9f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 28.0f, "RIGHT" to 28.0f),
+            allObstacles = listOf(obsWall), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val adv = estimateDirectionalAdvisory(depth, threat = "WARNING", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", adv.state)
+        assertTrue(adv.reasonCode == "CRITICAL_OBSTACLE" || adv.reasonCode == "CORRIDOR_OBSTRUCTED")
+    }
+
+    @Test
+    fun test15_audioDirectionalStopSynchronization() {
+        val tensor = createBaseTensor(fillVal = 750.0f)
+        val obsWall = Obstacle(1, 96, 128, Rect(0, 0, 192, 256), 0.0f, 28.0f, 0.9f, 0.1f, isWall = true)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsWall), numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 28.0f,
+            pan = 0.0f, proximity = 0.9f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 28.0f, "RIGHT" to 28.0f),
+            allObstacles = listOf(obsWall), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advCrit = estimateDirectionalAdvisory(depth, threat = "CRITICAL", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", advCrit.state)
+
+        val kCrit = KinematicsResult(
+            primaryTtc = 0.6f, primaryVelocityZ = 50.0f, threats = emptyMap(),
+            safeDirection = "STOP", isEvading = false, threatLevel = "CRITICAL",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depth, kCrit, advCrit)
+        assertTrue(decision.isActive)
+        assertEquals("STOP", decision.safeDirection)
+        assertEquals("SHARP_PING", decision.cueMode)
+        assertEquals("CRITICAL", decision.threatLevel)
+        assertTrue(decision.priorityScore >= 90.0f)
+        assertEquals(1.0f, decision.proximity, 0.001f)
+        assertEquals(28.0f, decision.distCm, 0.001f)
+        assertEquals(0.6f, decision.ttc, 0.001f)
+    }
+
+    @Test
+    fun test16_audioNoncriticalStopConsistency() {
+        val tensor = createBaseTensor(fillVal = 750.0f)
+        val obsWall = Obstacle(1, 96, 128, Rect(0, 0, 192, 256), 0.0f, 28.0f, 0.5f, 0.1f, isWall = true)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, detectedList = listOf(obsWall), numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 28.0f,
+            pan = 0.0f, proximity = 0.5f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 28.0f, "CENTER" to 28.0f, "RIGHT" to 28.0f),
+            allObstacles = listOf(obsWall), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advStop = estimateDirectionalAdvisory(depth, threat = "WARNING", nowNanos = 10_000_000_000L)
+        assertEquals("STOP", advStop.state)
+
+        val kWarn = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "WARNING",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depth, kWarn, advStop)
+        assertTrue(decision.isActive)
+        assertEquals("STOP", decision.safeDirection)
+        assertEquals("SHARP_PING", decision.cueMode)
+        assertEquals("WARNING", decision.threatLevel)
+        assertTrue(decision.ttc.isInfinite())
+        assertEquals(0.70f, decision.proximity, 0.001f)
+        assertEquals(50.0f, decision.priorityScore, 0.001f)
+    }
+
+    @Test
+    fun test17_audioUnavailableNoForwardSound() {
+        val corruptedBins = (0 until 24).map { idx ->
+            SpatialBin(
+                binId = idx, angleMin = -32.5f + idx * (65.0f / 24.0f),
+                angleMax = -32.5f + (idx + 1) * (65.0f / 24.0f),
+                angleCenter = -32.5f + (idx + 0.5f) * (65.0f / 24.0f),
+                validRatio = 1.0f, rawDepthStatistic = 200.0f,
+                estimatedDistanceCm = Float.NaN, isValid = true, hasObstacle = false
+            )
+        }
+        val depth = DepthResult(
+            rawDisparity = FloatArray(192 * 256) { 0f }, width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to Float.NaN, "CENTER" to Float.NaN, "RIGHT" to Float.NaN),
+            allObstacles = emptyList(), isValid = true, spatialBins = corruptedBins, timestampNanos = 10_000_000_000L
+        )
+        val advUnavail = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_000_000_000L)
+        assertEquals("UNAVAILABLE", advUnavail.state)
+
+        val kSafe = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "SAFE",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depth, kSafe, advUnavail)
+        assertFalse(decision.isActive)
+        assertEquals("MUTED", decision.cueMode)
+        assertEquals("NONE", decision.safeDirection)
+    }
+
+    @Test
+    fun test18_audioSensorFaultAndPauseDistinction() {
+        val depthFault = DepthResult(
+            rawDisparity = FloatArray(0), width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.0f, uncertaintyScore = 1.0f, isSaturated = false,
+            sectorDists = emptyMap(), allObstacles = emptyList(), isValid = false,
+            spatialBins = emptyList(), timestampNanos = 10_000_000_000L
+        )
+        val kFault = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "STOP", isEvading = false, threatLevel = "SENSOR_FAULT",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val advFault = estimateDirectionalAdvisory(depthFault, threat = "SENSOR_FAULT", nowNanos = 10_000_000_000L)
+        val budget = AuditoryBudgetManager()
+        val decisionFault = budget.coordinate(depthFault, kFault, advFault)
+        assertTrue(decisionFault.isActive)
+        assertEquals("SYSTEM_FAULT_TONE", decisionFault.cueMode)
+        assertEquals("SENSOR_FAULT", decisionFault.threatLevel)
+
+        val depthPaused = DepthResult(
+            rawDisparity = FloatArray(0), width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 0.0f, uncertaintyScore = 0.0f, isSaturated = false,
+            sectorDists = emptyMap(), allObstacles = emptyList(), isValid = true,
+            spatialBins = emptyList(), timestampNanos = 10_000_000_000L
+        )
+        val kPaused = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "PAUSED",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val advPaused = estimateDirectionalAdvisory(depthPaused, threat = "PAUSED", nowNanos = 10_000_000_000L)
+        val decisionPaused = budget.coordinate(depthPaused, kPaused, advPaused)
+        assertFalse(decisionPaused.isActive)
+        assertEquals("MUTED", decisionPaused.cueMode)
+        assertEquals("PAUSED", decisionPaused.threatLevel)
+    }
+
+    @Test
+    fun test19_criticalStopWithUnknownDistanceAndTtc() {
+        val depthUnknown = DepthResult(
+            rawDisparity = FloatArray(0), width = 192, height = 256, distCm = Float.NaN,
+            pan = 0.0f, proximity = 1.0f, uncertaintyScore = 0.2f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to Float.NaN, "CENTER" to Float.NaN, "RIGHT" to Float.NaN),
+            allObstacles = emptyList(), isValid = true, spatialBins = emptyList(), timestampNanos = 10_000_000_000L
+        )
+        val kCritUnknown = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "STOP", isEvading = false, threatLevel = "CRITICAL",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val advCrit = com.horuseyes.app.ui.advisoryForRisk("CRITICAL", 10_000_000_000L)
+        assertEquals("STOP", advCrit.state)
+
+        val budget = AuditoryBudgetManager()
+        val decision = budget.coordinate(depthUnknown, kCritUnknown, advCrit)
+        assertTrue(decision.isActive)
+        assertEquals("STOP", decision.safeDirection)
+        assertEquals("SHARP_PING", decision.cueMode)
+        assertEquals("CRITICAL", decision.threatLevel)
+        assertTrue(decision.priorityScore >= 90.0f)
+        assertEquals(1.0f, decision.proximity, 0.001f)
+        assertTrue("Must NOT fabricate 30cm distance", decision.distCm.isNaN())
+        assertTrue("Must NOT fabricate 0.8s TTC", decision.ttc.isInfinite())
+    }
+
+    @Test
+    fun test20_staleObservationWithdrawsVisualAndAudioGuidance() {
+        val tensor = createBaseTensor(fillVal = 180.0f)
+        val bins = DepthEngine.computeSpatialBins(tensor, w = 192, h = 256, numBins = 24)
+        val depth = DepthResult(
+            rawDisparity = tensor, width = 192, height = 256, distCm = 200.0f,
+            pan = 0.0f, proximity = 0.2f, uncertaintyScore = 0.1f, isSaturated = false,
+            sectorDists = mapOf("LEFT" to 200.0f, "CENTER" to 200.0f, "RIGHT" to 200.0f),
+            allObstacles = emptyList(), isValid = true, spatialBins = bins, timestampNanos = 10_000_000_000L
+        )
+        val advFresh = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_200_000_000L)
+        assertEquals("AVAILABLE", advFresh.state)
+        assertNotNull(advFresh.drawableAngle(10_200_000_000L))
+
+        // Exceeds 750ms -> withdrawn
+        assertNull(advFresh.drawableAngle(10_800_000_000L))
+        val advStale = estimateDirectionalAdvisory(depth, threat = "SAFE", nowNanos = 10_800_000_000L)
+        assertEquals("UNAVAILABLE", advStale.state)
+        assertEquals("SOURCE_FRAME_STALE", advStale.reasonCode)
+
+        val budget = AuditoryBudgetManager()
+        val kSafe = KinematicsResult(
+            primaryTtc = Float.POSITIVE_INFINITY, primaryVelocityZ = 0.0f, threats = emptyMap(),
+            safeDirection = "NONE", isEvading = false, threatLevel = "SAFE",
+            obstacleTtcs = emptyMap(), obstacleVzs = emptyMap(), trackDetails = emptyMap()
+        )
+        val decStale = budget.coordinate(depth, kSafe, advStale)
+        assertFalse(decStale.isActive)
+        assertEquals("MUTED", decStale.cueMode)
+        assertEquals("NONE", decStale.safeDirection)
+    }
+
+    @Test
+    fun test21_torchSessionLifecycleAndInvariants() {
+        class MockTorchManager {
+            var active = false
+            var torchOn = false
+            var forcedManual = false
+
+            fun setGuidanceActive(r: Boolean) {
+                active = r
+                if (!r) {
+                    torchOn = false
+                    forcedManual = false
+                }
+            }
+
+            fun toggleManual(): Boolean {
+                if (!active) return false
+                forcedManual = true
+                torchOn = !torchOn
+                return true
+            }
+
+            fun onFrameLuma(luma: Float) {
+                if (!active || forcedManual) return
+                if (luma < 40f) torchOn = true
+            }
+        }
+
+        val tm = MockTorchManager()
+        // 1. While paused, frame cannot trigger torch
+        tm.onFrameLuma(10f)
+        assertFalse(tm.torchOn)
+
+        // 2. While paused, manual toggle is rejected
+        assertFalse(tm.toggleManual())
+        assertFalse(tm.torchOn)
+
+        // 3. While running, auto-torch triggers on low luma
+        tm.setGuidanceActive(true)
+        tm.onFrameLuma(10f)
+        assertTrue(tm.torchOn)
+
+        // 4. Pausing forces torch OFF immediately
+        tm.setGuidanceActive(false)
+        assertFalse(tm.torchOn)
+    }
+}
