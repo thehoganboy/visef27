@@ -45,6 +45,10 @@ struct DepthPrototypeTests {
         precondition(!epoch.accepts(restarted, timestamp: 1, now: 1.1, after: 1))
         precondition(!epoch.accepts(restarted, timestamp: 2, now: 1.1, after: 0))
         precondition(epoch.accepts(restarted, timestamp: 2, now: 2.1, after: 1))
-        print("PASS 25 portable assertions: LiDAR filtering (10), stereo geometry and sync (8), frame freshness and switching (7)")
+        precondition(DepthMode.midas.unavailableReason(hasHardware: false) == nil)
+        precondition(DepthMode.lidar.unavailableReason(hasHardware: false) != nil)
+        precondition(DepthMode.stereo.unavailableReason(hasHardware: false) != nil)
+        precondition(DepthMode.stereo.unavailableReason(hasHardware: true) == nil)
+        print("PASS 28 portable assertions: LiDAR filtering (10), stereo geometry and sync (8), freshness and switching (6), capability (4)")
     }
 }

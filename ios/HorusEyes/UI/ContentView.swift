@@ -66,8 +66,10 @@ final class DemoController: ObservableObject {
     static func unsupported(_ mode: DepthMode) -> String? {
         switch mode {
         case .midas: return nil
-        case .lidar: return LiDARCapture.supported ? nil : "LiDAR scene depth requires a supported iPhone"
-        case .stereo: return StereoCapture.supported ? nil : "Stereo requires a supported rear wide/tele MultiCam pair"
+        case .lidar:
+            return mode.unavailableReason(hasHardware: LiDARCapture.supported)
+        case .stereo:
+            return mode.unavailableReason(hasHardware: StereoCapture.supported)
         }
     }
 
@@ -522,7 +524,7 @@ struct ContentView: View {
                 } else if let preview = model.preview {
                     GeometryReader { geometry in
                         Image(decorative: preview, scale: 1)
-                            .resizable().scaledToFill()
+                            .resizable().scaledToFit()
                             .frame(width: geometry.size.width, height: geometry.size.height)
                             .clipped()
                     }
@@ -600,6 +602,8 @@ struct ContentView: View {
                     .font(.caption2.monospacedDigit())
                 Spacer()
                 if let url = model.exportURL {
+                    Button { model.prepareExport() } label: { Image(systemName: "arrow.clockwise") }
+                        .accessibilityLabel("Refresh diagnostics export")
                     ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
                         .accessibilityLabel("Share diagnostics")
                 } else {
@@ -663,7 +667,7 @@ struct DirectionIndicator: View {
                     .animation(.spring(response: 0.22, dampingFraction: 0.75), value: angle)
                     .accessibilityLabel("Estimated direction advisory")
             } else {
-                let labelText = isPaused ? "PAUSED" : (isStop ? "STOP" : "UNAVAILABLE")
+                let labelText = isPaused ? "PAUSED" : (isStop ? "STOP" : (threat == "INITIALIZING" ? "INITIALIZING" : "UNAVAILABLE"))
                 let iconName = isStop ? "hand.raised.fill" : "minus.circle"
 
                 Label(labelText, systemImage: iconName)

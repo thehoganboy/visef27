@@ -15,7 +15,7 @@ final class DepthDiagnostics {
         precedingFrames.removeAll { frame.timestamp - $0 > 2 }
         let span = frame.timestamp - (precedingFrames.first ?? frame.timestamp)
         let fps = span > 0 ? Double(precedingFrames.count - 1) / span : 0
-        let status = frame.error ?? String(format: "%.0f%% valid", frame.coverage * 100)
+        let status = frame.source == .stereo ? frame.detail : (frame.error ?? String(format: "%.0f%% valid", frame.coverage * 100))
         return "\(frame.source.rawValue) • \(status) • " + String(format: "%.1f FPS • %.1f ms", fps, latencyMS)
     }
 

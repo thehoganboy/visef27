@@ -6,6 +6,15 @@ enum DepthMode: String, CaseIterable, Identifiable {
     case stereo = "Stereo β"
 
     var id: Self { self }
+
+    func unavailableReason(hasHardware: Bool) -> String? {
+        guard !hasHardware else { return nil }
+        switch self {
+        case .midas: return nil
+        case .lidar: return "LiDAR scene depth requires a supported iPhone"
+        case .stereo: return "Stereo requires a supported rear wide/tele MultiCam pair"
+        }
+    }
 }
 
 struct DepthGeometry {
