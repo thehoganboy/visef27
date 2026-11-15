@@ -48,6 +48,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install "torch>=2.0.0,<2.5.0" "torchvision>=0.15.0,<0.20.0" "timm==0.6.13" "coremltools==8.3.0" "numpy<2.0.0" "onnxruntime" "Pillow"
 
+      - name: Run synthetic Stereo calibration fixture
+        run: |
+          pip install "opencv-python-headless==4.11.0.86"
+          PYTHONDONTWRITEBYTECODE=1 python ios/tests/test_stereo_calibration_fixture.py
+
       - name: Pre-cache MiDaS PyTorch Weights and Architecture
         run: |
           mkdir -p ~/.cache/torch/hub/checkpoints

@@ -2,6 +2,13 @@ import Foundation
 
 @main
 struct DenseStereoTests {
+    static func check(_ passed: Bool, line: Int = #line) {
+        if !passed {
+            FileHandle.standardError.write(Data("Dense stereo fixture failed at line \(line)\n".utf8))
+            exit(1)
+        }
+    }
+
     static func main() {
         let w = 112, h = 72, shift = 5, limit = 12
         var seed: UInt32 = 41
@@ -25,33 +32,35 @@ struct DenseStereoTests {
         let dense = DenseStereo.match(left, right, width: w, height: h, maxShift: limit)
         let elapsed = Date().timeIntervalSince(started) * 1000
         let valid = dense.disparity.filter(\.isFinite)
-        precondition(valid.count > w * h / 2)
+        print("Integer-match count \(valid.count)")
+        check(valid.count > w * h / 2)
         let sorted = valid.sorted()
-        precondition(abs(sorted[valid.count / 2] - Float(shift)) < 0.15)
+        check(abs(sorted[valid.count / 2] - Float(shift)) < 0.15)
         let mae = valid.map { abs($0 - Float(shift)) }.reduce(0, +) / Float(valid.count)
         let fractional = DenseStereo.match(left, shifted(0.4), width: w, height: h, maxShift: limit)
             .disparity.filter(\.isFinite).sorted()
-        precondition(fractional.count > 100)
+        check(fractional.count > 100)
         let estimate = fractional[fractional.count / 2]
-        precondition(abs(estimate - 5.4) < 0.45 && abs(estimate - estimate.rounded()) > 0.02)
+        print("Fractional-match count \(fractional.count); median \(estimate)")
+        check(abs(estimate - 5.4) < 0.45 && abs(estimate - estimate.rounded()) > 0.02)
 
         var occlusion = right
         for y in 20..<51 { for x in 37..<61 { occlusion[y * w + x] = -1 } }
         let masked = DenseStereo.match(left, occlusion, width: w, height: h, maxShift: limit)
-        precondition(!masked.disparity[35 * w + 54].isFinite)
+        check(!masked.disparity[35 * w + 54].isFinite)
         let flat = [Int](repeating: 100, count: left.count)
-        precondition(DenseStereo.match(flat, flat, width: w, height: h, maxShift: limit).disparity.allSatisfy { !$0.isFinite })
+        check(DenseStereo.match(flat, flat, width: w, height: h, maxShift: limit).disparity.allSatisfy { !$0.isFinite })
         let dark = left.map { $0 / 24 }
-        precondition(DenseStereo.match(dark, dark, width: w, height: h, maxShift: limit).disparity.allSatisfy { !$0.isFinite })
+        check(DenseStereo.match(dark, dark, width: w, height: h, maxShift: limit).disparity.allSatisfy { !$0.isFinite })
         let repeatPattern = left.indices.map { ($0 % w % 4) * 45 + ($0 / w % 3) }
-        precondition(DenseStereo.match(repeatPattern, repeatPattern, width: w, height: h, maxShift: limit)
+        check(DenseStereo.match(repeatPattern, repeatPattern, width: w, height: h, maxShift: limit)
             .disparity.allSatisfy { !$0.isFinite })
         let motion = DenseStereo.match(left, shifted(0, vertical: 7), width: w, height: h, maxShift: limit)
-        precondition(motion.disparity.filter(\.isFinite).count < valid.count / 15)
+        check(motion.disparity.filter(\.isFinite).count < valid.count / 15)
 
         let near = DenseStereo.metric(focal: 230, baselineMM: 20, disparity: 5, sigma: 0.2, scaleFraction: 0.02)!
-        precondition(abs(near.depth - 92) < 0.1 && (4...5).contains(near.sigma))
-        precondition(DenseStereo.metric(focal: 230, baselineMM: 20, disparity: 1.5, sigma: 0.25, scaleFraction: 0.03) == nil)
+        check(abs(near.depth - 92) < 0.1 && (4...5).contains(near.sigma))
+        check(DenseStereo.metric(focal: 230, baselineMM: 20, disparity: 1.5, sigma: 0.25, scaleFraction: 0.03) == nil)
 
         var sparse = 0
         for y in stride(from: 2, to: h - 2, by: 2) {

@@ -133,7 +133,8 @@ enum DenseStereo {
                 let i = y * w + x, d = direct[i]
                 guard d.isFinite else { continue }
                 let neighbors = [i - 1, i + 1, i - w, i + w].filter {
-                    abs(left[$0] - left[i]) < 48 && abs(direct[$0] - d) < max(0.65, d * 0.10)
+                    let tolerance: Float = abs(left[$0] - left[i]) >= 48 ? 0.40 : max(0.65, d * 0.10)
+                    return abs(direct[$0] - d) < tolerance
                 }
                 if neighbors.count < 2 { disparity[i] = .nan; sigma[i] = .nan }
             }

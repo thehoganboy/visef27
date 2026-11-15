@@ -133,19 +133,22 @@ def pose_diversity(fitting, objects, k, d, size):
             "Insufficient pose diversity. Move the board across the overlap and tilt by at least 20 degrees.")
 
 
-def reference_trial(points, truth, k1, d1, k2, d2, basis, rotation, baseline, focal):
+def reference_trial(points, truth, objects, k1, d1, k2, d2, basis, rotation, baseline, focal):
     a = projected(points[0], k1, d1, basis.T)
     b = projected(points[1], k2, d2, basis.T @ rotation.T)
     disparity = a[:, 0] - b[:, 0]
     require(np.all(disparity > 0), "Held-out pair has nonpositive disparity")
     rect_z = baseline / disparity
     xyz = (np.column_stack([a, np.ones(len(a))]) * rect_z[:, None]) @ basis.T
-    center = xyz.mean(axis=0)
-    _, _, vh = np.linalg.svd(xyz - center, full_matrices=False)
-    normal = vh[-1]
+    center = np.median(xyz, axis=0)
+    # Use the monocular board pose only for its unit normal. Scale and axis
+    # intercept still come from the binocular corner disparities.
+    ok, rvec, _ = cv.solvePnP(objects, points[0], k1, d1)
+    require(ok, "Could not estimate reference board orientation")
+    normal = cv.Rodrigues(rvec)[0][:, 2]
     require(abs(normal[2]) >= math.cos(math.radians(25)), "Reference board is not near fronto-parallel")
     require(abs(center[0] / center[2]) < .16 and abs(center[1] / center[2]) < .16, "Reference board is off the camera axis")
-    measured = float(np.dot(normal, center) / normal[2] / 10)
+    measured = float(np.median(xyz @ normal) / normal[2] / 10)
     require(abs(measured - truth) <= max(4, truth * .10), f"Reference {truth:.1f} cm reconstructed {measured:.2f} cm")
     return {"measuredCM": truth, "stereoCM": measured}, (a[:, 1] - b[:, 1]) * focal
 
@@ -180,7 +183,7 @@ def fit(path):
     require(np.dot(basis[:, 0], factory_basis[:, 0]) > .995 and np.min(np.diag(rotation.T @ factory[:, :3])) > .999,
             "Fitted relative pose disagrees with factory geometry")
     focal_native = max(ka[0, 0] / size_a[0], kb[0, 0] / size_b[0]) * size_a[0]
-    trial = [reference_trial(points, truth, ka, da, kb, db, basis, rotation, baseline, focal_native)
+    trial = [reference_trial(points, truth, objects, ka, da, kb, db, basis, rotation, baseline, focal_native)
              for points, truth in held_out]
     epipolar = math.sqrt(float(np.mean(np.concatenate([residual for _, residual in trial]) ** 2)))
     require(epipolar <= 1, f"Held-out vertical epipolar RMS too high: {epipolar:.3f} px")
