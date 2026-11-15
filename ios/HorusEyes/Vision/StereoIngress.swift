@@ -127,11 +127,21 @@ final class StereoIngress: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     private func receive(_ sample: CMSampleBuffer, camera: StereoCamera, collection: UInt64?) {
         guard !ended else { return }
         let index = camera.rawValue
+        let raw = CMSampleBufferGetPresentationTimeStamp(sample)
+        cameras[index].imageCallbacks += 1
+        cameras[index].lastCallbackPTS = raw.seconds.isFinite ? raw.seconds : nil
+        cameras[index].lastConvertedHost = nil
         guard let buffer = CMSampleBufferGetImageBuffer(sample) else {
             cameras[index].invalidate("missingImage")
             return
         }
-        guard CVPixelBufferGetPlaneCount(buffer) == 2 else {
+        cameras[index].width = CVPixelBufferGetWidth(buffer)
+        cameras[index].height = CVPixelBufferGetHeight(buffer)
+        let pixelFormat = CVPixelBufferGetPixelFormatType(buffer)
+        cameras[index].pixelFormat = pixelFormat
+        guard CVPixelBufferGetPlaneCount(buffer) == 2,
+              pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+                || pixelFormat == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange else {
             cameras[index].invalidate("unexpectedPixelFormat")
             return
         }
@@ -139,8 +149,8 @@ final class StereoIngress: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             cameras[index].invalidate("missingClock")
             return
         }
-        let raw = CMSampleBufferGetPresentationTimeStamp(sample)
         let host = CMSyncConvertTime(raw, from: clock, to: CMClockGetHostTimeClock()).seconds
+        cameras[index].lastConvertedHost = host.isFinite ? host : nil
         let now = CACurrentMediaTime()
         guard raw.seconds.isFinite, host.isFinite, (-0.05...0.25).contains(now - host),
               cameras[index].lastHost.map({ host > $0 }) ?? true else {
@@ -173,7 +183,7 @@ final class StereoIngress: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         let connections = outputs.map { output -> (Bool, Bool, Bool, String) in
             let connection = output.connection(with: .video)
             let ports = connection?.inputPorts.map {
-                "\($0.sourceDeviceType.rawValue)/\($0.isEnabled)"
+                "\($0.sourceDeviceType?.rawValue ?? "unknown")/\($0.isEnabled)"
             }.joined(separator: ",") ?? ""
             return (session.outputs.contains { $0 === output }, connection?.isEnabled ?? false,
                     connection?.isActive ?? false, ports)

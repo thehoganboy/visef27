@@ -197,6 +197,10 @@ final class DemoController: ObservableObject {
                         guard self.captureEpoch == captureToken else { return }
                         if !event.message.isEmpty { self.diagnostics = event.message }
                         self.stereoHealth = Self.stereoSummary(event)
+                        if self.stereoCaptureOnly && self.active {
+                            self.threat = "UNAVAILABLE"
+                            self.advisory = DirectionalAdvisory(state: "UNAVAILABLE", reasonCode: "STEREO_CAPTURE_ONLY")
+                        }
                     }
                 }
                 self.stereo = source
@@ -465,6 +469,10 @@ final class DemoController: ObservableObject {
             if !value { camera.forceTorchOff() }
         }
         if value && mode != .stereo { audio.start() } else { audio.stop() }
+        if value && mode == .stereo && stereoCaptureOnly {
+            threat = "UNAVAILABLE"
+            advisory = DirectionalAdvisory(state: "UNAVAILABLE", reasonCode: "STEREO_CAPTURE_ONLY")
+        }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 

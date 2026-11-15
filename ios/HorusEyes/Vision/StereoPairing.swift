@@ -26,6 +26,9 @@ enum StereoDeliveryPhase: String {
 
 struct StereoStreamStats: Encodable {
     var samples = 0
+    var imageCallbacks = 0
+    var lastCallbackPTS: Double?
+    var lastConvertedHost: Double?
     var missing = 0
     var invalid = 0
     var invalidReasons: [String: Int] = [:]
@@ -68,11 +71,15 @@ struct StereoStreamStats: Encodable {
     enum CodingKeys: String, CodingKey {
         case samples, missing, invalid, dropped, firstHost, lastHost, lastRaw, lastLatencyMS, invalidReasons
         case width, height, pixelFormat, attached, enabled, active, ports, fps
+        case imageCallbacks, lastCallbackPTS, lastConvertedHost
     }
 
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(samples, forKey: .samples)
+        try c.encode(imageCallbacks, forKey: .imageCallbacks)
+        try c.encodeIfPresent(lastCallbackPTS, forKey: .lastCallbackPTS)
+        try c.encodeIfPresent(lastConvertedHost, forKey: .lastConvertedHost)
         try c.encode(missing, forKey: .missing)
         try c.encode(invalid, forKey: .invalid)
         try c.encode(invalidReasons, forKey: .invalidReasons)
