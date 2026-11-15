@@ -59,6 +59,9 @@ final class DemoController: ObservableObject {
     func appear() {
         guard !isAppeared else { return }
         isAppeared = true
+        if let reason = StereoCapture.unsupportedReason {
+            journal.recordStereo(.init(stage: "capability", error: reason))
+        }
 
         reconcileCapture()
         imu.startMotionTracking()
@@ -137,6 +140,7 @@ final class DemoController: ObservableObject {
         let startNative = { [weak self] in
             guard let self, self.isAppeared, self.captureEpoch == captureToken else { return }
             guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else {
+                if selected == .stereo { self.journal.recordStereo(.init(stage: "permission", error: "Camera access denied")) }
                 self.sourceFailed("Camera access denied")
                 return
             }

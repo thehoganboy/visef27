@@ -511,6 +511,10 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             delivery.sample(timestamp: nil, rejection: "Missing or dropped camera buffer")
             return
         }
+        guard CVPixelBufferGetPlaneCount(a) == 2, CVPixelBufferGetPlaneCount(b) == 2 else {
+            delivery.sample(timestamp: nil, rejection: "Expected two-plane luma/chroma buffers")
+            return
+        }
         let original = CMSampleBufferGetPresentationTimeStamp(left.sampleBuffer)
         let other = CMSampleBufferGetPresentationTimeStamp(right.sampleBuffer)
         guard let clock = session.synchronizationClock else {
@@ -552,10 +556,14 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             let (frame, url) = Self.process(a, b, timestamp: timestamp, aK: aK, bK: bK, ext: ext,
                 ids: ids, positions: positions, focused: focused, calibration: calibration,
                 captureSignature: captureSignature, width: width, export: pending != nil)
-            guard let self else { return }
+            guard let self else {
+                if let url { try? FileManager.default.removeItem(at: url) }
+                return
+            }
             self.queue.async {
                 self.processingBusy = false
-                guard !self.isCancelled, self.planIndex == attempt, self.captureReady, self.current != nil else {
+                guard !self.isCancelled, self.planIndex == attempt, self.captureReady, self.delivery.ready,
+                      self.current != nil, !self.overPressure else {
                     if let url { try? FileManager.default.removeItem(at: url) }
                     return
                 }

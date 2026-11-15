@@ -63,6 +63,6 @@ struct StereoNegotiationTests {
         for _ in 0..<3 { epoch.invalidate() }
         precondition(!epoch.accepts(original, timestamp: 120, now: 120.1, after: 0))
         precondition(epoch.accepts(epoch.value, timestamp: 120, now: 120.1, after: 0))
-        print("PASS 16 negotiation, simulated fallback, delivery and stale-generation checks")
+        print("PASS 19 negotiation, simulated fallback, delivery and stale-generation checks")
     }
 }

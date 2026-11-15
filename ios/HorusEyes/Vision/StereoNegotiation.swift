@@ -63,9 +63,12 @@ enum StereoNegotiation {
             }
             // Keep geometry diversity, including asymmetric pairs, within the retry budget.
             var seen = Set<[String]>()
-            let shortlist = pairs.lazy.filter { seen.insert([$0.0.signature, $0.1.signature]).inserted }
-                .prefix(3).map { Candidate(a: $0.0.id, b: $0.1.id, rate: rate) }
-            if !shortlist.isEmpty { tiers.append(Array(shortlist)) }
+            var shortlist: [Candidate] = []
+            for (a, b) in pairs where seen.insert([a.signature, b.signature]).inserted {
+                shortlist.append(Candidate(a: a.id, b: b.id, rate: rate))
+                if shortlist.count == 3 { break }
+            }
+            if !shortlist.isEmpty { tiers.append(shortlist) }
         }
         // Prefer materially different rates before re-testing another format at the same rate.
         return (0..<3).flatMap { index in tiers.compactMap { $0.count > index ? $0[index] : nil } }
