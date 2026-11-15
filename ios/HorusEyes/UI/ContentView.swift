@@ -105,7 +105,7 @@ final class DemoController: ObservableObject {
         stereoDepth = nil
         stereoHealth = ""
         stereoPairFailed = false
-        diagnostics = ""
+        diagnostics = selected == .stereo ? "CAPTURE INITIALIZING" : ""
         preview = nil
         restartCapture()
     }
@@ -177,6 +177,7 @@ final class DemoController: ObservableObject {
                         self.sourceFailed(reason)
                         self.preview = nil
                         self.stereoDisparity = nil
+                        self.stereoDepth = nil
                     }
                 }
             }
@@ -270,7 +271,7 @@ final class DemoController: ObservableObject {
                     }
                     if evaluate && observation?.isValid != true {
                         self.journal.record(frame: frame, observation: observation, state: self.advisory.state,
-                            inferenceMS: inferenceMS, endToEndMS: (CACurrentMediaTime() - capturedAt) * 1000)
+                            reason: self.advisory.reasonCode, inferenceMS: inferenceMS, endToEndMS: (CACurrentMediaTime() - capturedAt) * 1000)
                     }
                 }
             }
@@ -384,7 +385,7 @@ final class DemoController: ObservableObject {
                 self.advisory = finalAdv
                 if let frame, obs.isValid {
                     self.journal.record(frame: frame, observation: obs, state: finalAdv.state,
-                        inferenceMS: inferenceMS, endToEndMS: (consumedAt - capturedAt) * 1000)
+                        reason: finalAdv.reasonCode, inferenceMS: inferenceMS, endToEndMS: (consumedAt - capturedAt) * 1000)
                 }
                 self.prevAngle = finalAdv.state == "AVAILABLE" ? finalAdv.angleDeg : nil
 
@@ -774,7 +775,11 @@ struct ContentView: View {
                     .foregroundStyle(.white)
             }
             HStack {
-                Text((model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics) + " • " + model.advisory.state)
+                let status = model.mode == .stereo && model.advisory.state == "UNAVAILABLE"
+                    ? (model.advisory.reasonCode == "INSUFFICIENT_DEPTH_COVERAGE"
+                       ? "INSUFFICIENT DEPTH COVERAGE • UNSAFE TO ADVISE" : "UNAVAILABLE — UNSAFE TO ADVISE")
+                    : model.advisory.state
+                Text((model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics) + " • " + status)
                     .font(.caption2.monospacedDigit())
                 Spacer()
                 if model.mode == .stereo {

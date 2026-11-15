@@ -66,7 +66,7 @@ func stereoCorridorObserved(_ observation: ObstacleDetectionResult, angle: Doubl
     for bin in observation.spatialBins {
         let start = Double(bin.angleMin), end = Double(bin.angleMax)
         guard end > low, start < high else { continue }
-        guard start <= covered + 0.011, bin.isValid, bin.distCM >= 75 else { return false }
+        guard start <= covered + 0.011, bin.isValid, (bin.stereoClearanceLowerCM ?? bin.distCM) >= 75 else { return false }
         covered = max(covered, end)
         if covered >= high { return true }
     }

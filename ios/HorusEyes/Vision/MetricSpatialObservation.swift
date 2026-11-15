@@ -47,8 +47,11 @@ extension DepthFrame {
                 guard supported[index].isFinite, sigma.isFinite else { return .nan }
                 return max(1, supported[index] - 2 * sigma)
             }
-            func samples(_ columns: Range<Int>, _ rows: Range<Int>) -> [Float] {
-                rows.flatMap { row in columns.map { lowerBound(row * width + $0) } }
+            func samples(_ columns: Range<Int>, _ rows: Range<Int>, conservative: Bool = false) -> [Float] {
+                rows.flatMap { row in columns.map { col in
+                    let i = row * width + col
+                    return conservative ? lowerBound(i) : supported[i]
+                } }
                     .filter(\.isFinite).sorted()
             }
             func quantile(_ sorted: [Float], _ fraction: Double) -> Float {
@@ -118,11 +121,14 @@ extension DepthFrame {
                     && topFar - dTop > Config.overheadDepthDeltaCM
                 if angle0 <= 2.5 && angle1 >= -2.5 { overhead = overhead || overheadHere }
                 let blocked = obstacles.contains { $0.bbox.x < x1 && $0.bbox.x + $0.bbox.w > x0 }
+                let lower = stereo ? min(quantile(samples(cols, body, conservative: true), 0.05),
+                    quantile(samples(cols, upper, conservative: true), 0.05)) : nil
                 bins.append(SpatialBin(binId: i, angleMin: angle0, angleMax: angle1,
                     angleCenter: (angle0 + angle1) / 2, validRatio: coverage,
                     rawDepthStatistic: dBody, distCM: overheadHere ? min(dBody, dTop) : dBody,
                     isValid: coverage >= 0.75 && topSupported,
-                    hasObstacle: blocked, bodyDistCM: dBody, groundDistCM: dGround, overheadDistCM: dTop))
+                    hasObstacle: blocked, bodyDistCM: dBody, groundDistCM: dGround, overheadDistCM: dTop,
+                    stereoClearanceLowerCM: lower))
             }
             for (index, name) in ["LEFT", "CENTER", "RIGHT"].enumerated() {
                 let local = bins[(index * 8)..<((index + 1) * 8)]

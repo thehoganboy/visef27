@@ -39,6 +39,7 @@ struct SpatialBin {
     let bodyDistCM: Float
     let groundDistCM: Float
     let overheadDistCM: Float
+    var stereoClearanceLowerCM: Float? = nil
 }
 
 struct ObstacleDetectionResult {

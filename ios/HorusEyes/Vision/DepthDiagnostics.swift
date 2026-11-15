@@ -45,23 +45,37 @@ final class DepthDiagnostics {
         append(["switch_outcome", source.rawValue, "", "", "", "", "", "", "", "", elapsed ?? "", outcome])
     }
 
-    func record(frame: DepthFrame, observation: ObstacleDetectionResult?, state: String,
+    func record(frame: DepthFrame, observation: ObstacleDetectionResult?, state: String, reason: String = "",
                 inferenceMS: Double, endToEndMS: Double) {
         // Central image ROI for comparison with an independently measured target.
         var roi: [Float] = []
-        if frame.width > 0, frame.height > 0 {
+        var roiSigma: [Float] = []
+        var roiTotal = 0
+        if frame.width > 0, frame.height > 0, frame.centimeters.count == frame.width * frame.height {
             for y in (frame.height * 45 / 100)..<(frame.height * 55 / 100) {
                 for x in (frame.width * 45 / 100)..<(frame.width * 55 / 100) {
-                    let cm = frame.centimeters[y * frame.width + x]
-                    if cm.isFinite && cm > 0 { roi.append(cm) }
+                    let i = y * frame.width + x
+                    let cm = frame.centimeters[i]
+                    roiTotal += 1
+                    if cm.isFinite && cm > 0 {
+                        roi.append(cm)
+                        if i < frame.stereoUncertaintyCM.count { roiSigma.append(frame.stereoUncertaintyCM[i]) }
+                    }
                 }
             }
         }
         roi.sort()
-        append(["frame", frame.source.rawValue, number(frame.timestamp), number(frame.coverage),
-                number(inferenceMS), number(endToEndMS), state,
-                roi.isEmpty ? "" : number(Double(roi[roi.count / 2])),
-                number(Double(observation?.sectorDists["CENTER"] ?? .nan)), frame.detail, "", frame.error ?? "", frame.strongCoverage.map(number) ?? ""])
+        roiSigma = roiSigma.filter(\.isFinite).sorted()
+        let central = observation?.spatialBins.filter { abs($0.angleCenter) <= 5 } ?? []
+        let centralCoverage = central.isEmpty ? "" : number(Double(central.map(\.validRatio).reduce(0, +)) / Double(central.count))
+        let fields = ["frame", frame.source.rawValue, number(frame.timestamp), number(frame.coverage),
+                      number(inferenceMS), number(endToEndMS), state,
+                      roi.isEmpty ? "" : number(Double(roi[roi.count / 2])),
+                      number(Double(observation?.sectorDists["CENTER"] ?? .nan)), frame.detail, "",
+                      frame.error ?? "", frame.strongCoverage.map(number) ?? ""]
+        let extras = [reason, roiTotal > 0 ? number(Double(roi.count) / Double(roiTotal)) : "",
+                      roiSigma.isEmpty ? "" : number(Double(roiSigma[roiSigma.count / 2])), centralCoverage]
+        append(fields + Array(repeating: "", count: 16) + extras)
     }
 
     private lazy var deviceModel: String = {
@@ -84,7 +98,7 @@ final class DepthDiagnostics {
     func export() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             "vampior-\(UUID().uuidString).csv")
-        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction,device_model,ios_version,camera_pair,format_a,format_b,requested_fps,configured,hardware_cost,pressure_cost,pressure_level,capture_stage,accepted_pairs,rejected_pairs,pair_fps,capture_strategy,delivery_telemetry_json"
+        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction,device_model,ios_version,camera_pair,format_a,format_b,requested_fps,configured,hardware_cost,pressure_cost,pressure_level,capture_stage,accepted_pairs,rejected_pairs,pair_fps,capture_strategy,delivery_telemetry_json,decision_reason,target_roi_valid_fraction,target_roi_sigma_cm,central_body_valid_fraction"
         try ([header] + rows).joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
         return url
     }
@@ -96,7 +110,7 @@ final class DepthDiagnostics {
     private let dateFormatter = ISO8601DateFormatter()
 
     private func append(_ fields: [String]) {
-        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 29 - fields.count))
+        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 33 - fields.count))
         rows.append(values.map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ","))
         if rows.count > 6000 { rows.removeFirst(500) }
     }

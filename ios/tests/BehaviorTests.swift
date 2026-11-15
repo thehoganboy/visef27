@@ -46,7 +46,13 @@ import Foundation
         gap.spatialBins.remove(at: 12)
         precondition(!stereoCorridorObserved(gap, angle: 0))
         precondition(!stereoCorridorObserved(lateral, angle: 28))
-        print("PASS 13 native metric spatial checks")
+        let uncertain = DepthFrame(source: .stereo, timestamp: 10, geometry: geometry, width: 48, height: 64,
+            centimeters: Array(repeating: 90, count: 48 * 64), confidence: Array(repeating: 2, count: 48 * 64),
+            detail: "Fixture", stereoUncertaintyCM: Array(repeating: 12, count: 48 * 64))
+            .spatialObservation()
+        precondition(uncertain.sectorDists["CENTER"] == 90)
+        precondition(!stereoCorridorObserved(uncertain, angle: 0))
+        print("PASS 15 native metric spatial checks")
     }
 
     static func main() {
