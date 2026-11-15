@@ -681,7 +681,7 @@ final class StereoCapture: NSObject {
         var uncertainty = cm
         var confidence = [UInt8](repeating: 0, count: cm.count)
         var detail = "Intrinsics or extrinsics unavailable"
-        var error: String? = "Distance unavailable"
+        var error: String? = captureOnly ? "STEREO_CAPTURE_ONLY" : "STEREO_GEOMETRY_UNAVAILABLE"
         var exportedDisparity: (pixels: [Float?], width: Int, height: Int, focal: Float)?
         var projectionA = aK
         if !captureOnly, !calibrationShot, let ext, let aK, let bK,
@@ -743,6 +743,11 @@ final class StereoCapture: NSObject {
                 }
                 let calibrationStatus = mismatch.map { "CALIBRATION INVALID: " + $0 }
                     ?? (verified == nil ? "CALIBRATION REQUIRED" : "Calibrated")
+                // A working disparity map does not establish a verified metric scale.
+                // Preserve this reason for the research UI while guidance remains disabled.
+                if verified == nil {
+                    error = mismatch.map { "CALIBRATION_INVALID: " + $0 } ?? "CALIBRATION_REQUIRED"
+                }
                 let density = Double(count) / Double(w * h)
                 let overlap = Double(matches.overlap) / Double(w * h)
                 detail = calibrationStatus + " • " + (count > 0 ? "DISPARITY READY" : "Disparity unavailable")
@@ -755,13 +760,13 @@ final class StereoCapture: NSObject {
                     let valid = cm.filter(\.isFinite).count
                     if valid > 0 {
                         error = nil
-                        detail = "METRIC DEPTH READY • " + detail
+                        detail = "METRIC SAMPLES READY (\(valid)/\(cm.count) cells) • " + detail
                         let uz = uncertainty.filter(\.isFinite).sorted()
                         detail += String(format: " • median σ %.1f cm", uz[uz.count / 2])
                         let pixels = cm.map { $0.isFinite ? UInt8(255 - Int(min(230, $0 * 0.38))) : 0 }
                         metricPreview = StereoDisparityPreview(width: mapWidth, height: mapHeight, pixels: Data(pixels))
                     } else {
-                        error = bright ? "INSUFFICIENT DEPTH COVERAGE" : "Distance unavailable: low light"
+                        error = bright ? "INSUFFICIENT_DEPTH_COVERAGE" : "STEREO_LOW_LIGHT"
                     }
                 }
             }
