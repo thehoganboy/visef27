@@ -1,0 +1,28 @@
+# VAMPIOR 3.1 Stereo MultiCam recovery
+
+- Final executable SHA `8ef0087e5f2357ecb00ef69a5671258bfe0207f1` on `feature/ios-trimode-depth-prototype`. [Changed files](https://github.com/thehoganboy/visef27/compare/95cd5aa5b125e0965f6e0fc300d2a840f8f6b2ed...8ef0087e5f2357ecb00ef69a5671258bfe0207f1)
+- Final CI passed 19 negotiation and delivery checks, 14 stereo geometry checks, 33 portable checks, 10 native metric checks, and all 10 existing Swift behavior regression groups. Xcode 26.6 built the native release and CI verified arm64 and ZIP integrity. [Passing CI](https://github.com/thehoganboy/visef27/actions/runs/43670622019)
+- The unsigned IPA is 62,140,404 bytes. Extract `HorusEyes_iPhone14Pro.ipa` from the downloaded ZIP for Sideloadly. [Unsigned IPA](https://github.com/thehoganboy/visef27/actions/runs/43670622019/artifacts/14144236566)
+- The first run caught a stateful lazy filter dropping ranked candidates. Single-pass deduplication corrected the failure. [Initial CI run](https://github.com/thehoganboy/visef27/actions/runs/43670486166)
+
+## Confirmed source-level findings
+
+- The baseline selected one format per device, limited width to 480–1920 pixels, and required exactly 30 FPS on both cameras. It never tried the next format combination within that pair. Partial connection failures and cost rejection produced the same message.
+- Setting device frame durations alone can leave AVFoundation budgeting for the format's maximum FPS. The hotfix sets each input's `videoMinFrameDurationOverride` to a supported duration before starting. [Apple frame-duration override documentation](https://developer.apple.com/documentation/avfoundation/avcapturedeviceinput/videominframedurationoverride)
+- The baseline accepted a running session without verifying synchronized delivery, and pair discovery rejected physical combinations that lacked extrinsics even though capture can operate without metric calibration. Delayed MiDaS setup could also configure a device after the permission request had been superseded. Device-specific cause remains pending the new CSV or a physical capture run.
+
+## Hotfix
+
+- `NativeDepthCapture.swift` and `StereoNegotiation.swift` discover rear Wide/Ultra Wide, Wide/Telephoto, and Ultra Wide/Telephoto from Apple's supported device sets. Search prioritizes a matching calibration pair and economical formats using binning, size, and overlapping-FOV heuristics. It tests shared durations at 30, 29.97, 24, 23.98, 15, 12, and 10 FPS where supported, with up to ten candidate combinations per pair. It checks the fully connected graph and actual output pixel format, hardware cost, and system pressure before starting.
+- A 2.5-second window must demonstrate sustained, monotonic paired delivery in host-clock time with at most 8 ms skew before capture becomes ready. Pressure, persistent dropped or missing buffers, and runtime errors trigger teardown and bounded fallback. An OS interruption releases the session and prompts reselection. Session mutation and rollback are serialized, disparity processing runs separately, and obsolete callbacks and retries are invalidated. [Apple capture clock documentation](https://developer.apple.com/documentation/avfoundation/avcapturesession/synchronizationclock)
+- `CameraTorchManager.swift` rejects superseded permission callbacks before configuring MiDaS. `ContentView.swift` and `DepthDiagnostics.swift` expose capture and calibration status, clear evidence on source failures, and export device, OS, pair, formats, FPS, costs, failure stage, and delivery statistics. Existing MiDaS, LiDAR, and navigation algorithms are retained.
+- `StereoCalibration.swift` requires the ordered capture signature exported with the new calibration pairs, in addition to the existing pair, intrinsics, focus, baseline, and held-out reference checks. Older profiles require recapture and verification against the selected configuration. Capture readiness can coexist with unavailable disparity or metric depth. Once the existing spatial checks establish reliable corridor evidence, calibrated depth can feed guidance.
+- `StereoNegotiationTests.swift`, `StereoCalibrationTests.swift`, and the iOS workflow cover supported sets, format/rate negotiation, simulated cost and partial-configuration fallback, synchronized delivery, obsolete generations, and calibration mismatch. Simulated rollback checks do not exercise AVFoundation.
+
+## Physical acceptance
+
+1. Sign and install the IPA on an iPhone 14 and an iPhone 14 Pro. Select Stereo from MiDaS and LiDAR where supported. Confirm the selected pair, formats and rate in CSV and observe sustained capture-ready status, a live preview, and disparity in a well-lit textured scene. If startup fails, retain the entire CSV and identify the first rejecting stage for each candidate.
+2. Run each working configuration for 60 seconds. Export CSV and inspect synchronized-pair FPS, rejected pairs, pressure levels/costs and processing latency. Repeat with rapid mode changes, guidance pause/resume, background/foreground, denied camera permission, and interruptions. Verify preview, distance, arrows and audio clear on transitions and abandoned retries stop.
+3. Capture a fresh pair export and use its `captureSignature` in the calibration profile. Follow the existing 3.1 procedure with a physical target at 50, 100, 200 and 300 cm. Verify that unmatched geometry withholds metric distances and that centimeter labels and guidance appear only with a verified profile and adequate observations.
+
+No physical iPhone capture, calibration, or installation was available for this run. MultiCam compatibility and resolution of the reported device failure remain unverified.
