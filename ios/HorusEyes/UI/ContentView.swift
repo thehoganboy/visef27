@@ -90,7 +90,7 @@ final class DemoController: ObservableObject {
         mode = selected
         resetEvidence(active)
         if active {
-            if mode == .stereo && stereoCaptureOnly { audio.stop() }
+            if mode == .stereo { audio.stop() }
             else { audio.start() }
         }
         journal.switchRequested(selected)
@@ -184,6 +184,7 @@ final class DemoController: ObservableObject {
                         DispatchQueue.main.async {
                             guard let self, self.captureEpoch == captureToken else { return }
                             self.resetEvidence(self.active)
+                            self.audio.stop()
                             self.preview = nil
                             self.stereoDisparity = nil
                             self.stereoPairURL = nil
@@ -360,6 +361,7 @@ final class DemoController: ObservableObject {
 
                 // P0: Coordinate final authoritative advisory with auditory budget manager BEFORE updating audio
                 let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk, advisory: finalAdv)
+                if self.mode == .stereo { self.audio.start() }
                 self.audio.update(decision: decision)
             }
         }
@@ -425,12 +427,11 @@ final class DemoController: ObservableObject {
         let a = stats.cameras[0], b = stats.cameras[1]
         let statusA = a.samples > 0 ? "CAMERA A READY" : "A waiting"
         let statusB = b.samples > 0 ? "CAMERA B READY" : "B waiting"
-        let total = stats.accepted + stats.rejected
-        let rejected = total > 0 ? Double(stats.rejected) * 100 / Double(total) : 0
-        let skew = [stats.medianSkewMS, stats.p95SkewMS].map { $0.map { String(format: "%.1f", $0) } ?? "–" }
+        let rejected = stats.rejectionFraction * 100
+        let skew = [stats.medianSkewMS ?? stats.candidateMedianSkewMS, stats.p95SkewMS ?? stats.candidateP95SkewMS].map { $0.map { String(format: "%.1f", $0) } ?? "–" }
         return profile + "\n" + event.stage + " • " + statusA + " / " + statusB + "\n"
             + String(format: "A %.1f / B %.1f / pair %.1f FPS • reject %.0f%%", a.fps, b.fps, stats.pairFPS, rejected)
-            + "\nSkew median/P95 " + skew.joined(separator: "/") + " ms"
+            + "\n" + (stats.medianSkewMS == nil ? "Candidate" : "Paired") + " skew median/P95 " + skew.joined(separator: "/") + " ms"
     }
 
     private static func disparityImage(_ disparity: StereoDisparityPreview) -> CGImage? {
@@ -463,7 +464,7 @@ final class DemoController: ObservableObject {
             camera.setGuidanceActive(value)
             if !value { camera.forceTorchOff() }
         }
-        if value && !(mode == .stereo && stereoCaptureOnly) { audio.start() } else { audio.stop() }
+        if value && mode != .stereo { audio.start() } else { audio.stop() }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 

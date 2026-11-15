@@ -29,6 +29,9 @@ final class StereoIngress: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         let histogram: [Int]
         let medianSkewMS: Double?
         let p95SkewMS: Double?
+        let candidateMedianSkewMS: Double?
+        let candidateP95SkewMS: Double?
+        let rejectionFraction: Double
         let offsetMS: Double?
         let jitterMS: Double?
         let lastPairHost: Double?
@@ -183,14 +186,17 @@ final class StereoIngress: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 cameras[index].ports = graph.3
             }
             let skew = matcher.skew
+            let candidate = matcher.candidateSkew
             let rejected = matcher.rejected + matcher.obsolete + cameras.reduce(0) { total, stats in
                 total + stats.invalid + stats.dropped.values.reduce(0, +)
             }
             let fresh = delivery.last.map { (-0.05...0.75).contains(now - $0) } ?? false
+            let samples = 2 * delivery.accepted + rejected
             let result = Status(cameras: cameras, accepted: delivery.accepted, rejected: rejected, pairFPS: delivery.fps,
                 nativeCollections: nativeCollections, recombinedCollections: recombinedCollections,
                 downstreamSkipped: downstreamSkipped, histogram: matcher.histogram, medianSkewMS: skew.median,
-                p95SkewMS: skew.p95, offsetMS: skew.offset, jitterMS: skew.jitter, lastPairHost: delivery.last,
+                p95SkewMS: skew.p95, candidateMedianSkewMS: candidate.median, candidateP95SkewMS: candidate.p95,
+                rejectionFraction: samples > 0 ? Double(rejected) / Double(samples) : 0, offsetMS: skew.offset, jitterMS: skew.jitter, lastPairHost: delivery.last,
                 ready: fresh && delivery.ready)
             let pair = takePair ? latestPair : nil
             if takePair { latestPair = nil }

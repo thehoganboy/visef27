@@ -328,6 +328,7 @@ final class StereoCapture: NSObject {
             observers.append(observer)
         }
         session.startRunning()
+        status = ingress.read(takePair: false, now: CACurrentMediaTime()).0
         guard session.isRunning else { reject(stage: "start", error: "Session did not start"); return }
         installedAt = CACurrentMediaTime()
         emit("waiting", message: "Stereo: \(plan.name) • PAIRING ACTIVE (\(phase.rawValue))")
@@ -376,7 +377,11 @@ final class StereoCapture: NSObject {
             let ready = status.ready && status.pairFPS >= max(3, plan.candidate.rate.fps * 0.3)
             if !self.captureReady && ready {
                 self.captureReady = true
-                self.emit("capture_ready", message: "STEREO CAPTURE READY")
+                if self.phase == .lateDropProbe {
+                    self.emit("probe_capture_ready")
+                } else {
+                    self.emit("capture_ready", message: "STEREO CAPTURE READY")
+                }
             }
             // Brief capture-only baseline on every attempt. A no-drop experiment
             // remains capture-only and always ends with the default restored.
@@ -621,7 +626,7 @@ final class StereoCapture: NSObject {
                     return
                 }
                 self.processingMS = frame.captureProcessingMS
-                if frame.detail.contains("Intrinsics or extrinsics unavailable"), self.geometryStatus.isEmpty {
+                if frame.detail.contains("Intrinsics or extrinsics unavailable"), self.geometryStatus != frame.detail {
                     self.emit("geometry_unavailable", error: frame.detail)
                 }
                 self.geometryStatus = frame.detail

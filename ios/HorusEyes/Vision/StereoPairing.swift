@@ -108,6 +108,7 @@ struct StereoPairing<Payload> {
     private(set) var obsolete = 0
     private(set) var histogram = [Int](repeating: 0, count: 5)
     private var acceptedOffsets: [Double] = []
+    private var observedSkew: [Double] = []
     var buffered: Int { frames[0].count + frames[1].count }
 
     // A pair is emitted once. Each stream advances monotonically, including after
@@ -125,6 +126,8 @@ struct StereoPairing<Payload> {
             let skew = abs(frames[j][nearest].timestamp - timestamp)
             let bucket = skew <= 0.002 ? 0 : skew <= 0.004 ? 1 : skew <= Self.tolerance ? 2 : skew <= 0.016 ? 3 : 4
             histogram[bucket] += 1
+            observedSkew.append(skew * 1000)
+            if observedSkew.count > 128 { observedSkew.removeFirst() }
             if skew <= Self.tolerance {
                 let other = frames[j][nearest]
                 let ordered = camera == .a ? (sample, other) : (other, sample)
@@ -146,6 +149,12 @@ struct StereoPairing<Payload> {
             }
         }
         return nil
+    }
+
+    var candidateSkew: (median: Double?, p95: Double?) {
+        guard !observedSkew.isEmpty else { return (nil, nil) }
+        let ranked = observedSkew.sorted()
+        return (ranked[ranked.count / 2], ranked[Int(ceil(Double(ranked.count) * 0.95)) - 1])
     }
 
     var skew: (median: Double?, p95: Double?, offset: Double?, jitter: Double?) {

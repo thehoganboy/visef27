@@ -23,6 +23,7 @@ struct StereoPairingTests {
         precondition(ingest(1.066, .a) == nil)
         precondition(ingest(1.081, .b) == nil)
         precondition(matcher.histogram[3] == 1)
+        precondition(abs((matcher.candidateSkew.p95 ?? 0) - 15) < 0.01)
         precondition(abs((matcher.skew.p95 ?? 0) - 4) < 0.01)
         precondition(abs((matcher.skew.jitter ?? 0) - 1) < 0.01)
         for n in 0..<100 { precondition(ingest(2 + Double(n) / 30, .b) == nil) }
