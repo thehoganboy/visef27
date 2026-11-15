@@ -65,11 +65,14 @@ final class StereoIngress: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             let reason = CMGetAttachment(sampleBuffer, key: kCMSampleBufferAttachmentKey_DroppedFrameReason, attachmentModeOut: nil)
             let raw = reason.map { String(describing: $0) } ?? "unspecified"
             let standard: String
-            switch raw {
-            case kCMSampleBufferDroppedFrameReason_FrameWasLate as String: standard = "lateData"
-            case kCMSampleBufferDroppedFrameReason_OutOfBuffers as String: standard = "outOfBuffers"
-            case kCMSampleBufferDroppedFrameReason_Discontinuity as String: standard = "discontinuity"
-            default: standard = raw
+            if raw == (kCMSampleBufferDroppedFrameReason_FrameWasLate as String) {
+                standard = "lateData"
+            } else if raw == (kCMSampleBufferDroppedFrameReason_OutOfBuffers as String) {
+                standard = "outOfBuffers"
+            } else if raw == (kCMSampleBufferDroppedFrameReason_Discontinuity as String) {
+                standard = "discontinuity"
+            } else {
+                standard = raw
             }
             ingress?.recordDrop(camera: camera, reason: standard)
         }
