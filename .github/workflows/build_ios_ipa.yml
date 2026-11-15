@@ -34,6 +34,8 @@ jobs:
           /tmp/stereo-negotiation
           swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoPairing.swift ios/tests/StereoPairingTests.swift -o /tmp/stereo-pairing
           /tmp/stereo-pairing
+          swiftc -O ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/DenseStereo.swift ios/tests/DenseStereoTests.swift -o /tmp/dense-stereo
+          /tmp/dense-stereo
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v5

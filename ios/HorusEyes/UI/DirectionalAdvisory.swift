@@ -56,6 +56,23 @@ func advisoryForRisk(threat: String, timestamp: Double) -> DirectionalAdvisory {
     return DirectionalAdvisory(state: state, sourceTimestamp: timestamp, reasonCode: code)
 }
 
+// Research envelope for a 45 cm body plus 5 cm margin on both sides.
+// The existing guidance engine still establishes its STOP precedence.
+func stereoCorridorObserved(_ observation: ObstacleDetectionResult, angle: Double) -> Bool {
+    guard angle.isFinite else { return false }
+    let half = atan2(27.5, 75.0) * 180 / Double.pi
+    let low = angle - half, high = angle + half
+    var covered = low
+    for bin in observation.spatialBins {
+        let start = Double(bin.angleMin), end = Double(bin.angleMax)
+        guard end > low, start < high else { continue }
+        guard start <= covered + 0.011, bin.isValid, bin.distCM >= 75 else { return false }
+        covered = max(covered, end)
+        if covered >= high { return true }
+    }
+    return false
+}
+
 func estimateDirectionalAdvisory(
     observation: ObstacleDetectionResult?,
     threat: String,

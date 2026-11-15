@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import QuartzCore
 import CoreImage
+import UniformTypeIdentifiers
 
 final class DemoController: ObservableObject {
     let camera = CameraTorchManager()
@@ -16,6 +17,8 @@ final class DemoController: ObservableObject {
     @Published private(set) var stereoStrategy: StereoDeliveryStrategy = .automatic
     @Published private(set) var stereoCaptureOnly = false
     @Published var showStereoDisparity = false
+    @Published var showStereoDepth = false
+    @Published private(set) var stereoDepth: CGImage?
     @Published private(set) var stereoDisparity: CGImage?
     @Published private(set) var stereoPairFailed = false
     private let journal = DepthDiagnostics()
@@ -29,6 +32,8 @@ final class DemoController: ObservableObject {
     private var sequence: UInt64 = 0
     private var modeReady = false
     private var stereoDiagnosticReady = false
+    private var lastStereoPreviewAt: Double = 0
+    private var previousStereoObservation: ObstacleDetectionResult?
     @Published var active = false
     @Published var threat = "PAUSED"
     @Published var result: ObstacleDetectionResult?
@@ -97,6 +102,7 @@ final class DemoController: ObservableObject {
         exportURL = nil
         stereoPairURL = nil
         stereoDisparity = nil
+        stereoDepth = nil
         stereoHealth = ""
         stereoPairFailed = false
         diagnostics = ""
@@ -187,6 +193,7 @@ final class DemoController: ObservableObject {
                             self.audio.stop()
                             self.preview = nil
                             self.stereoDisparity = nil
+                            self.stereoDepth = nil
                             self.stereoPairURL = nil
                             self.stereoHealth = ""
                         }
@@ -236,7 +243,12 @@ final class DemoController: ObservableObject {
                     guard self.captureEpoch == captureToken, self.epoch.value == token,
                           (-0.05...0.75).contains(CACurrentMediaTime() - capturedAt) else { return }
                     if let image { self.preview = image }
-                    if frame.source == .stereo { self.stereoDisparity = frame.stereoDisparity.flatMap(Self.disparityImage) }
+                    if frame.source == .stereo {
+                        self.lastStereoPreviewAt = capturedAt
+                        self.stereoDisparity = frame.stereoDisparity.flatMap(Self.disparityImage)
+                        self.stereoDepth = frame.stereoDepthPreview.flatMap(Self.disparityImage)
+                        if observation?.isValid != true { self.previousStereoObservation = nil }
+                    }
                     self.diagnostics = self.journal.label(frame: frame, observation: observation, latencyMS: inferenceMS)
                     if frame.source == .stereo && frame.error != nil && !self.stereoDiagnosticReady {
                         self.stereoDiagnosticReady = true
@@ -353,6 +365,19 @@ final class DemoController: ObservableObject {
                     }
                 }
 
+                if self.mode == .stereo {
+                    if finalAdv.state == "AVAILABLE", let angle = finalAdv.angleDeg {
+                        let priorSupported = self.previousStereoObservation.map {
+                            (0.0...0.50).contains(capturedAt - $0.timestamp) &&
+                                stereoCorridorObserved($0, angle: angle)
+                        } ?? false
+                        if !priorSupported || !stereoCorridorObserved(obs, angle: angle) {
+                            finalAdv = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: capturedAt,
+                                reasonCode: "INSUFFICIENT_DEPTH_COVERAGE")
+                        }
+                    }
+                    self.previousStereoObservation = obs
+                }
                 if finalAdv.state == "UNKNOWN" && self.mode != .midas {
                     finalAdv.state = "UNAVAILABLE"
                 }
@@ -373,8 +398,12 @@ final class DemoController: ObservableObject {
 
     private func tick() {
         lock.lock(); yaw = imu.yawRateRadS; let frameTime = lastFrame; lock.unlock()
-        guard active else { return }
         let now = CACurrentMediaTime()
+        if mode == .stereo, now - lastStereoPreviewAt > 0.75 {
+            stereoDepth = nil
+            stereoDisparity = nil
+        }
+        guard active else { return }
         if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) {
             if mode == .midas { fault() }
             else if mode == .lidar, threat != "UNAVAILABLE" || result != nil { sourceFailed("Depth frames timed out") }
@@ -445,6 +474,35 @@ final class DemoController: ObservableObject {
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
+    func captureCalibrationPair(_ completion: @escaping (URL?) -> Void) {
+        guard mode == .stereo, let stereo else { completion(nil); return }
+        let token = captureEpoch
+        stereo.requestPair(calibration: true) { [weak self] url in
+            guard self?.captureEpoch == token else { completion(nil); return }
+            completion(url)
+        }
+    }
+
+    func importStereoCalibration(_ url: URL) throws {
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0, size <= 256 * 1024 else { throw CalibrationImportError(message: "Invalid profile file size") }
+        let data = try Data(contentsOf: url)
+        let profile = try JSONDecoder().decode(StereoCalibration.self, from: data)
+        let issues = profile.validationIssues()
+        guard issues.isEmpty else { throw CalibrationImportError(message: issues.joined(separator: "\n")) }
+        let path = StereoCalibration.file
+        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: path, options: .atomic)
+        select(.stereo)
+    }
+
+    private struct CalibrationImportError: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+    }
+
     func captureStereoPair() {
         guard let stereo else { return }
         stereoPairURL = nil
@@ -485,6 +543,7 @@ final class DemoController: ObservableObject {
         active = value
         modeReady = false
         stereoDiagnosticReady = false
+        previousStereoObservation = nil
         budget = AuditoryBudgetManager()
         result = nil
         advisory = DirectionalAdvisory()
@@ -611,20 +670,23 @@ struct FlashlightButton: View {
 struct ContentView: View {
     @StateObject private var model = DemoController()
     @State private var stereoDetails = false
+    @State private var calibrationSheet = false
+    @State private var calibrationImporter = false
+    @State private var calibrationError: String?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
             // Rounded Camera Preview Container (P1-01)
             ZStack {
-                if model.mode == .stereo && model.showStereoDisparity {
-                    if let disparity = model.stereoDisparity {
+                if model.mode == .stereo && (model.showStereoDepth || model.showStereoDisparity) {
+                    if let disparity = model.showStereoDepth ? model.stereoDepth : model.stereoDisparity {
                         Image(decorative: disparity, scale: 1)
                             .resizable().interpolation(.none).scaledToFit()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.black)
                     } else {
-                        Color.black.overlay { Text("Disparity unavailable").font(.caption).foregroundStyle(.white) }
+                        Color.black.overlay { Text(model.showStereoDepth ? "Metric depth unavailable" : "Disparity unavailable").font(.caption).foregroundStyle(.white) }
                     }
                 } else if model.mode == .midas {
                     CameraPreviewView(session: model.camera.session)
@@ -639,7 +701,7 @@ struct ContentView: View {
                     Color.black
                 }
                 let isStop = model.advisory.state == "STOP" && model.threat != "PAUSED"
-                TrackingOverlayView(result: model.mode == .stereo && model.showStereoDisparity ? nil : model.result, threatLevel: model.threat, mode: model.mode, isStop: isStop)
+                TrackingOverlayView(result: model.mode == .stereo && (model.showStereoDepth || model.showStereoDisparity) ? nil : model.result, threatLevel: model.threat, mode: model.mode, isStop: isStop)
 
                 // Centered Direction Indicator & Status Badge
                 VStack(spacing: 0) {
@@ -719,6 +781,12 @@ struct ContentView: View {
                     Menu {
                         Button(stereoDetails ? "Hide capture metrics" : "Show capture metrics") { stereoDetails.toggle() }
                         Toggle("Show disparity", isOn: $model.showStereoDisparity)
+                        Toggle("Show metric depth", isOn: $model.showStereoDepth)
+                        Button("Acquire calibration dataset") {
+                            if model.active { model.setActive(false) }
+                            calibrationSheet = true
+                        }
+                        Button("Import calibration profile") { calibrationImporter = true }
                         Button(model.stereoCaptureOnly ? "Enable depth processing" : "Capture only") {
                             model.configureStereo(strategy: model.stereoStrategy, captureOnly: !model.stereoCaptureOnly)
                         }
@@ -761,6 +829,19 @@ struct ContentView: View {
             .padding(.bottom, 16)
         }
         .background(Color(red: 0.04, green: 0.04, blue: 0.05)) // Apple Dark Chassis (#0A0A0C)
+        .sheet(isPresented: $calibrationSheet) {
+            StereoCalibrationView(model: model)
+        }
+        .fileImporter(isPresented: $calibrationImporter, allowedContentTypes: [.json]) { result in
+            do { try model.importStereoCalibration(result.get()) }
+            catch { calibrationError = error.localizedDescription }
+        }
+        .alert("Calibration invalid", isPresented: Binding(get: { calibrationError != nil },
+              set: { if !$0 { calibrationError = nil } })) {
+            Button("OK", role: .cancel) { calibrationError = nil }
+        } message: {
+            Text(calibrationError ?? "")
+        }
         .onAppear { model.appear() }
         .onDisappear { model.disappear() }
         .onChange(of: scenePhase) { phase in

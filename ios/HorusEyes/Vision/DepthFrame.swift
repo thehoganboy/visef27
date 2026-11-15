@@ -50,6 +50,8 @@ struct DepthFrame {
     var error: String? = nil
     var captureProcessingMS: Double = 0
     var stereoDisparity: StereoDisparityPreview?
+    var stereoUncertaintyCM: [Float] = []
+    var stereoDepthPreview: StereoDisparityPreview?
 
     var strongCoverage: Double? {
         guard !confidence.isEmpty, confidence.count == centimeters.count else { return nil }

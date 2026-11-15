@@ -184,7 +184,9 @@ final class StereoCapture: NSObject {
     private var extrinsics: simd_float4x3?
     private var observers: [NSObjectProtocol] = []
     private var calibration: StereoCalibration?
-    private var snapshot: (id: UUID, completion: (URL?) -> Void)?
+    private var profileFailure: String?
+    private var acquisitionFocusLocked = false
+    private var snapshot: (id: UUID, calibration: Bool, completion: (URL?) -> Void)?
     private var processingMS: Double = 0
     private var previousPairTime = -Double.infinity
     private var cameraState: [(device: AVCaptureDevice, format: AVCaptureDevice.Format,
@@ -231,8 +233,15 @@ final class StereoCapture: NSObject {
                 self.onError(reason)
                 return
             }
-            self.calibration = (try? Data(contentsOf: StereoCalibration.file)).flatMap {
-                try? JSONDecoder().decode(StereoCalibration.self, from: $0)
+            if FileManager.default.fileExists(atPath: StereoCalibration.file.path) {
+                do {
+                    let profile = try JSONDecoder().decode(StereoCalibration.self, from: Data(contentsOf: StereoCalibration.file))
+                    let issues = profile.validationIssues()
+                    if issues.isEmpty { self.calibration = profile }
+                    else { self.profileFailure = issues.first }
+                } catch {
+                    self.profileFailure = "Unreadable profile"
+                }
             }
             let pairs = Self.pairs
             self.onEvent(Event(stage: "capability", pair: pairs.map {
@@ -480,6 +489,7 @@ final class StereoCapture: NSObject {
         devices.removeAll()
         extrinsics = nil
         configured = false
+        acquisitionFocusLocked = false
         geometryStatus = ""
         captureSignature.removeAll()
         captureReady = false
@@ -487,6 +497,19 @@ final class StereoCapture: NSObject {
         lastHealthLog = 0
         processingMS = 0
         return restored
+    }
+
+    private func lockAcquisitionFocus() {
+        guard devices.count == 2 else { return }
+        var success = true
+        for device in devices where device.isFocusModeSupported(.locked) {
+            do {
+                try device.lockForConfiguration()
+                device.focusMode = .locked
+                device.unlockForConfiguration()
+            } catch { success = false }
+        }
+        acquisitionFocusLocked = success
     }
 
     private func lockCalibrationFocus() {
@@ -605,7 +628,8 @@ final class StereoCapture: NSObject {
         let focused = devices.allSatisfy { !$0.isAdjustingFocus }
         let calibration = self.calibration
         let captureSignature = self.captureSignature
-        let width = processingMS > 95 ? 192 : 256
+        let width = processingMS > 145 ? 256 : 320
+        let profileFailure = self.profileFailure
         let pending = snapshot
         let captureOnly = self.captureOnly
         let phase = self.phase.rawValue
@@ -613,7 +637,8 @@ final class StereoCapture: NSObject {
             let (frame, url) = Self.process(a, b, timestamp: timestamp, aK: aK, bK: bK, ext: ext,
                 ids: ids, positions: positions, focused: focused, calibration: calibration,
                 captureSignature: captureSignature, width: width, export: pending != nil,
-                captureOnly: captureOnly, pair: pair, strategy: phase)
+                captureOnly: captureOnly, pair: pair, strategy: phase, profileFailure: profileFailure,
+                calibrationShot: pending?.calibration == true)
             guard let self else {
                 if let url { try? FileManager.default.removeItem(at: url) }
                 return
@@ -636,7 +661,7 @@ final class StereoCapture: NSObject {
                 } else if let url {
                     try? FileManager.default.removeItem(at: url)
                 }
-                if !captureOnly { self.onFrame(frame, a) }
+                if !captureOnly && pending?.calibration != true { self.onFrame(frame, a) }
             }
         }
     }
@@ -645,106 +670,148 @@ final class StereoCapture: NSObject {
                                 aK: simd_float3x3?, bK: simd_float3x3?, ext: simd_float4x3?,
                                 ids: [String], positions: [Float], focused: Bool, calibration: StereoCalibration?,
                                 captureSignature: [String], width: Int, export: Bool, captureOnly: Bool,
-                                pair: StereoIngress.Pair, strategy: String) -> (DepthFrame, URL?) {
+                                pair: StereoIngress.Pair, strategy: String, profileFailure: String?,
+                                calibrationShot: Bool) -> (DepthFrame, URL?) {
         let began = CACurrentMediaTime()
         var exportURL: URL?
         var preview: StereoDisparityPreview?
-        let geometry = DepthGeometry(width: CVPixelBufferGetHeight(a), height: CVPixelBufferGetWidth(a),
-                                     fx: aK?.columns.1.y ?? .nan,
-                                     cx: Float(CVPixelBufferGetHeight(a) - 1) - (aK?.columns.2.y ?? .nan))
+        var metricPreview: StereoDisparityPreview?
+        let mapWidth = 96, mapHeight = 120
+        var cm = [Float](repeating: .nan, count: mapWidth * mapHeight)
+        var uncertainty = cm
+        var confidence = [UInt8](repeating: 0, count: cm.count)
         var detail = "Intrinsics or extrinsics unavailable"
         var error: String? = "Distance unavailable"
-        let mapWidth = 48
-        let mapHeight = 64
-        var cm = [Float](repeating: .nan, count: mapWidth * mapHeight)
-        var confidence = [UInt8](repeating: 0, count: cm.count)
         var exportedDisparity: (pixels: [Float?], width: Int, height: Int, focal: Float)?
-        if !captureOnly, let ext, let aK, let bK, let rect = StereoCalibration.rectification(ext) {
-
-            let verified = calibration.flatMap { profile -> StereoCalibration? in
-                guard profile.matchesCapture(captureSignature),
-                      profile.verified(for: ids, factoryBaselineMM: rect.baseline),
-                      profile.left.matches(width: CVPixelBufferGetWidth(a), height: CVPixelBufferGetHeight(a),
-                                           intrinsics: aK, position: positions[0]),
-                      profile.right.matches(width: CVPixelBufferGetWidth(b), height: CVPixelBufferGetHeight(b),
-                                            intrinsics: bK, position: positions[1]),
-                      focused else { return nil }
-                return profile
-            }
-            let w = width
-            let h = w * 3 / 4
-            let focal = aK.columns.0.x * Float(w) / Float(CVPixelBufferGetWidth(a))
-            if let first = Self.warp(a, rotation: rect.basis, k: aK, lens: verified?.left, focal: focal, w: w, h: h),
-               let second = Self.warp(b, rotation: rect.rotation * rect.basis, k: bK, lens: verified?.right, focal: focal, w: w, h: h) {
-                let search = max(8, Int(min(Float(w / 3), (focal * rect.baseline / 230).rounded(.up))))
-                let brightnessSamples = stride(from: 0, to: first.count, by: 29).map { first[$0] }.filter { $0 >= 0 }
-                let brightEnough = !brightnessSamples.isEmpty
-                    && brightnessSamples.reduce(0, +) >= 12 * brightnessSamples.count
-                var disparities: [Float] = []
+        var projectionA = aK
+        if !captureOnly, !calibrationShot, let ext, let aK, let bK,
+           let factory = StereoCalibration.rectification(ext) {
+            let mismatch: String?
+            if let calibration {
+                if calibration.pair != ids { mismatch = "Camera IDs differ" }
+                else if !calibration.matchesCapture(captureSignature) { mismatch = "Capture format differs" }
+                else if !calibration.compatible(factory: ext) { mismatch = "Factory pose or scale differs" }
+                else if !focused { mismatch = "Camera focus adjusting" }
+                else if !calibration.left.matches(width: CVPixelBufferGetWidth(a), height: CVPixelBufferGetHeight(a),
+                                                  intrinsics: aK, position: positions[0]) {
+                    mismatch = "Camera A resolution, focus or intrinsics differ"
+                } else if !calibration.right.matches(width: CVPixelBufferGetWidth(b), height: CVPixelBufferGetHeight(b),
+                                                     intrinsics: bK, position: positions[1]) {
+                    mismatch = "Camera B resolution, focus or intrinsics differ"
+                } else { mismatch = nil }
+            } else { mismatch = profileFailure }
+            let verified = mismatch == nil ? calibration : nil
+            let rect = verified?.fittedExtrinsics.flatMap(StereoCalibration.rectification) ?? factory
+            let ka = verified?.left.projection ?? aK, kb = verified?.right.projection ?? bK
+            projectionA = ka
+            let w = width, h = w * 3 / 4
+            // Fit the virtual camera to the narrower view. Warp margins remain
+            // invalid and only overlapping windows participate in matching.
+            let ratioA = ka.columns.0.x / Float(CVPixelBufferGetWidth(a))
+            let ratioB = kb.columns.0.x / Float(CVPixelBufferGetWidth(b))
+            let focal = max(ratioA, ratioB) * Float(w)
+            if let first = Self.warp(a, rotation: rect.basis, k: ka, lens: verified?.left, focal: focal, w: w, h: h),
+               let second = Self.warp(b, rotation: rect.rotation * rect.basis, k: kb, lens: verified?.right, focal: focal, w: w, h: h) {
+                let search = min(72, max(8, Int(min(72, ceil(focal * rect.baseline / 140)))))
+                let luma = stride(from: 0, to: first.count, by: 31).map { first[$0] }.filter { $0 >= 0 }
+                let bright = !luma.isEmpty && luma.reduce(0, +) >= 15 * luma.count
+                let matches = DenseStereo.match(first, second, width: w, height: h, maxShift: search)
                 var disparityImage = [UInt8](repeating: 0, count: w * h)
-                var disparityGrid = !export ? [] : [Float?](repeating: nil, count: w * h)
-                let step = w == 256 ? 3 : 2
-                for row in stride(from: 2, to: h - 2, by: step) {
-                    for col in stride(from: 2, to: w - 2, by: step) {
-                        guard let d = StereoCorrespondence.matchDisparity(left: first, right: second,
-                            width: w, height: h, x: col, y: row, maxShift: search) else { continue }
-                        disparities.append(d)
-                        let intensity = UInt8(min(255, max(24, Int(d / Float(search) * 255))))
-                        for dy in 0..<step {
-                            for dx in 0..<step { disparityImage[(row + dy) * w + col + dx] = intensity }
-                        }
-                        if !disparityGrid.isEmpty { disparityGrid[row * w + col] = d }
-                        guard brightEnough, let verified, d >= 1.5 else { continue }
-                        let rectDepth = StereoCorrespondence.depthCM(focalPixels: focal, baselineMM: verified.baselineMM, subpixelDisparity: d)
-                        let ray = rect.basis * Self.rectRay(x: col, y: row, w: w, h: h, focal: focal)
-                        guard let pixel = verified.left.project(ray, k: aK), pixel.x.isFinite, pixel.y.isFinite else { continue }
-                        let px = Float(geometry.width - 1) - pixel.y
-                        let py = pixel.x
-                        guard px >= 0, py >= 0, px < Float(geometry.width), py < Float(geometry.height),
-                              (20...600).contains(rectDepth * ray.z) else { continue }
-                        let index = Int(py * Float(mapHeight) / Float(geometry.height)) * mapWidth
-                            + Int(px * Float(mapWidth) / Float(geometry.width))
-                        let value = rectDepth * ray.z
-                        if !cm[index].isFinite || value < cm[index] {
-                            cm[index] = value
-                            confidence[index] = d >= 4 ? 2 : 1
-                        }
+                let scaleUncertainty = verified?.scaleUncertainty ?? 1
+                var count = 0
+                let portraitW = CVPixelBufferGetHeight(a), portraitH = CVPixelBufferGetWidth(a)
+                for (i, d) in matches.disparity.enumerated() where d.isFinite {
+                    count += 1
+                    disparityImage[i] = UInt8(min(255, max(24, Int(d / Float(search) * 255))))
+                    guard bright, let verified, let metric = DenseStereo.metric(focal: focal,
+                        baselineMM: rect.baseline, disparity: d, sigma: matches.sigma[i],
+                        scaleFraction: scaleUncertainty) else { continue }
+                    let ray = rect.basis * Self.rectRay(x: i % w, y: i / w, w: w, h: h, focal: focal)
+                    guard let pixel = verified.left.project(ray, k: ka), pixel.x.isFinite, pixel.y.isFinite else { continue }
+                    let px = Float(portraitW - 1) - pixel.y, py = pixel.x
+                    guard px >= 0, py >= 0, px < Float(portraitW), py < Float(portraitH) else { continue }
+                    let gx = Int(px * Float(mapWidth) / Float(portraitW))
+                    let gy = Int(py * Float(mapHeight) / Float(portraitH))
+                    guard gx < mapWidth, gy < mapHeight else { continue }
+                    let index = gy * mapWidth + gx
+                    let value = metric.depth * ray.z, sigma = metric.sigma * ray.z
+                    if !cm[index].isFinite || value - 2 * sigma < cm[index] - 2 * uncertainty[index] {
+                        cm[index] = value
+                        uncertainty[index] = sigma
+                        confidence[index] = sigma <= min(12, value * 0.09) ? 2 : 1
                     }
                 }
-                disparities.sort()
-                let matched = disparities.count
-                let cells = confidence.filter { $0 > 0 }.count
-                let median = matched > 0 ? String(format: "%.2f", disparities[matched / 2]) : "N/A"
-                let range = matched > 0 ? String(format: "%.1f–%.1f", disparities[0], disparities[matched - 1]) : "N/A"
-                let calibrationStatus = verified == nil ? "CALIBRATION REQUIRED" : "Verified profile"
-                if matched > 0 { preview = StereoDisparityPreview(width: w, height: h, pixels: Data(disparityImage)) }
-                let disparityStatus = matched > 0 ? "DISPARITY READY" : "Disparity unavailable"
-                detail = "\(calibrationStatus) • \(disparityStatus) • disparity \(median) px [\(range)] • \(matched) matches"
-                if export { exportedDisparity = (disparityGrid, w, h, focal) }
+                let calibrationStatus = mismatch.map { "CALIBRATION INVALID: " + $0 }
+                    ?? (verified == nil ? "CALIBRATION REQUIRED" : "Calibrated")
+                let density = Double(count) / Double(w * h)
+                let overlap = Double(matches.overlap) / Double(w * h)
+                detail = calibrationStatus + " • " + (count > 0 ? "DISPARITY READY" : "Disparity unavailable")
+                    + String(format: " • %.1f%% density • %.1f%% overlap (%d matches)", density * 100, overlap * 100, count)
+                if count > 0 {
+                    preview = StereoDisparityPreview(width: w, height: h, pixels: Data(disparityImage))
+                }
+                if export { exportedDisparity = (matches.disparity.map { $0.isFinite ? $0 : nil }, w, h, focal) }
                 if verified != nil {
-                    if cells >= mapWidth * mapHeight / 10 {
+                    let valid = cm.filter(\.isFinite).count
+                    if valid > 0 {
                         error = nil
                         detail = "METRIC DEPTH READY • " + detail
+                        let uz = uncertainty.filter(\.isFinite).sorted()
+                        detail += String(format: " • median σ %.1f cm", uz[uz.count / 2])
+                        let pixels = cm.map { $0.isFinite ? UInt8(255 - Int(min(230, $0 * 0.38))) : 0 }
+                        metricPreview = StereoDisparityPreview(width: mapWidth, height: mapHeight, pixels: Data(pixels))
+                    } else {
+                        error = bright ? "INSUFFICIENT DEPTH COVERAGE" : "Distance unavailable: low light"
                     }
-                    else { error = brightEnough ? "Distance unavailable: low texture or overlap" : "Distance unavailable: low light" }
                 }
             }
         }
-        if export {
+        if export, !calibrationShot || (focused && aK != nil && bK != nil && ext != nil &&
+            Self.hasBoardTexture(a) && Self.hasBoardTexture(b)) {
             exportURL = Self.exportPair(pair, ids: ids, positions: positions, ext: ext,
                 disparity: exportedDisparity, captureSignature: captureSignature, strategy: strategy)
         }
+        let h = CVPixelBufferGetHeight(a), w = CVPixelBufferGetWidth(a)
+        let geometry = DepthGeometry(width: h, height: w, fx: projectionA?.columns.1.y ?? .nan,
+                                     cx: Float(h - 1) - (projectionA?.columns.2.y ?? .nan))
         let frame = DepthFrame(source: .stereo, timestamp: timestamp, geometry: geometry,
             width: mapWidth, height: mapHeight, centimeters: cm, confidence: confidence,
             detail: "Capture ready • " + detail, error: error,
-            captureProcessingMS: (CACurrentMediaTime() - began) * 1000, stereoDisparity: preview)
+            captureProcessingMS: (CACurrentMediaTime() - began) * 1000, stereoDisparity: preview,
+            stereoUncertaintyCM: uncertainty, stereoDepthPreview: metricPreview)
         return (frame, exportURL)
     }
 
-    func requestPair(_ completion: @escaping (URL?) -> Void) {
+    // Fast screening only. The workstation verifies the full checkerboard,
+    // shared corner order, pose diversity and actual common ROI.
+    private static func hasBoardTexture(_ image: CVPixelBuffer) -> Bool {
+        guard CVPixelBufferLockBaseAddress(image, .readOnly) == kCVReturnSuccess else { return false }
+        defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(image, 0)?.assumingMemoryBound(to: UInt8.self) else { return false }
+        let w = CVPixelBufferGetWidthOfPlane(image, 0), h = CVPixelBufferGetHeightOfPlane(image, 0)
+        let strideBytes = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
+        var corners = 0
+        var energy = 0
+        var total = 0
+        for y in Swift.stride(from: h / 8, to: 7 * h / 8, by: 3) {
+            for x in Swift.stride(from: w / 8, to: 7 * w / 8, by: 3) {
+                let i = y * strideBytes + x
+                let a = Int(base[i - strideBytes - 1]), b = Int(base[i - strideBytes + 1])
+                let c = Int(base[i + strideBytes - 1]), d = Int(base[i + strideBytes + 1])
+                let saddle = abs(a + d - b - c)
+                if saddle > 48 && abs(a - d) < 28 && abs(b - c) < 28 { corners += 1 }
+                energy += abs(4 * Int(base[i]) - a - b - c - d)
+                total += 1
+            }
+        }
+        return total > 0 && energy >= total && corners >= 3
+    }
+
+    func requestPair(calibration: Bool = false, _ completion: @escaping (URL?) -> Void) {
         queue.async {
             let id = UUID()
-            self.snapshot = (id, completion)
+            if calibration && !self.acquisitionFocusLocked { self.lockAcquisitionFocus() }
+            self.snapshot = (id, calibration, completion)
             self.queue.asyncAfter(deadline: .now() + 3) {
                 guard let pending = self.snapshot, pending.id == id else { return }
                 self.snapshot = nil

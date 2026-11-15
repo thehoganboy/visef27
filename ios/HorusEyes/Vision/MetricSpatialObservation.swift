@@ -9,6 +9,7 @@ extension DepthFrame {
         var overhead = false
         if error == nil, camera.isValid, width >= 24, height >= 20,
            centimeters.count == width * height {
+            let stereo = source == .stereo && stereoUncertaintyCM.count == centimeters.count
             func sample(_ index: Int) -> Float {
                 guard confidence.count == centimeters.count, confidence[index] >= 1 else { return .nan }
                 let value = centimeters[index]
@@ -40,8 +41,14 @@ extension DepthFrame {
             let body = (height / 5)..<(height * 65 / 100)
             let upper = 1..<body.lowerBound
             let ground = body.upperBound..<(height * 85 / 100)
+            func lowerBound(_ index: Int) -> Float {
+                guard stereo else { return supported[index] }
+                let sigma = stereoUncertaintyCM[index]
+                guard supported[index].isFinite, sigma.isFinite else { return .nan }
+                return max(1, supported[index] - 2 * sigma)
+            }
             func samples(_ columns: Range<Int>, _ rows: Range<Int>) -> [Float] {
-                rows.flatMap { row in columns.map { supported[row * width + $0] } }
+                rows.flatMap { row in columns.map { lowerBound(row * width + $0) } }
                     .filter(\.isFinite).sorted()
             }
             func quantile(_ sorted: [Float], _ fraction: Double) -> Float {

@@ -41,7 +41,12 @@ import Foundation
         precondition(lateral.allObstacles.count == 2)
         let forward = estimateDirectionalAdvisory(observation: lateral, threat: "WARNING", now: 10.1)
         precondition(forward.state == "AVAILABLE" && abs(forward.angleDeg ?? 100) <= 2)
-        print("PASS 10 native metric spatial checks")
+        precondition(stereoCorridorObserved(clear, angle: 0))
+        var gap = clear
+        gap.spatialBins.remove(at: 12)
+        precondition(!stereoCorridorObserved(gap, angle: 0))
+        precondition(!stereoCorridorObserved(lateral, angle: 28))
+        print("PASS 13 native metric spatial checks")
     }
 
     static func main() {
