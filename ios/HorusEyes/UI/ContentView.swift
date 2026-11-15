@@ -265,7 +265,7 @@ final class DemoController: ObservableObject {
                         if frame.source == .stereo || self.modeReady || CACurrentMediaTime() - self.started > 1 {
                             self.threat = "UNAVAILABLE"
                             self.advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: capturedAt,
-                                reasonCode: frame.error ?? "INSUFFICIENT_DEPTH")
+                                reasonCode: frame.error ?? (frame.source == .stereo ? "INSUFFICIENT_DEPTH_COVERAGE" : "INSUFFICIENT_DEPTH"))
                         }
                         self.audio.update(decision: self.silentDecision())
                     }
@@ -767,6 +767,22 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 16)
             }
+            if model.mode == .stereo && (model.advisory.reasonCode == "CALIBRATION_REQUIRED"
+                || model.diagnostics.contains("CALIBRATION REQUIRED")) {
+                HStack(spacing: 8) {
+                    Text("Stereo images are available. Calibrate the cameras to enable verified centimeter depth; navigation remains disabled until then.")
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                    Spacer(minLength: 4)
+                    Button("Calibrate") {
+                        if model.active { model.setActive(false) }
+                        calibrationSheet = true
+                    }
+                    .font(.caption2.weight(.semibold))
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal, 16)
+            }
             if model.mode == .stereo && stereoDetails {
                 Text(model.stereoHealth.isEmpty ? "Waiting for Stereo diagnostics" : model.stereoHealth)
                     .font(.caption2.monospacedDigit())
@@ -776,8 +792,13 @@ struct ContentView: View {
             }
             HStack {
                 let status = model.mode == .stereo && model.advisory.state == "UNAVAILABLE"
-                    ? (model.advisory.reasonCode == "INSUFFICIENT_DEPTH_COVERAGE"
-                       ? "INSUFFICIENT DEPTH COVERAGE • UNSAFE TO ADVISE" : "UNAVAILABLE — UNSAFE TO ADVISE")
+                    ? (model.advisory.reasonCode == "CALIBRATION_REQUIRED"
+                       ? "CALIBRATION REQUIRED • GUIDANCE DISABLED"
+                       : model.advisory.reasonCode.hasPrefix("CALIBRATION_INVALID")
+                       ? "CALIBRATION INVALID • GUIDANCE DISABLED"
+                       : model.advisory.reasonCode == "INSUFFICIENT_DEPTH_COVERAGE"
+                       ? "INSUFFICIENT DEPTH COVERAGE • UNSAFE TO ADVISE"
+                       : "UNAVAILABLE — UNSAFE TO ADVISE")
                     : model.advisory.state
                 Text((model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics) + " • " + status)
                     .font(.caption2.monospacedDigit())
