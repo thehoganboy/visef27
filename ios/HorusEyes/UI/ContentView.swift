@@ -12,6 +12,11 @@ final class DemoController: ObservableObject {
     @Published private(set) var diagnostics = ""
     @Published private(set) var exportURL: URL?
     @Published private(set) var stereoPairURL: URL?
+    @Published private(set) var stereoHealth = ""
+    @Published private(set) var stereoStrategy: StereoDeliveryStrategy = .automatic
+    @Published private(set) var stereoCaptureOnly = false
+    @Published var showStereoDisparity = false
+    @Published private(set) var stereoDisparity: CGImage?
     @Published private(set) var stereoPairFailed = false
     private let journal = DepthDiagnostics()
     private let imageContext = CIContext(options: [.cacheIntermediates: false])
@@ -84,9 +89,15 @@ final class DemoController: ObservableObject {
         guard selected != mode || selected != .midas else { return }
         mode = selected
         resetEvidence(active)
+        if active {
+            if mode == .stereo && stereoCaptureOnly { audio.stop() }
+            else { audio.start() }
+        }
         journal.switchRequested(selected)
         exportURL = nil
         stereoPairURL = nil
+        stereoDisparity = nil
+        stereoHealth = ""
         stereoPairFailed = false
         diagnostics = ""
         preview = nil
@@ -159,6 +170,7 @@ final class DemoController: ObservableObject {
                     if self.diagnostics != reason {
                         self.sourceFailed(reason)
                         self.preview = nil
+                        self.stereoDisparity = nil
                     }
                 }
             }
@@ -167,12 +179,23 @@ final class DemoController: ObservableObject {
                 self.lidar = source
                 source.start()
             } else {
-                let source = StereoCapture(onFrame: receive, onError: fail) { [weak self] event in
+                let source = StereoCapture(onFrame: receive, onError: fail,
+                    strategy: self.stereoStrategy, captureOnly: self.stereoCaptureOnly, onReset: { [weak self] in
+                        DispatchQueue.main.async {
+                            guard let self, self.captureEpoch == captureToken else { return }
+                            self.resetEvidence(self.active)
+                            self.preview = nil
+                            self.stereoDisparity = nil
+                            self.stereoPairURL = nil
+                            self.stereoHealth = ""
+                        }
+                    }) { [weak self] event in
                     DispatchQueue.main.async {
                         guard let self else { return }
                         self.journal.recordStereo(event)
                         guard self.captureEpoch == captureToken else { return }
                         if !event.message.isEmpty { self.diagnostics = event.message }
+                        self.stereoHealth = Self.stereoSummary(event)
                     }
                 }
                 self.stereo = source
@@ -208,6 +231,7 @@ final class DemoController: ObservableObject {
                     guard self.captureEpoch == captureToken, self.epoch.value == token,
                           (-0.05...0.75).contains(CACurrentMediaTime() - capturedAt) else { return }
                     if let image { self.preview = image }
+                    if frame.source == .stereo { self.stereoDisparity = frame.stereoDisparity.flatMap(Self.disparityImage) }
                     self.diagnostics = self.journal.label(frame: frame, observation: observation, latencyMS: inferenceMS)
                     if frame.source == .stereo && frame.error != nil && !self.stereoDiagnosticReady {
                         self.stereoDiagnosticReady = true
@@ -388,6 +412,34 @@ final class DemoController: ObservableObject {
         journal.switchOutcome(mode, outcome: reason)
     }
 
+    func configureStereo(strategy: StereoDeliveryStrategy, captureOnly: Bool) {
+        stereoStrategy = strategy
+        stereoCaptureOnly = captureOnly
+        select(.stereo)
+    }
+
+    private static func stereoSummary(_ event: StereoCapture.Event) -> String {
+        let format = [event.formatA, event.formatB].map { $0.split(separator: "/").first.map(String.init) ?? "?" }
+        let profile = "\(event.pair) \(format.joined(separator: " / ")) @ \(event.fps) • \(event.strategy)"
+        guard let stats = event.telemetry else { return event.stage + " • " + profile }
+        let a = stats.cameras[0], b = stats.cameras[1]
+        let statusA = a.samples > 0 ? "CAMERA A READY" : "A waiting"
+        let statusB = b.samples > 0 ? "CAMERA B READY" : "B waiting"
+        let total = stats.accepted + stats.rejected
+        let rejected = total > 0 ? Double(stats.rejected) * 100 / Double(total) : 0
+        let skew = [stats.medianSkewMS, stats.p95SkewMS].map { $0.map { String(format: "%.1f", $0) } ?? "–" }
+        return profile + "\n" + event.stage + " • " + statusA + " / " + statusB + "\n"
+            + String(format: "A %.1f / B %.1f / pair %.1f FPS • reject %.0f%%", a.fps, b.fps, stats.pairFPS, rejected)
+            + "\nSkew median/P95 " + skew.joined(separator: "/") + " ms"
+    }
+
+    private static func disparityImage(_ disparity: StereoDisparityPreview) -> CGImage? {
+        guard let provider = CGDataProvider(data: disparity.pixels as CFData) else { return nil }
+        return CGImage(width: disparity.width, height: disparity.height, bitsPerComponent: 8, bitsPerPixel: 8,
+            bytesPerRow: disparity.width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: [],
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
     func captureStereoPair() {
         guard let stereo else { return }
         stereoPairURL = nil
@@ -411,7 +463,7 @@ final class DemoController: ObservableObject {
             camera.setGuidanceActive(value)
             if !value { camera.forceTorchOff() }
         }
-        if value { audio.start() } else { audio.stop() }
+        if value && !(mode == .stereo && stereoCaptureOnly) { audio.start() } else { audio.stop() }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
     }
 
@@ -443,6 +495,8 @@ final class DemoController: ObservableObject {
         camera.forceTorchOff()
         setActive(false); timer?.invalidate(); timer = nil
         preview = nil
+        stereoDisparity = nil
+        stereoHealth = ""
         diagnostics = ""
         restartCapture(); imu.stopMotionTracking(); audio.stop()
     }
@@ -547,13 +601,23 @@ struct FlashlightButton: View {
 // ═══════════════════════════════════════════════════════════════════════════════
 struct ContentView: View {
     @StateObject private var model = DemoController()
+    @State private var stereoDetails = false
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         VStack(spacing: 0) {
             // Rounded Camera Preview Container (P1-01)
             ZStack {
-                if model.mode == .midas {
+                if model.mode == .stereo && model.showStereoDisparity {
+                    if let disparity = model.stereoDisparity {
+                        Image(decorative: disparity, scale: 1)
+                            .resizable().interpolation(.none).scaledToFit()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                    } else {
+                        Color.black.overlay { Text("Disparity unavailable").font(.caption).foregroundStyle(.white) }
+                    }
+                } else if model.mode == .midas {
                     CameraPreviewView(session: model.camera.session)
                 } else if let preview = model.preview {
                     GeometryReader { geometry in
@@ -566,7 +630,7 @@ struct ContentView: View {
                     Color.black
                 }
                 let isStop = model.advisory.state == "STOP" && model.threat != "PAUSED"
-                TrackingOverlayView(result: model.result, threatLevel: model.threat, mode: model.mode, isStop: isStop)
+                TrackingOverlayView(result: model.mode == .stereo && model.showStereoDisparity ? nil : model.result, threatLevel: model.threat, mode: model.mode, isStop: isStop)
 
                 // Centered Direction Indicator & Status Badge
                 VStack(spacing: 0) {
@@ -631,11 +695,31 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
                     .padding(.horizontal, 16)
             }
+            if model.mode == .stereo && stereoDetails {
+                Text(model.stereoHealth.isEmpty ? "Waiting for Stereo diagnostics" : model.stereoHealth)
+                    .font(.caption2.monospacedDigit())
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .foregroundStyle(.white)
+            }
             HStack {
                 Text((model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics) + " • " + model.advisory.state)
                     .font(.caption2.monospacedDigit())
                 Spacer()
                 if model.mode == .stereo {
+                    Menu {
+                        Button(stereoDetails ? "Hide capture metrics" : "Show capture metrics") { stereoDetails.toggle() }
+                        Toggle("Show disparity", isOn: $model.showStereoDisparity)
+                        Button(model.stereoCaptureOnly ? "Enable depth processing" : "Capture only") {
+                            model.configureStereo(strategy: model.stereoStrategy, captureOnly: !model.stereoCaptureOnly)
+                        }
+                        ForEach(StereoDeliveryStrategy.allCases) { strategy in
+                            Button(strategy.rawValue + (model.stereoStrategy == strategy ? " ✓" : "")) {
+                                model.configureStereo(strategy: strategy, captureOnly: model.stereoCaptureOnly)
+                            }
+                        }
+                    } label: { Image(systemName: "waveform.path") }
+                        .accessibilityLabel("Stereo diagnostics and strategy")
                     Button { model.captureStereoPair() } label: { Image(systemName: "camera") }
                         .accessibilityLabel("Capture synchronized stereo calibration pair")
                     if model.stereoPairFailed { Image(systemName: "exclamationmark.triangle").accessibilityLabel("Stereo pair unavailable") }

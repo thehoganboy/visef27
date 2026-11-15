@@ -32,6 +32,8 @@ jobs:
           /tmp/stereo-calibration
           swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoNegotiation.swift ios/tests/StereoNegotiationTests.swift -o /tmp/stereo-negotiation
           /tmp/stereo-negotiation
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoPairing.swift ios/tests/StereoPairingTests.swift -o /tmp/stereo-pairing
+          /tmp/stereo-pairing
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v5

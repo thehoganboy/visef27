@@ -99,7 +99,7 @@ final class LiDARCapture: NSObject, ARSessionDelegate {
     }
 }
 
-final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
+final class StereoCapture: NSObject {
     private static var pairs: [(AVCaptureDevice, AVCaptureDevice)] {
         guard AVCaptureMultiCamSession.isMultiCamSupported else { return [] }
         let types: [AVCaptureDevice.DeviceType] = [.builtInWideAngleCamera, .builtInUltraWideCamera, .builtInTelephotoCamera]
@@ -153,6 +153,8 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         var accepted = 0
         var rejected = 0
         var pairFPS = 0.0
+        var strategy = ""
+        var telemetry: StereoIngress.Status?
     }
 
     private struct SetupError: LocalizedError {
@@ -168,6 +170,16 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     private let leftOutput = AVCaptureVideoDataOutput()
     private let rightOutput = AVCaptureVideoDataOutput()
     private var synchronizer: AVCaptureDataOutputSynchronizer?
+    private var ingress: StereoIngress?
+    private var streamDelegates: [StereoIngress.Delegate] = []
+    private var phase: StereoDeliveryPhase = .synchronizer
+    private var status: StereoIngress.Status?
+    private var attemptID = 0
+    private var downstreamEnabled = false
+    private var negotiationDeadline = Double.infinity
+    private let strategy: StereoDeliveryStrategy
+    private let captureOnly: Bool
+    let onReset: () -> Void
     private var devices: [AVCaptureDevice] = []
     private var extrinsics: simd_float4x3?
     private var observers: [NSObjectProtocol] = []
@@ -184,10 +196,8 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     private var current: Plan?
     private var planIndex = 0
     private var configured = false
-    private var delivery = StereoNegotiation.Delivery()
     private var captureReady = false
     private var installedAt = 0.0
-    private var lastGoodAt = 0.0
     private var lastHealthLog = 0.0
     private var geometryStatus = ""
     private var captureSignature: [String] = []
@@ -197,10 +207,14 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     let onError: (String) -> Void
 
     init(onFrame: @escaping (DepthFrame, CVPixelBuffer?) -> Void,
-         onError: @escaping (String) -> Void, onEvent: @escaping (Event) -> Void) {
+         onError: @escaping (String) -> Void, strategy: StereoDeliveryStrategy, captureOnly: Bool,
+         onReset: @escaping () -> Void, onEvent: @escaping (Event) -> Void) {
         self.onFrame = onFrame
         self.onError = onError
         self.onEvent = onEvent
+        self.strategy = strategy
+        self.captureOnly = captureOnly
+        self.onReset = onReset
     }
 
     private var isCancelled: Bool {
@@ -227,6 +241,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             let requested = self.calibration?.pair
             let preferred = pairs.filter { [$0.0.uniqueID, $0.1.uniqueID] == requested }
             let ranked = preferred + pairs.filter { [$0.0.uniqueID, $0.1.uniqueID] != requested }
+            var alternatives: [[Plan]] = []
             for (a, b) in ranked {
                 let af = a.formats, bf = b.formats
                 let pair = Self.cameraName(a) + "/" + Self.cameraName(b)
@@ -236,10 +251,15 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 if candidates.isEmpty {
                     self.onEvent(Event(stage: "formats", error: "No shared supported frame duration", pair: pair))
                 }
-                for candidate in candidates.prefix(10) {
-                    self.plans.append(Plan(a: a, b: b, formatA: af[candidate.a], formatB: bf[candidate.b], candidate: candidate))
-                }
+                let primary = candidates.filter { [30, 24, 15].contains($0.rate.fps) }
+                let filtered = Array(primary.prefix(3))
+                let prioritized = filtered + candidates.filter { !filtered.contains($0) }
+                alternatives.append(prioritized.prefix(5).map {
+                    Plan(a: a, b: b, formatA: af[$0.a], formatB: bf[$0.b], candidate: $0)
+                })
             }
+            self.plans = (0..<5).flatMap { index in alternatives.compactMap { $0.count > index ? $0[index] : nil } }
+            self.negotiationDeadline = CACurrentMediaTime() + 35
             if self.plans.isEmpty { self.finalFailure = "No shared supported MultiCam format and frame rate" }
             self.tryNext()
         }
@@ -247,13 +267,24 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
 
     private func tryNext() {
         guard !isCancelled else { return }
-        guard planIndex < plans.count else {
+        guard planIndex < plans.count, CACurrentMediaTime() < negotiationDeadline else {
             onError("Stereo: \(finalFailure). See CSV for attempts.")
             return
         }
         let plan = plans[planIndex]
         planIndex += 1
+        startAttempt(plan, phase: strategy.phases(probeLateDrops: false)[0])
+    }
+
+    private func startAttempt(_ plan: Plan, phase: StereoDeliveryPhase) {
+        guard !isCancelled else { return }
+        if CACurrentMediaTime() >= negotiationDeadline {
+            onError("Stereo: \(finalFailure). Retry budget exhausted. See CSV.")
+            return
+        }
         current = plan
+        self.phase = phase
+        attemptID += 1
         devices = [plan.a, plan.b]
         let duration = CMTime(value: plan.candidate.rate.interval, timescale: plan.candidate.rate.frames)
         do {
@@ -271,10 +302,18 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         guard !isCancelled else { return }
 
         session.automaticallyConfiguresApplicationAudioSession = false
-        let data = AVCaptureDataOutputSynchronizer(dataOutputs: [leftOutput, rightOutput])
-        synchronizer = data
-        data.setDelegate(self, queue: queue)
-        let attempt = planIndex
+        let ingress = StereoIngress(session: session, a: leftOutput, b: rightOutput, phase: phase)
+        self.ingress = ingress
+        if phase == .independent {
+            streamDelegates = StereoCamera.allCases.map { StereoIngress.Delegate(ingress, camera: $0) }
+            leftOutput.setSampleBufferDelegate(streamDelegates[0], queue: ingress.queue)
+            rightOutput.setSampleBufferDelegate(streamDelegates[1], queue: ingress.queue)
+        } else {
+            let data = AVCaptureDataOutputSynchronizer(dataOutputs: [leftOutput, rightOutput])
+            synchronizer = data
+            data.setDelegate(ingress, queue: ingress.queue)
+        }
+        let attempt = attemptID
         for name in [AVCaptureSession.runtimeErrorNotification, AVCaptureSession.wasInterruptedNotification] {
             let observer = NotificationCenter.default.addObserver(forName: name, object: session, queue: nil) { [weak self] note in
                 let interrupted = note.name == AVCaptureSession.wasInterruptedNotification
@@ -282,7 +321,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                     ?? (note.userInfo?[AVCaptureSessionInterruptionReasonKey] as? NSNumber).map { "Interruption reason \($0)" }
                     ?? (interrupted ? "Camera interrupted" : "AVFoundation runtime error")
                 self?.queue.async { [weak self] in
-                    guard let self, !self.isCancelled, self.planIndex == attempt, self.current != nil else { return }
+                    guard let self, !self.isCancelled, self.attemptID == attempt, self.current != nil else { return }
                     self.reject(stage: interrupted ? "interrupted" : "runtime", error: detail, retry: !interrupted)
                 }
             }
@@ -291,7 +330,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         session.startRunning()
         guard session.isRunning else { reject(stage: "start", error: "Session did not start"); return }
         installedAt = CACurrentMediaTime()
-        emit("waiting", message: "Stereo: \(plan.name) • waiting for synchronized frames")
+        emit("waiting", message: "Stereo: \(plan.name) • PAIRING ACTIVE (\(phase.rawValue))")
         watch(attempt: attempt)
     }
 
@@ -316,42 +355,80 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     }
 
     private func watch(attempt: Int) {
-        queue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-            guard let self, !self.isCancelled, self.planIndex == attempt, self.current != nil else { return }
+        queue.asyncAfter(deadline: .now() + 0.04) { [weak self] in
+            guard let self, !self.isCancelled, self.attemptID == attempt,
+                  let plan = self.current, let ingress = self.ingress else { return }
             let now = CACurrentMediaTime()
+            let takePair = self.phase != .lateDropProbe && !self.processingBusy
+                && (self.snapshot != nil || (self.downstreamEnabled && !self.captureOnly))
+            let (status, pair) = ingress.read(takePair: takePair, now: now)
+            self.status = status
             if self.overPressure {
                 self.reject(stage: "pressure", error: "Camera pressure rose during capture")
-            } else if !self.session.isRunning {
-                self.reject(stage: "runtime", error: "Session stopped")
-            } else if !self.captureReady && now - self.installedAt >= 2.5 {
-                self.reject(stage: "synchronization", error: "No sustained synchronized delivery: \(self.delivery.rejection)")
-            } else if self.captureReady && (now - self.lastGoodAt > 1 || self.delivery.consecutiveRejected >= 10) {
-                self.reject(stage: "synchronization", error: "Synchronized delivery lost: \(self.delivery.rejection)")
-            } else {
-                if self.captureReady && now - self.lastHealthLog >= 5 {
-                    self.lastHealthLog = now
-                    self.emit("health")
-                }
-                self.watch(attempt: attempt)
+                return
             }
+            if !self.session.isRunning {
+                self.reject(stage: "runtime", error: "Session stopped")
+                return
+            }
+
+            let elapsed = now - self.installedAt
+            let ready = status.ready && status.pairFPS >= max(3, plan.candidate.rate.fps * 0.3)
+            if !self.captureReady && ready {
+                self.captureReady = true
+                self.emit("capture_ready", message: "STEREO CAPTURE READY")
+            }
+            // Brief capture-only baseline on every attempt. A no-drop experiment
+            // remains capture-only and always ends with the default restored.
+            if ready && elapsed >= 0.8 && self.phase != .lateDropProbe { self.downstreamEnabled = true }
+            if self.phase == .lateDropProbe && elapsed >= 1.2 {
+                self.reject(stage: "late_drop_probe", error: status.failure)
+                return
+            }
+            if !self.captureReady && elapsed >= 2.5 {
+                self.reject(stage: "synchronization", error: status.failure)
+                return
+            }
+            if self.captureReady && (status.lastPairHost.map { now - $0 > 1 } ?? true) {
+                self.reject(stage: "synchronization", error: "Synchronized delivery stopped")
+                return
+            }
+            if now - self.lastHealthLog >= (self.captureReady ? 2 : 1) {
+                self.lastHealthLog = now
+                self.emit("health")
+            }
+            if ready, self.downstreamEnabled, let pair { self.processPair(pair, attempt: attempt) }
+            self.watch(attempt: attempt)
         }
     }
 
     private func reject(stage: String, error: String, retry: Bool = true) {
         finalFailure = error
-        let retrying = retry && planIndex < plans.count
-        let name = current.map { "\($0.name), \(String(format: "%.2f", $0.candidate.rate.fps)) FPS" } ?? ""
-        if !isCancelled {
-            emit(stage, error: error)
-            onError("Stereo: \(error) [\(name)]" + (retrying ? " • retrying" : " • reselect Stereo to retry"))
+        let plan = current
+        let late = status?.cameras.contains { ($0.dropped["lateData"] ?? 0) >= 3 } ?? false
+        let samePlanPhases = strategy.phases(probeLateDrops: late || phase == .lateDropProbe)
+        let nextPhase = samePlanPhases.firstIndex(of: phase).flatMap { index in
+            index + 1 < samePlanPhases.count ? samePlanPhases[index + 1] : nil
         }
-        let restored = tearDown()
-        guard restored else {
+        let mayChangePhase = ["start", "runtime", "synchronization", "late_drop_probe"].contains(stage)
+        let next = mayChangePhase ? nextPhase : nil
+        let retrying = retry && CACurrentMediaTime() < negotiationDeadline && (next != nil || planIndex < plans.count)
+        if !isCancelled {
+            emit(stage, message: retrying ? "Stereo: \(error) • trying next configuration" : "", error: error)
+            if captureReady { onReset() }
+        }
+        guard tearDown() else {
             if !isCancelled { onError("Stereo: camera settings could not be restored. Reselect Stereo to retry.") }
             return
         }
         if retrying {
-            queue.async { [weak self] in self?.tryNext() }
+            queue.async { [weak self] in
+                guard let self else { return }
+                if let plan, let next { self.startAttempt(plan, phase: next) }
+                else { self.tryNext() }
+            }
+        } else if !isCancelled {
+            onError("Stereo: \(error). See CSV for attempts.")
         }
     }
 
@@ -362,7 +439,8 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             fps: current.map { String(format: "%.3f", $0.candidate.rate.fps) } ?? "",
             configured: configured, hardware: String(session.hardwareCost), pressure: String(session.systemPressureCost),
             pressureLevel: devices.map { $0.systemPressureState.level.rawValue }.joined(separator: "/"),
-            accepted: delivery.accepted, rejected: delivery.rejected, pairFPS: delivery.fps))
+            accepted: status?.accepted ?? 0, rejected: status?.rejected ?? 0, pairFPS: status?.pairFPS ?? 0,
+            strategy: current == nil ? "" : phase.rawValue, telemetry: status))
     }
 
     func stop(completion: @escaping () -> Void) {
@@ -373,6 +451,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             if self.current != nil { self.emit("stopped") }
             _ = self.tearDown()
             self.plans.removeAll()
+            self.snapshot = nil
             DispatchQueue.main.async(execute: completion)
         }
     }
@@ -381,7 +460,13 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     private func tearDown() -> Bool {
         synchronizer?.setDelegate(nil, queue: nil)
         synchronizer = nil
-        snapshot = nil
+        leftOutput.setSampleBufferDelegate(nil, queue: nil)
+        rightOutput.setSampleBufferDelegate(nil, queue: nil)
+        ingress?.finish()
+        ingress = nil
+        streamDelegates.removeAll()
+        status = nil
+        downstreamEnabled = false
         for observer in observers { NotificationCenter.default.removeObserver(observer) }
         observers.removeAll()
         if session.isRunning { session.stopRunning() }
@@ -392,10 +477,8 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         configured = false
         geometryStatus = ""
         captureSignature.removeAll()
-        delivery = StereoNegotiation.Delivery()
         captureReady = false
         previousPairTime = -.infinity
-        lastGoodAt = 0
         lastHealthLog = 0
         processingMS = 0
         return restored
@@ -475,7 +558,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         input.videoMinFrameDurationOverride = duration
 
         output.videoSettings = [:]
-        output.alwaysDiscardsLateVideoFrames = true
+        output.alwaysDiscardsLateVideoFrames = phase != .lateDropProbe
         guard session.canAddOutput(output) else { throw SetupError("output_\(side)", "Session rejected video output \(side)") }
         session.addOutputWithNoConnections(output)
         guard let port = input.ports.first(where: { $0.mediaType == .video }) else {
@@ -493,56 +576,24 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         }
         output.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: pixelFormat]
         if connection.isVideoOrientationSupported { connection.videoOrientation = .landscapeRight }
-        if connection.isVideoMirroringSupported { connection.isVideoMirrored = false }
+        connection.isEnabled = true
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = false
+        }
         if connection.isVideoStabilizationSupported { connection.preferredVideoStabilizationMode = .off }
         if connection.isCameraIntrinsicMatrixDeliverySupported { connection.isCameraIntrinsicMatrixDeliveryEnabled = true }
         return Self.describe(format, id: 0).signature + "|\(pixelFormat)|landscapeRight|\(device.videoZoomFactor)"
     }
 
-    func dataOutputSynchronizer(_ synchronizer: AVCaptureDataOutputSynchronizer,
-                                didOutput data: AVCaptureSynchronizedDataCollection) {
-        guard synchronizer === self.synchronizer, !isCancelled, session.isRunning else { return }
-        guard !overPressure else { return }
-        guard let left = data.synchronizedData(for: leftOutput) as? AVCaptureSynchronizedSampleBufferData,
-              let right = data.synchronizedData(for: rightOutput) as? AVCaptureSynchronizedSampleBufferData,
-              !left.sampleBufferWasDropped, !right.sampleBufferWasDropped,
-              let a = CMSampleBufferGetImageBuffer(left.sampleBuffer),
-              let b = CMSampleBufferGetImageBuffer(right.sampleBuffer) else {
-            delivery.sample(timestamp: nil, rejection: "Missing or dropped camera buffer")
-            return
-        }
-        guard CVPixelBufferGetPlaneCount(a) == 2, CVPixelBufferGetPlaneCount(b) == 2 else {
-            delivery.sample(timestamp: nil, rejection: "Expected two-plane luma/chroma buffers")
-            return
-        }
-        let original = CMSampleBufferGetPresentationTimeStamp(left.sampleBuffer)
-        let other = CMSampleBufferGetPresentationTimeStamp(right.sampleBuffer)
-        guard let clock = session.synchronizationClock else {
-            delivery.sample(timestamp: nil, rejection: "No session synchronization clock")
-            return
-        }
-        let timestamp = CMSyncConvertTime(original, from: clock, to: CMClockGetHostTimeClock()).seconds
-        let otherTimestamp = CMSyncConvertTime(other, from: clock, to: CMClockGetHostTimeClock()).seconds
-        let receivedAt = CACurrentMediaTime()
-        guard StereoCorrespondence.synchronized(timestamp, otherTimestamp),
-              (-0.05...0.45).contains(receivedAt - timestamp),
-              delivery.last.map({ timestamp > $0 }) ?? true else {
-            delivery.sample(timestamp: nil, rejection: "Stale, nonmonotonic or >8 ms skewed timestamps")
-            return
-        }
-        delivery.sample(timestamp: timestamp)
-        lastGoodAt = receivedAt
-        if !captureReady {
-            guard delivery.ready else { return }
-            captureReady = true
-            lastHealthLog = receivedAt
-            emit("capture_ready", message: "STEREO CAPTURE READY")
-        }
-        guard delivery.ready, timestamp - previousPairTime >= max(0.12, processingMS / 1000 * 2) else { return }
-        guard !processingBusy else { return }
+    private func processPair(_ pair: StereoIngress.Pair, attempt: Int) {
+        let timestamp = pair.a.host
+        guard !processingBusy, (-0.05...0.45).contains(CACurrentMediaTime() - timestamp),
+              snapshot != nil || timestamp - previousPairTime >= max(0.12, processingMS / 1000 * 2) else { return }
         processingBusy = true
         previousPairTime = timestamp
-        let aK = Self.intrinsics(left.sampleBuffer), bK = Self.intrinsics(right.sampleBuffer)
+        let a = pair.a.buffer, b = pair.b.buffer
+        let aK = pair.a.intrinsics, bK = pair.b.intrinsics
         let ext = extrinsics
         let ids = devices.map(\.uniqueID)
         let positions = devices.map(\.lensPosition)
@@ -551,18 +602,20 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         let captureSignature = self.captureSignature
         let width = processingMS > 95 ? 192 : 256
         let pending = snapshot
-        let attempt = planIndex
+        let captureOnly = self.captureOnly
+        let phase = self.phase.rawValue
         processingQueue.async { [weak self] in
             let (frame, url) = Self.process(a, b, timestamp: timestamp, aK: aK, bK: bK, ext: ext,
                 ids: ids, positions: positions, focused: focused, calibration: calibration,
-                captureSignature: captureSignature, width: width, export: pending != nil)
+                captureSignature: captureSignature, width: width, export: pending != nil,
+                captureOnly: captureOnly, pair: pair, strategy: phase)
             guard let self else {
                 if let url { try? FileManager.default.removeItem(at: url) }
                 return
             }
             self.queue.async {
                 self.processingBusy = false
-                guard !self.isCancelled, self.planIndex == attempt, self.captureReady, self.delivery.ready,
+                guard !self.isCancelled, self.attemptID == attempt, self.captureReady, self.status?.ready == true,
                       self.current != nil, !self.overPressure else {
                     if let url { try? FileManager.default.removeItem(at: url) }
                     return
@@ -578,7 +631,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 } else if let url {
                     try? FileManager.default.removeItem(at: url)
                 }
-                self.onFrame(frame, a)
+                if !captureOnly { self.onFrame(frame, a) }
             }
         }
     }
@@ -586,9 +639,11 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
     private static func process(_ a: CVPixelBuffer, _ b: CVPixelBuffer, timestamp: Double,
                                 aK: simd_float3x3?, bK: simd_float3x3?, ext: simd_float4x3?,
                                 ids: [String], positions: [Float], focused: Bool, calibration: StereoCalibration?,
-                                captureSignature: [String], width: Int, export: Bool) -> (DepthFrame, URL?) {
+                                captureSignature: [String], width: Int, export: Bool, captureOnly: Bool,
+                                pair: StereoIngress.Pair, strategy: String) -> (DepthFrame, URL?) {
         let began = CACurrentMediaTime()
         var exportURL: URL?
+        var preview: StereoDisparityPreview?
         let geometry = DepthGeometry(width: CVPixelBufferGetHeight(a), height: CVPixelBufferGetWidth(a),
                                      fx: aK?.columns.1.y ?? .nan,
                                      cx: Float(CVPixelBufferGetHeight(a) - 1) - (aK?.columns.2.y ?? .nan))
@@ -598,7 +653,8 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         let mapHeight = 64
         var cm = [Float](repeating: .nan, count: mapWidth * mapHeight)
         var confidence = [UInt8](repeating: 0, count: cm.count)
-        if let ext, let aK, let bK, let rect = StereoCalibration.rectification(ext) {
+        var exportedDisparity: (pixels: [Float?], width: Int, height: Int, focal: Float)?
+        if !captureOnly, let ext, let aK, let bK, let rect = StereoCalibration.rectification(ext) {
 
             let verified = calibration.flatMap { profile -> StereoCalibration? in
                 guard profile.matchesCapture(captureSignature),
@@ -620,6 +676,7 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 let brightEnough = !brightnessSamples.isEmpty
                     && brightnessSamples.reduce(0, +) >= 12 * brightnessSamples.count
                 var disparities: [Float] = []
+                var disparityImage = [UInt8](repeating: 0, count: w * h)
                 var disparityGrid = !export ? [] : [Float?](repeating: nil, count: w * h)
                 let step = w == 256 ? 3 : 2
                 for row in stride(from: 2, to: h - 2, by: step) {
@@ -627,6 +684,10 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                         guard let d = StereoCorrespondence.matchDisparity(left: first, right: second,
                             width: w, height: h, x: col, y: row, maxShift: search) else { continue }
                         disparities.append(d)
+                        let intensity = UInt8(min(255, max(24, Int(d / Float(search) * 255))))
+                        for dy in 0..<step {
+                            for dx in 0..<step { disparityImage[(row + dy) * w + col + dx] = intensity }
+                        }
                         if !disparityGrid.isEmpty { disparityGrid[row * w + col] = d }
                         guard brightEnough, let verified, d >= 1.5 else { continue }
                         let rectDepth = StereoCorrespondence.depthCM(focalPixels: focal, baselineMM: verified.baselineMM, subpixelDisparity: d)
@@ -650,23 +711,28 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
                 let cells = confidence.filter { $0 > 0 }.count
                 let median = matched > 0 ? String(format: "%.2f", disparities[matched / 2]) : "N/A"
                 let range = matched > 0 ? String(format: "%.1f–%.1f", disparities[0], disparities[matched - 1]) : "N/A"
-                let calibrationStatus = verified == nil ? "Unverified calibration" : "Verified profile"
-                detail = "\(calibrationStatus) • disparity \(median) px [\(range)] • \(matched) matches"
-                if export {
-                    exportURL = Self.exportPair(a, b, ids: ids, positions: positions, aK: aK, bK: bK, ext: ext,
-                        timestamp: timestamp, disparity: disparityGrid, width: w, height: h, focal: focal,
-                        captureSignature: captureSignature)
-                }
+                let calibrationStatus = verified == nil ? "CALIBRATION REQUIRED" : "Verified profile"
+                if matched > 0 { preview = StereoDisparityPreview(width: w, height: h, pixels: Data(disparityImage)) }
+                let disparityStatus = matched > 0 ? "DISPARITY READY" : "Disparity unavailable"
+                detail = "\(calibrationStatus) • \(disparityStatus) • disparity \(median) px [\(range)] • \(matched) matches"
+                if export { exportedDisparity = (disparityGrid, w, h, focal) }
                 if verified != nil {
-                    if cells >= mapWidth * mapHeight / 10 { error = nil }
+                    if cells >= mapWidth * mapHeight / 10 {
+                        error = nil
+                        detail = "METRIC DEPTH READY • " + detail
+                    }
                     else { error = brightEnough ? "Distance unavailable: low texture or overlap" : "Distance unavailable: low light" }
                 }
             }
         }
+        if export {
+            exportURL = Self.exportPair(pair, ids: ids, positions: positions, ext: ext,
+                disparity: exportedDisparity, captureSignature: captureSignature, strategy: strategy)
+        }
         let frame = DepthFrame(source: .stereo, timestamp: timestamp, geometry: geometry,
             width: mapWidth, height: mapHeight, centimeters: cm, confidence: confidence,
             detail: "Capture ready • " + detail, error: error,
-            captureProcessingMS: (CACurrentMediaTime() - began) * 1000)
+            captureProcessingMS: (CACurrentMediaTime() - began) * 1000, stereoDisparity: preview)
         return (frame, exportURL)
     }
 
@@ -682,11 +748,12 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
         }
     }
 
-    private static func exportPair(_ a: CVPixelBuffer, _ b: CVPixelBuffer, ids: [String],
-                                   positions: [Float], aK: simd_float3x3, bK: simd_float3x3,
-                                   ext: simd_float4x3, timestamp: Double, disparity: [Float?],
-                                   width: Int, height: Int, focal: Float, captureSignature: [String]) -> URL? {
-        func image(_ buffer: CVPixelBuffer, k: simd_float3x3, position: Float) -> [String: Any]? {
+    private static func exportPair(_ pair: StereoIngress.Pair, ids: [String], positions: [Float],
+                                   ext: simd_float4x3?,
+                                   disparity: (pixels: [Float?], width: Int, height: Int, focal: Float)?,
+                                   captureSignature: [String], strategy: String) -> URL? {
+        func image(_ sample: StereoIngress.Image, position: Float) -> [String: Any]? {
+            let buffer = sample.buffer
             guard CVPixelBufferIsPlanar(buffer),
                   CVPixelBufferLockBaseAddress(buffer, .readOnly) == kCVReturnSuccess else { return nil }
             defer { CVPixelBufferUnlockBaseAddress(buffer, .readOnly) }
@@ -695,32 +762,33 @@ final class StereoCapture: NSObject, AVCaptureDataOutputSynchronizerDelegate {
             let stride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
             var pgm = Data("P5\n\(w) \(h)\n255\n".utf8)
             for y in 0..<h { pgm.append(base.advanced(by: y * stride).assumingMemoryBound(to: UInt8.self), count: w) }
-            return ["width": w, "height": h, "intrinsics": [k.columns.0.x, k.columns.1.y, k.columns.2.x, k.columns.2.y],
-                    "position": position, "pgmBase64": pgm.base64EncodedString()]
+            var result: [String: Any] = ["width": w, "height": h, "pixelFormat": CVPixelBufferGetPixelFormatType(buffer),
+                "position": position, "pgmBase64": pgm.base64EncodedString(), "rawSeconds": sample.raw, "hostSeconds": sample.host]
+            if let k = sample.intrinsics {
+                result["intrinsics"] = [k.columns.0.x, k.columns.1.y, k.columns.2.x, k.columns.2.y]
+            }
+            return result
         }
-        guard let left = image(a, k: aK, position: positions[0]), let right = image(b, k: bK, position: positions[1]) else { return nil }
-        let transform = (0..<4).map { i in [ext[i].x, ext[i].y, ext[i].z] }
+        guard let left = image(pair.a, position: positions[0]), let right = image(pair.b, position: positions[1]) else { return nil }
+        var payload: [String: Any] = ["pair": ids, "left": left, "right": right, "strategy": strategy,
+            "captureSeconds": pair.a.host, "skewMS": (pair.b.host - pair.a.host) * 1000, "captureSignature": captureSignature]
+        if let ext { payload["factoryExtrinsicsColumnsMM"] = (0..<4).map { i in [ext[i].x, ext[i].y, ext[i].z] } }
+        if let disparity {
+            payload["rectifiedWidth"] = disparity.width
+            payload["rectifiedHeight"] = disparity.height
+            payload["rectifiedFocalPx"] = disparity.focal
+            payload["disparityPx"] = disparity.pixels.map { $0.map { NSNumber(value: $0) as Any } ?? NSNull() }
+        }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("stereo-\(UUID()).json")
         do {
-            let data = try JSONSerialization.data(withJSONObject: ["pair": ids, "left": left, "right": right,
-                "captureSeconds": timestamp, "factoryExtrinsicsColumnsMM": transform,
-                "captureSignature": captureSignature, "rectifiedWidth": width, "rectifiedHeight": height, "rectifiedFocalPx": focal,
-                "disparityPx": disparity.map { $0.map { NSNumber(value: $0) as Any } ?? NSNull() }])
-            try data.write(to: url, options: .atomic)
+            try JSONSerialization.data(withJSONObject: payload).write(to: url, options: .atomic)
             return url
-        } catch {
-            return nil
-        }
+        } catch { return nil }
     }
 
     private static func matrix<T>(_ data: Data?, as type: T.Type) -> T? {
         guard let data, data.count == MemoryLayout<T>.size else { return nil }
         return data.withUnsafeBytes { $0.loadUnaligned(as: type) }
-    }
-
-    private static func intrinsics(_ sample: CMSampleBuffer) -> simd_float3x3? {
-        let attachment = CMGetAttachment(sample, key: kCMSampleBufferAttachmentKey_CameraIntrinsicMatrix, attachmentModeOut: nil)
-        return matrix(attachment as? Data, as: simd_float3x3.self)
     }
 
     private static func rectRay(x: Int, y: Int, w: Int, h: Int, focal: Float) -> SIMD3<Float> {

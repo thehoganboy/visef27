@@ -32,6 +32,12 @@ struct DepthGeometry {
     var isValid: Bool { width > 0 && height > 0 && fx.isFinite && fx > 0 && cx.isFinite && cx > 0 && cx < Float(width) }
 }
 
+struct StereoDisparityPreview {
+    let width: Int
+    let height: Int
+    let pixels: Data
+}
+
 struct DepthFrame {
     let source: DepthMode
     let timestamp: Double
@@ -43,6 +49,7 @@ struct DepthFrame {
     let detail: String
     var error: String? = nil
     var captureProcessingMS: Double = 0
+    var stereoDisparity: StereoDisparityPreview?
 
     var strongCoverage: Double? {
         guard !confidence.isEmpty, confidence.count == centimeters.count else { return nil }

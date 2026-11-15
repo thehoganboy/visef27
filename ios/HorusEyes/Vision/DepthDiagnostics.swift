@@ -73,16 +73,18 @@ final class DepthDiagnostics {
     }()
 
     func recordStereo(_ event: StereoCapture.Event) {
+        let json = event.telemetry.flatMap { try? JSONEncoder().encode($0) }
+            .flatMap { String(data: $0, encoding: .utf8) } ?? ""
         append(["stereo_capture", DepthMode.stereo.rawValue, "", "", "", "", "", "", "", event.message, "",
                 event.error, "", deviceModel, UIDevice.current.systemVersion, event.pair, event.formatA, event.formatB,
                 event.fps, String(event.configured), event.hardware, event.pressure, event.pressureLevel,
-                event.stage, String(event.accepted), String(event.rejected), number(event.pairFPS)])
+                event.stage, String(event.accepted), String(event.rejected), number(event.pairFPS), event.strategy, json])
     }
 
     func export() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             "vampior-\(UUID().uuidString).csv")
-        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction,device_model,ios_version,camera_pair,format_a,format_b,requested_fps,configured,hardware_cost,pressure_cost,pressure_level,capture_stage,accepted_pairs,rejected_pairs,pair_fps"
+        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction,device_model,ios_version,camera_pair,format_a,format_b,requested_fps,configured,hardware_cost,pressure_cost,pressure_level,capture_stage,accepted_pairs,rejected_pairs,pair_fps,capture_strategy,delivery_telemetry_json"
         try ([header] + rows).joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
         return url
     }
@@ -94,7 +96,7 @@ final class DepthDiagnostics {
     private let dateFormatter = ISO8601DateFormatter()
 
     private func append(_ fields: [String]) {
-        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 27 - fields.count))
+        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 29 - fields.count))
         rows.append(values.map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ","))
         if rows.count > 6000 { rows.removeFirst(500) }
     }
