@@ -18,12 +18,17 @@ struct StereoCalibrationTests {
         precondition(lens.matches(width: 480, height: 360, intrinsics: k, position: 0.5))
         precondition(!lens.matches(width: 480, height: 360, intrinsics: k, position: 0.6))
         precondition((lens.project(SIMD3(0.5, 0, 1), k: k)?.x ?? 0) > 390)
-        let profile = StereoCalibration(pair: ["wide", "ultra"], left: lens, right: lens, baselineMM: 20,
+        var profile = StereoCalibration(pair: ["wide", "ultra"], left: lens, right: lens, baselineMM: 20,
             reprojectionRMSPx: 0.3, epipolarRMSPx: 0.5,
             references: [Float(50), 100, 200, 300].map { .init(measuredCM: $0, stereoCM: $0) })
         precondition(profile.verified(for: ["wide", "ultra"], factoryBaselineMM: 20))
         precondition(!profile.verified(for: ["wide", "tele"], factoryBaselineMM: 20))
         precondition(!profile.verified(for: ["wide", "ultra"], factoryBaselineMM: 50))
+        precondition(!profile.matchesCapture(["A", "B"]))
+        profile.captureSignature = ["A", "B"]
+        precondition(profile.matchesCapture(["A", "B"]))
+        precondition(!profile.matchesCapture(["A", "changed geometry"]))
+        precondition(!profile.matchesCapture(["B", "A"]))
         let errors = [Float(50), 100, 200, 300].map { truth -> Float in
             let disparity = 300 * 2 / truth
             return StereoCorrespondence.depthCM(focalPixels: 300, baselineMM: 20, subpixelDisparity: disparity) - truth
@@ -31,6 +36,6 @@ struct StereoCalibrationTests {
         let mae = errors.map(abs).reduce(0, +) / Float(errors.count)
         let rmse = sqrt(errors.map { $0 * $0 }.reduce(0, +) / Float(errors.count))
         precondition(mae < 0.001 && rmse < 0.001)
-        print("PASS 10 stereo geometry checks. Synthetic projection fixture MAE \(mae) cm, RMSE \(rmse) cm.")
+        print("PASS 14 stereo geometry checks. Synthetic projection fixture MAE \(mae) cm, RMSE \(rmse) cm.")
     }
 }

@@ -72,7 +72,7 @@ final class DemoController: ObservableObject {
         case .lidar:
             return mode.unavailableReason(hasHardware: LiDARCapture.supported)
         case .stereo:
-            return mode.unavailableReason(hasHardware: StereoCapture.supported)
+            return StereoCapture.unsupportedReason
         }
     }
 
@@ -152,7 +152,10 @@ final class DemoController: ObservableObject {
             let fail: (String) -> Void = { [weak self] reason in
                 DispatchQueue.main.async {
                     guard let self, self.captureEpoch == captureToken else { return }
-                    if self.diagnostics != reason { self.sourceFailed(reason) }
+                    if self.diagnostics != reason {
+                        self.sourceFailed(reason)
+                        self.preview = nil
+                    }
                 }
             }
             if selected == .lidar {
@@ -160,7 +163,14 @@ final class DemoController: ObservableObject {
                 self.lidar = source
                 source.start()
             } else {
-                let source = StereoCapture(onFrame: receive, onError: fail)
+                let source = StereoCapture(onFrame: receive, onError: fail) { [weak self] event in
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        self.journal.recordStereo(event)
+                        guard self.captureEpoch == captureToken else { return }
+                        if !event.message.isEmpty { self.diagnostics = event.message }
+                    }
+                }
                 self.stereo = source
                 source.start()
             }
@@ -333,7 +343,7 @@ final class DemoController: ObservableObject {
         let now = CACurrentMediaTime()
         if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) {
             if mode == .midas { fault() }
-            else if threat != "UNAVAILABLE" || result != nil { sourceFailed("Depth frames timed out") }
+            else if mode == .lidar, threat != "UNAVAILABLE" || result != nil { sourceFailed("Depth frames timed out") }
         }
         // Preview remains live; stale boxes must disappear independently of frames.
         if now-sourceTimestamp > 0.25 { result = nil }
@@ -428,6 +438,8 @@ final class DemoController: ObservableObject {
         camera.setGuidanceActive(false)
         camera.forceTorchOff()
         setActive(false); timer?.invalidate(); timer = nil
+        preview = nil
+        diagnostics = ""
         restartCapture(); imu.stopMotionTracking(); audio.stop()
     }
 }

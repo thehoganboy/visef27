@@ -75,9 +75,9 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     }
 
     // ── Safe Lazy Session Setup ───────────────────────────────────────────────
-    private func setupCaptureSessionIfNeeded(completion: @escaping () -> Void) {
+    private func setupCaptureSessionIfNeeded(request: Int, completion: @escaping () -> Void) {
         sessionQueue.async { [weak self] in
-            guard let self = self else { return }
+            guard let self, self.wantsCapture, self.captureRequest == request else { return }
             guard !self.isSessionConfigured else {
                 completion()
                 return
@@ -182,7 +182,7 @@ final class CameraTorchManager: NSObject, ObservableObject, AVCaptureVideoDataOu
     }
 
     private func prepareCapture(request: Int) {
-        setupCaptureSessionIfNeeded { [weak self] in
+        setupCaptureSessionIfNeeded(request: request) { [weak self] in
             guard let self else { return }
             self.sessionQueue.async {
                 guard self.wantsCapture, self.captureRequest == request, !self.captureSession.isRunning else { return }

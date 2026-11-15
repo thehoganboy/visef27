@@ -1,4 +1,5 @@
 import Foundation
+import UIKit
 
 final class DepthDiagnostics {
     private var rows: [String] = []
@@ -63,10 +64,25 @@ final class DepthDiagnostics {
                 number(Double(observation?.sectorDists["CENTER"] ?? .nan)), frame.detail, "", frame.error ?? "", frame.strongCoverage.map(number) ?? ""])
     }
 
+    private lazy var deviceModel: String = {
+        var info = utsname()
+        guard uname(&info) == 0 else { return UIDevice.current.model }
+        return withUnsafeBytes(of: &info.machine) { bytes in
+            String(decoding: bytes.prefix { $0 != 0 }, as: UTF8.self)
+        }
+    }()
+
+    func recordStereo(_ event: StereoCapture.Event) {
+        append(["stereo_capture", DepthMode.stereo.rawValue, "", "", "", "", "", "", "", event.message, "",
+                event.error, "", deviceModel, UIDevice.current.systemVersion, event.pair, event.formatA, event.formatB,
+                event.fps, String(event.configured), event.hardware, event.pressure, event.pressureLevel,
+                event.stage, String(event.accepted), String(event.rejected), number(event.pairFPS)])
+    }
+
     func export() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             "vampior-\(UUID().uuidString).csv")
-        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction"
+        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction,device_model,ios_version,camera_pair,format_a,format_b,requested_fps,configured,hardware_cost,pressure_cost,pressure_level,capture_stage,accepted_pairs,rejected_pairs,pair_fps"
         try ([header] + rows).joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
         return url
     }
@@ -78,7 +94,7 @@ final class DepthDiagnostics {
     private let dateFormatter = ISO8601DateFormatter()
 
     private func append(_ fields: [String]) {
-        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 13 - fields.count))
+        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 27 - fields.count))
         rows.append(values.map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ","))
         if rows.count > 6000 { rows.removeFirst(500) }
     }

@@ -30,6 +30,8 @@ jobs:
           /tmp/depth-prototype
           swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoCalibration.swift ios/tests/StereoCalibrationTests.swift -o /tmp/stereo-calibration
           /tmp/stereo-calibration
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoNegotiation.swift ios/tests/StereoNegotiationTests.swift -o /tmp/stereo-negotiation
+          /tmp/stereo-negotiation
 
       - name: Set up Python 3.10
         uses: actions/setup-python@v5

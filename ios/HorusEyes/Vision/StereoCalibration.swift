@@ -40,6 +40,11 @@ struct StereoCalibration: Codable {
     let reprojectionRMSPx: Float
     let epipolarRMSPx: Float
     let references: [Reference]
+    var captureSignature: [String]? = nil
+
+    func matchesCapture(_ signature: [String]) -> Bool {
+        signature.count == 2 && captureSignature == signature
+    }
 
     func verified(for pair: [String], factoryBaselineMM: Float) -> Bool {
         self.pair == pair && pair.count == 2 && pair[0] != pair[1]
