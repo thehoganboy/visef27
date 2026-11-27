@@ -87,13 +87,13 @@ import Foundation
     static func loadGoldenScenarios() -> [[String: Any]]? {
         let cwd = FileManager.default.currentDirectoryPath
         var candidates: [String] = [
-            "tests/golden_directional_scenarios.json",
-            "\(cwd)/tests/golden_directional_scenarios.json",
-            "../tests/golden_directional_scenarios.json",
-            "../../tests/golden_directional_scenarios.json"
+            "data/fixtures/golden_directional_scenarios.json",
+            "\(cwd)/data/fixtures/golden_directional_scenarios.json",
+            "../data/fixtures/golden_directional_scenarios.json",
+            "../../data/fixtures/golden_directional_scenarios.json"
         ]
         if let ghWs = ProcessInfo.processInfo.environment["GITHUB_WORKSPACE"] {
-            candidates.insert("\(ghWs)/tests/golden_directional_scenarios.json", at: 0)
+            candidates.insert("\(ghWs)/data/fixtures/golden_directional_scenarios.json", at: 0)
         }
         for path in candidates {
             let url = URL(fileURLWithPath: path)
