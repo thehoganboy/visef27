@@ -57,6 +57,8 @@ import Foundation
 
     static func main() {
         nativeMetricDepthTests()
+        finalIntegrationScenarios()
+        metricTrackingReplay()
         let kin = KinematicsEngine(), budget = AuditoryBudgetManager()
         for i in 1...12 {
             let result = kin.compute(obstacleResult: obs(),frameId: UInt64(i),timestamp: 10+Double(i)*0.1,aeSettleRemaining: 0)
@@ -82,6 +84,118 @@ import Foundation
         testFinalDeviceReadinessAudioSync()
         testObstacleAvoidanceHotfixScenarios()
         testCenterCorridorFirstHotfixScenarios()
+    }
+
+    static func finalIntegrationScenarios() {
+        let w = 48, h = 64
+        let g = DepthGeometry(width: 480, height: 640, fx: 420, cx: 240)
+        func evidence(_ source: DepthMode, at timestamp: Double, confidence: UInt8 = 2,
+                      calibrated: Bool = true, _ sample: (Int, Int) -> Float) -> DepthFrame {
+            let values = (0..<(w * h)).map { sample($0 % w, $0 / w) }
+            return DepthFrame(source: source, timestamp: timestamp, geometry: g, width: w, height: h,
+                centimeters: values, confidence: Array(repeating: confidence, count: values.count), detail: "Synthetic",
+                stereoUncertaintyCM: source == .stereo ? Array(repeating: 2, count: values.count) : [],
+                stereoCalibration: calibrated ? .profileValidated : .invalid)
+        }
+        for mode in DepthMode.allCases {
+            // Exercise equivalent metric evidence downstream in all modes. The
+            // separate raw tensor tests exercise the MiDaS production adapter.
+            var coordinator = AdvisoryCoordinator()
+            let kin = KinematicsEngine()
+            let budget = AuditoryBudgetManager()
+            func decide(_ frame: DepthFrame, _ id: UInt64, now: Double? = nil, yaw: Float = 0)
+                -> (DirectionalAdvisory, BudgetDecision) {
+                let obs = frame.spatialObservation()
+                let risk = kin.compute(obstacleResult: obs, frameId: id, timestamp: frame.timestamp,
+                    aeSettleRemaining: 0, imuYawRateRadS: yaw)
+                let adv = coordinator.decide(source: mode, observation: obs, risk: risk,
+                    now: now ?? frame.timestamp + 0.05, yawRate: yaw, previousAngle: nil)
+                return (adv, budget.coordinate(obstacleResult: obs, kinematicsResult: risk, advisory: adv))
+            }
+            let first = decide(evidence(mode, at: 10) { _, _ in 210 }, 1).0
+            precondition(first.status == (mode == .stereo ? .unavailable : .available))
+            precondition(decide(evidence(mode, at: 10.1) { _, _ in 210 }, 2).0.status == .available)
+
+            let near = evidence(mode, at: 10.2) { x, y in
+                (21..<27).contains(x) && (18..<32).contains(y) ? 20 : .nan
+            }
+            let (stop, alert) = decide(near, 3)
+            precondition(stop.status == .stop && alert.isActive && alert.safeDirection == "STOP")
+            precondition(!stop.isFreshStop(now: 11.1))
+            let unknown = decide(evidence(mode, at: 10.3) { _, _ in .nan }, 4)
+            precondition(unknown.0.status == .unavailable && unknown.1.cueMode == "SYSTEM_FAULT_TONE")
+            precondition(decide(evidence(mode, at: 10.4) { _, _ in 210 }, 5, now: 11.2).0.status == .unavailable)
+
+            if mode != .midas {
+                let invalid = evidence(mode, at: 11, confidence: 255) { _, _ in 210 }
+                precondition(invalid.coverage == 0 && !invalid.spatialObservation().isValid)
+            }
+            if mode == .lidar {
+                let pole = evidence(mode, at: 11) { x, y in x == 24 && (17..<36).contains(y) ? 20 : 210 }
+                precondition(pole.spatialObservation().allObstacles.contains { $0.bbox.w == 10 && $0.distCM == 20 })
+                let wall = evidence(mode, at: 11) { _, _ in 85 }
+                precondition(wall.spatialObservation().allObstacles.first?.isWall == true)
+            }
+            if mode == .stereo {
+                let invalid = evidence(mode, at: 11, calibrated: false) { _, _ in 210 }
+                precondition(invalid.calibration == .invalid && invalid.coverage == 0 && !invalid.spatialObservation().isValid)
+                let moving = decide(evidence(mode, at: 11.1) { _, _ in 210 }, 6, yaw: 0.4)
+                precondition(moving.0.status == .unavailable)
+            }
+        }
+        var epoch = DepthSourceEpoch()
+        var old = epoch.value
+        for _ in 0..<8 {
+            epoch.invalidate()
+            precondition(!epoch.accepts(old, timestamp: 10, now: 10.1, after: 0))
+            old = epoch.value
+            precondition(epoch.accepts(old, timestamp: 10, now: 10.1, after: 9))
+            precondition(!epoch.accepts(old, timestamp: 10, now: 10.1, after: 10))
+        }
+        print("PASS shared replay: clearance, sparse immediate STOP, unknown/stale, confidence, profile, wall, pole, motion and epoch rejection")
+    }
+
+    static func metricTrackingReplay() {
+        func sample(_ x: Int, _ depth: Float, width: Int = 42) -> SingleObstacle {
+            SingleObstacle(id: x, x: x + width / 2, y: 150, bbox: (x, 110, width, 80),
+                pan: 0, proximity: 0.5, distCM: depth, modeText: "Fixture", uncertaintyScore: 0.18, isWall: false)
+        }
+        let size = CGSize(width: 480, height: 640)
+        var tracker = MetricObstacleTracker()
+        let samples = [sample(160, 94), sample(165, 90), sample(157, 97), sample(168, 91),
+                       sample(155, 96), sample(163, 92), sample(160, 94), sample(167, 90)]
+        var output: [MetricObstacleTracker.Track] = []
+        for (i, input) in samples.enumerated() {
+            let visible = tracker.update([input], timestamp: 10 + Double(i) * 0.08, imageSize: size, yawRate: 0)
+            precondition(visible.observations.first?.distCM == input.distCM)
+            output.append(visible.display[0])
+        }
+        func changes<T: Equatable>(_ ids: [T]) -> Int { zip(ids, ids.dropFirst()).filter { $0.0 != $0.1 }.count }
+        func jitter(_ values: [Double]) -> Double {
+            zip(values, values.dropFirst()).map { abs($0.0 - $0.1) }.reduce(0, +) / Double(values.count - 1)
+        }
+        let rawJitter = jitter(samples.map { Double($0.bbox.x) })
+        let filteredJitter = jitter(output.map { Double($0.box.minX) })
+        let rawDepthJitter = jitter(samples.map { Double($0.distCM) })
+        let filteredDepthJitter = jitter(output.map { Double($0.distanceCM) })
+        precondition(changes(samples.map(\.id)) == 7 && changes(output.map(\.id)) == 0)
+        precondition(filteredJitter < rawJitter && filteredDepthJitter < rawDepthJitter)
+        let hidden = tracker.update([], timestamp: 10.65, imageSize: size, yawRate: 0)
+        precondition(hidden.display.isEmpty)
+        let recovered = tracker.update([sample(163, 92)], timestamp: 10.76, imageSize: size, yawRate: 0)
+        precondition(recovered.display.first?.id == output.last?.id)
+        let expired = tracker.update([sample(163, 92)], timestamp: 11.3, imageSize: size, yawRate: 0)
+        precondition(expired.display.first?.id != output.last?.id)
+        _ = tracker.update([sample(165, 36)], timestamp: 11.4, imageSize: size, yawRate: 0)
+        let critical = tracker.update([sample(166, 20)], timestamp: 11.5, imageSize: size, yawRate: 0)
+        precondition(critical.display.first?.distanceCM == 20 && critical.display.first?.isCritical == true)
+        let split = tracker.update([sample(165, 21, width: 18), sample(189, 22, width: 18)],
+                                   timestamp: 11.6, imageSize: size, yawRate: 0)
+        precondition(split.display.count == 2 && Set(split.display.map(\.id)).contains(critical.display[0].id))
+        let merged = tracker.update([sample(165, 21)], timestamp: 11.7, imageSize: size, yawRate: 0)
+        precondition(merged.display.count == 1)
+        print(String(format: "SYNTHETIC tracker 8 frames: ID switches 7 -> 0, box X jitter %.2f -> %.2f px, distance jitter %.2f -> %.2f cm",
+                     rawJitter, filteredJitter, rawDepthJitter, filteredDepthJitter))
     }
 
     static func loadGoldenScenarios() -> [[String: Any]]? {

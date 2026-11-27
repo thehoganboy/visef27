@@ -181,6 +181,7 @@ final class StereoCapture: NSObject {
     private let captureOnly: Bool
     private let motionRate: () -> Float
     private var depthRequested: Bool
+    private var calibrationPreview: Bool
     let onReset: () -> Void
     private var devices: [AVCaptureDevice] = []
     private var extrinsics: simd_float4x3?
@@ -190,8 +191,10 @@ final class StereoCapture: NSObject {
     private var profileLoadFailure: String?
     private var profileFailure: String?
     private var acquisitionFocusLocked = false
-    private var snapshot: (id: UUID, calibration: Bool, completion: (URL?) -> Void)?
+    private var snapshot: (id: UUID, calibration: Bool, completion: (URL?, StereoCalibrationQuality?) -> Void)?
     private var processingMS: Double = 0
+    private var matchWidth = 320
+    private var tierRun = 0
     private var previousPairTime = -Double.infinity
     private var cameraState: [(device: AVCaptureDevice, format: AVCaptureDevice.Format,
                                min: CMTime, max: CMTime, focus: AVCaptureDevice.FocusMode,
@@ -214,7 +217,7 @@ final class StereoCapture: NSObject {
 
     init(onFrame: @escaping (DepthFrame, CVPixelBuffer?) -> Void,
          onError: @escaping (String) -> Void, strategy: StereoDeliveryStrategy, captureOnly: Bool,
-         depthRequested: Bool, motionRate: @escaping () -> Float,
+         depthRequested: Bool, calibrationPreview: Bool, motionRate: @escaping () -> Float,
          onReset: @escaping () -> Void, onEvent: @escaping (Event) -> Void) {
         self.onFrame = onFrame
         self.onError = onError
@@ -222,12 +225,17 @@ final class StereoCapture: NSObject {
         self.strategy = strategy
         self.captureOnly = captureOnly
         self.depthRequested = depthRequested
+        self.calibrationPreview = calibrationPreview
         self.motionRate = motionRate
         self.onReset = onReset
     }
 
     func setDepthRequested(_ value: Bool) {
         queue.async { self.depthRequested = value }
+    }
+
+    func setCalibrationPreview(_ value: Bool) {
+        queue.async { self.calibrationPreview = value }
     }
 
     private var isCancelled: Bool {
@@ -473,6 +481,7 @@ final class StereoCapture: NSObject {
             if self.current != nil { self.emit("stopped") }
             _ = self.tearDown()
             self.plans.removeAll()
+            if let pending = self.snapshot { DispatchQueue.main.async { pending.completion(nil, nil) } }
             self.snapshot = nil
             DispatchQueue.main.async(execute: completion)
         }
@@ -504,6 +513,8 @@ final class StereoCapture: NSObject {
         previousPairTime = -.infinity
         lastHealthLog = 0
         processingMS = 0
+        matchWidth = 320
+        tierRun = 0
         return restored
     }
 
@@ -528,6 +539,8 @@ final class StereoCapture: NSObject {
             if calibration?.pair == devices.map(\.uniqueID), let position = lens?.position,
                (0...1).contains(position), device.isLockingFocusWithCustomLensPositionSupported {
                 device.setFocusModeLocked(lensPosition: position)
+            } else {
+                device.focusMode = .locked
             }
             device.unlockForConfiguration()
         }
@@ -636,18 +649,20 @@ final class StereoCapture: NSObject {
         let focused = devices.allSatisfy { !$0.isAdjustingFocus }
         let calibration = self.calibration
         let captureSignature = self.captureSignature
-        let width = processingMS > 145 ? 256 : 320
+        let width = matchWidth
         let profileFailure = self.profileFailure
         let pending = snapshot
         let captureOnly = self.captureOnly
         let solveDepth = (depthRequested || pending?.calibration == false) && !captureOnly
         let yawRate = motionRate()
+        let screenCalibration = calibrationPreview || pending?.calibration == true
         let phase = self.phase.rawValue
         processingQueue.async { [weak self] in
             let (frame, url) = Self.process(a, b, timestamp: timestamp, aK: aK, bK: bK, ext: ext,
                 ids: ids, positions: positions, focused: focused, calibration: calibration,
                 captureSignature: captureSignature, width: width, export: pending != nil,
-                captureOnly: captureOnly, solveDepth: solveDepth, yawRate: yawRate, pair: pair,
+                captureOnly: captureOnly, solveDepth: solveDepth, screenCalibration: screenCalibration,
+                yawRate: yawRate, pair: pair,
                 strategy: phase, profileFailure: profileFailure,
                 calibrationShot: pending?.calibration == true)
             guard let self else {
@@ -662,13 +677,21 @@ final class StereoCapture: NSObject {
                     return
                 }
                 self.processingMS = frame.captureProcessingMS
+                if let timing = frame.stereoMetrics, timing.matchingMS > 0 {
+                    let shouldChange = self.matchWidth == 320 ? frame.captureProcessingMS > 145 : frame.captureProcessingMS < 85
+                    self.tierRun = shouldChange ? self.tierRun + 1 : 0
+                    if self.tierRun >= (self.matchWidth == 320 ? 3 : 8) {
+                        self.matchWidth = self.matchWidth == 320 ? 256 : 320
+                        self.tierRun = 0
+                    }
+                }
                 if frame.detail.contains("Intrinsics or extrinsics unavailable"), self.geometryStatus != frame.detail {
                     self.emit("geometry_unavailable", error: frame.detail)
                 }
                 self.geometryStatus = frame.detail
                 if let pending, self.snapshot?.id == pending.id, let url {
                     self.snapshot = nil
-                    DispatchQueue.main.async { pending.completion(url) }
+                    DispatchQueue.main.async { pending.completion(url, frame.calibrationQuality) }
                 } else if let url {
                     try? FileManager.default.removeItem(at: url)
                 }
@@ -681,7 +704,7 @@ final class StereoCapture: NSObject {
                                 aK: simd_float3x3?, bK: simd_float3x3?, ext: simd_float4x3?,
                                 ids: [String], positions: [Float], focused: Bool, calibration: StereoCalibration?,
                                 captureSignature: [String], width: Int, export: Bool, captureOnly: Bool,
-                                solveDepth: Bool, yawRate: Float, pair: StereoIngress.Pair,
+                                solveDepth: Bool, screenCalibration: Bool, yawRate: Float, pair: StereoIngress.Pair,
                                 strategy: String, profileFailure: String?,
                                 calibrationShot: Bool) -> (DepthFrame, URL?) {
         let began = CACurrentMediaTime()
@@ -701,6 +724,11 @@ final class StereoCapture: NSObject {
         metrics.skewMS = abs(pair.b.host - pair.a.host) * 1000
         var profileStatus: DepthCalibration = profileFailure == nil ? .required : .invalid
         var provisionalROICM: Float?
+        var quality: StereoCalibrationQuality?
+        if screenCalibration, let aa = calibrationScreen(a), let bb = calibrationScreen(b) {
+            quality = StereoCalibrationQuality(a: aa, b: bb, skewMS: metrics.skewMS,
+                focusStable: focused && abs(yawRate) <= 0.25)
+        }
         if let ext, let aK, let bK,
            let factory = StereoCalibration.rectification(ext) {
             let mismatch: String?
@@ -847,8 +875,7 @@ final class StereoCapture: NSObject {
                 error = "STEREO_RECTIFICATION_FAILED"
             }
         }
-        if export, !calibrationShot || (focused && aK != nil && bK != nil && ext != nil &&
-            Self.hasBoardTexture(a) && Self.hasBoardTexture(b)) {
+        if export, !calibrationShot || (quality?.isCandidate == true && aK != nil && bK != nil && ext != nil) {
             exportURL = Self.exportPair(pair, ids: ids, positions: positions, ext: ext,
                 disparity: exportedDisparity, captureSignature: captureSignature, strategy: strategy)
         }
@@ -860,44 +887,71 @@ final class StereoCapture: NSObject {
             detail: "Capture ready • " + detail, error: error,
             captureProcessingMS: (CACurrentMediaTime() - began) * 1000, stereoDisparity: preview,
             stereoUncertaintyCM: uncertainty, stereoDepthPreview: metricPreview,
-            stereoCalibration: profileStatus, stereoMetrics: metrics, provisionalROICM: provisionalROICM)
+            stereoCalibration: profileStatus, stereoMetrics: metrics, provisionalROICM: provisionalROICM,
+            calibrationQuality: quality)
         return (frame, exportURL)
     }
 
     // Fast screening only. The workstation verifies the full checkerboard,
     // shared corner order, pose diversity and actual common ROI.
-    private static func hasBoardTexture(_ image: CVPixelBuffer) -> Bool {
-        guard CVPixelBufferLockBaseAddress(image, .readOnly) == kCVReturnSuccess else { return false }
+    private static func calibrationScreen(_ image: CVPixelBuffer) -> StereoCalibrationQuality.Camera? {
+        guard CVPixelBufferLockBaseAddress(image, .readOnly) == kCVReturnSuccess else { return nil }
         defer { CVPixelBufferUnlockBaseAddress(image, .readOnly) }
-        guard let base = CVPixelBufferGetBaseAddressOfPlane(image, 0)?.assumingMemoryBound(to: UInt8.self) else { return false }
+        guard let base = CVPixelBufferGetBaseAddressOfPlane(image, 0)?.assumingMemoryBound(to: UInt8.self) else { return nil }
         let w = CVPixelBufferGetWidthOfPlane(image, 0), h = CVPixelBufferGetHeightOfPlane(image, 0)
         let strideBytes = CVPixelBufferGetBytesPerRowOfPlane(image, 0)
         var corners = 0
+        var edgeCorners = 0
+        var sumX = 0.0, sumY = 0.0, sumRadius = 0.0
         var energy = 0
         var total = 0
-        for y in Swift.stride(from: h / 8, to: 7 * h / 8, by: 3) {
-            for x in Swift.stride(from: w / 8, to: 7 * w / 8, by: 3) {
+        guard w >= 24, h >= 24 else { return nil }
+        for y in Swift.stride(from: 3, to: h - 3, by: 2) {
+            for x in Swift.stride(from: 3, to: w - 3, by: 2) {
                 let i = y * strideBytes + x
                 let a = Int(base[i - strideBytes - 1]), b = Int(base[i - strideBytes + 1])
                 let c = Int(base[i + strideBytes - 1]), d = Int(base[i + strideBytes + 1])
                 let saddle = abs(a + d - b - c)
-                if saddle > 48 && abs(a - d) < 28 && abs(b - c) < 28 { corners += 1 }
+                if saddle > 48 && abs(a - d) < 28 && abs(b - c) < 28 {
+                    corners += 1
+                    let nx = Double(h - 1 - y) / Double(h)
+                    let ny = Double(x) / Double(w)
+                    sumX += nx
+                    sumY += ny
+                    sumRadius += nx * nx + ny * ny
+                    if nx < 0.06 || nx > 0.94 || ny < 0.06 || ny > 0.94 { edgeCorners += 1 }
+                }
                 energy += abs(4 * Int(base[i]) - a - b - c - d)
                 total += 1
             }
         }
-        return total > 0 && energy >= total && corners >= 3
+        let tw = 72, th = 96
+        let portrait = (0..<(tw * th)).map { index in
+            let x = (index / tw) * w / th
+            let y = h - 1 - (index % tw) * h / tw
+            return base[y * strideBytes + x]
+        }
+        let cx = sumX / Double(max(1, corners)), cy = sumY / Double(max(1, corners))
+        let spread = sqrt(max(0, sumRadius / Double(max(1, corners)) - cx * cx - cy * cy))
+        return StereoCalibrationQuality.Camera(
+            thumbnail: StereoDisparityPreview(width: tw, height: th, pixels: Data(portrait)),
+            corners: corners, edgeCorners: edgeCorners, sharpness: Double(energy) / Double(max(1, total)),
+            centerX: cx, centerY: cy, spread: spread)
     }
 
-    func requestPair(calibration: Bool = false, _ completion: @escaping (URL?) -> Void) {
+    func requestPair(calibration: Bool = false, _ completion: @escaping (URL?, StereoCalibrationQuality?) -> Void) {
         queue.async {
+            guard !self.isCancelled, self.snapshot == nil else {
+                DispatchQueue.main.async { completion(nil, nil) }
+                return
+            }
             let id = UUID()
             if calibration && !self.acquisitionFocusLocked { self.lockAcquisitionFocus() }
             self.snapshot = (id, calibration, completion)
             self.queue.asyncAfter(deadline: .now() + 3) {
                 guard let pending = self.snapshot, pending.id == id else { return }
                 self.snapshot = nil
-                DispatchQueue.main.async { pending.completion(nil) }
+                DispatchQueue.main.async { pending.completion(nil, nil) }
             }
         }
     }

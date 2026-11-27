@@ -38,6 +38,30 @@ struct StereoDisparityPreview {
     let pixels: Data
 }
 
+struct StereoCalibrationQuality {
+    struct Camera {
+        let thumbnail: StereoDisparityPreview
+        let corners: Int
+        let edgeCorners: Int
+        let sharpness: Double
+        let centerX: Double
+        let centerY: Double
+        let spread: Double
+        var capturesTexture: Bool { corners >= 4 && sharpness >= 1 }
+        var framingHint: String {
+            if !capturesTexture { return "Hold still · add light or move closer" }
+            if edgeCorners * 3 > corners { return "Check the board edges" }
+            return "Texture and sharpness detected"
+        }
+    }
+
+    let a: Camera
+    let b: Camera
+    let skewMS: Double
+    let focusStable: Bool
+    var isCandidate: Bool { a.capturesTexture && b.capturesTexture && skewMS <= 8 && focusStable }
+}
+
 enum DepthCalibration: String {
     case pchipEstimate
     case sensorMetric
@@ -84,6 +108,7 @@ struct DepthFrame {
     var stereoCalibration: DepthCalibration? = nil
     var stereoMetrics: StereoFrameMetrics? = nil
     var provisionalROICM: Float? = nil
+    var calibrationQuality: StereoCalibrationQuality? = nil
 
     var calibration: DepthCalibration {
         switch source {
@@ -94,11 +119,12 @@ struct DepthFrame {
     }
 
     var readiness: DepthReadiness {
+        if error == "STEREO_CAPTURE_ONLY" || error == "STEREO_PREVIEW" { return .captureReady }
         if source == .stereo {
             if calibration == .invalid { return .calibrationInvalid }
             if calibration == .required { return .calibrationRequired }
         }
-        return error == nil && centimeters.contains(where: { $0.isFinite && $0 > 0 }) ? .depthReady : .insufficientEvidence
+        return error == nil && centimeters.indices.contains(where: isValidSample) ? .depthReady : .insufficientEvidence
     }
 
     var strongCoverage: Double? {

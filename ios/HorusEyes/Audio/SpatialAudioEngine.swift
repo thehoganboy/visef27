@@ -130,7 +130,7 @@ final class SpatialAudioEngine: ObservableObject {
                     if pos < Config.faultToneDuration {
                         let env = min(1.0, pos / 0.003) * min(1.0, (Config.faultToneDuration - pos) / 0.005)
                         sig = 0.35 * env * sin(2.0 * .pi * Config.faultToneFreqHi * pos)
-                    } else if pos > (Config.faultToneDuration + Config.faultToneGap) {
+                    } else if pos > (Config.faultToneDuration + Config.faultToneGap), pos < cycle {
                         let pos2 = pos - Config.faultToneDuration - Config.faultToneGap
                         let env = min(1.0, pos2 / 0.003) * min(1.0, (Config.faultToneDuration - pos2) / 0.005)
                         sig = 0.35 * env * sin(2.0 * .pi * Config.faultToneFreqLo * pos2)

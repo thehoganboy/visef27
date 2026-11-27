@@ -70,6 +70,7 @@ def select_observations(rows, shape):
     rejected, fitting, held_out = [], [], []
     metadata = None
     last_times = set()
+    accepted_poses = []
     for index, record in enumerate(rows, start=1):
         try:
             pair = record["capture"]
@@ -109,6 +110,14 @@ def select_observations(rows, shape):
             yb = projected(points[1], matrix(lenses[1]["intrinsics"]), None, basis.T @ r0.T)[:, 1]
             if np.median(np.abs(ya - yb[::-1])) < np.median(np.abs(ya - yb)):
                 points[1] = points[1][::-1].copy()
+            pose = [found.reshape(-1, 2) / [lens["width"], lens["height"]]
+                    for found, lens in zip(points, lenses)]
+            def corner_rms(current, previous):
+                return min(float(np.sqrt(np.mean(np.sum((current - order)**2, axis=1))))
+                           for order in (previous, previous[::-1]))
+            require(not any(all(corner_rms(a, b) < .008 for a, b in zip(pose, previous))
+                            for previous in accepted_poses), "Repeated checkerboard pose in both cameras")
+            accepted_poses.append(pose)
             if measured is None:
                 fitting.append(points)
             else:

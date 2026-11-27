@@ -53,6 +53,10 @@ def main():
         trials.append(observation(pose, xyz, i))
     for i, cm in enumerate((50, 100, 200, 300), start=25):
         trials.append(observation(np.zeros(3), (0, 0, cm * 10), i, cm))
+    duplicate = json.loads(json.dumps(trials[0]))
+    for side in ("left", "right"):
+        duplicate["capture"][side]["hostSeconds"] += 100
+    trials.append(duplicate)
 
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "synthetic.jsonl"
@@ -61,6 +65,7 @@ def main():
             for record in trials:
                 stream.write(json.dumps(record) + "\n")
         profile, maps = fit(path)
+        assert profile["trainingPairs"] == 22
         assert abs(profile["baselineMM"] - baseline) < 1
         errors = np.array([ref["stereoCM"] - ref["measuredCM"] for ref in profile["references"]])
         print("SYNTHETIC checkerboard held-out errors (cm):", np.round(errors, 3).tolist())

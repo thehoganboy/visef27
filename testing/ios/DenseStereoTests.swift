@@ -61,6 +61,29 @@ struct DenseStereoTests {
         let near = DenseStereo.metric(focal: 230, baselineMM: 20, disparity: 5, sigma: 0.2, scaleFraction: 0.02)!
         check(abs(near.depth - 92) < 0.1 && (4...5).contains(near.sigma))
         check(DenseStereo.metric(focal: 230, baselineMM: 20, disparity: 1.5, sigma: 0.25, scaleFraction: 0.03) == nil)
+        let still = DenseStereo.estimate(focal: 230, baselineMM: 20, disparity: 5, sigma: 0.2, scaleFraction: 0.02)!
+        let skew = DenseStereo.estimate(focal: 230, baselineMM: 20, disparity: 5, sigma: 0.2,
+                                        scaleFraction: 0.02, motionPx: 1)!
+        check(still.depth == skew.depth && skew.sigma > still.sigma)
+        check(!DenseStereo.supportsClearance(depth: skew.depth, sigma: skew.sigma))
+        for width in [256, 320] {
+            let height = width * 3 / 4
+            let expected = width / 32
+            let base = (0..<(width * height)).map { _ -> Int in
+                seed = 1_664_525 &* seed &+ 1_013_904_223
+                return Int((seed >> 24) & 255)
+            }
+            let mate = base.indices.map { $0 % width + expected < width ? base[$0 + expected] : -1 }
+            let began = Date()
+            let result = DenseStereo.match(base, mate, width: width, height: height, maxShift: 32)
+            let ms = Date().timeIntervalSince(began) * 1000
+            let pixels = result.disparity.filter(\.isFinite)
+            let coverage = Double(pixels.count) / Double(base.count)
+            let error = pixels.map { abs($0 - Float(expected)) }.reduce(0, +) / Float(max(1, pixels.count))
+            check(coverage > 0.75 && error < 0.04)
+            print(String(format: "SYNTHETIC tier %dx%d: %.1f%% valid, %.3f px MAE, %.1f ms",
+                         width, height, coverage * 100, error, ms))
+        }
 
         var sparse = 0
         for y in stride(from: 2, to: h - 2, by: 2) {

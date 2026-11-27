@@ -39,6 +39,8 @@ final class DemoController: ObservableObject {
     @Published private(set) var risk: PerceptionRisk = .unknown
     @Published private(set) var displayTracks: [MetricObstacleTracker.Track] = []
     @Published private(set) var provisionalROICM: Float?
+    @Published private(set) var calibrationQuality: StereoCalibrationQuality?
+    private var calibrationPreview = false
     @Published var result: ObstacleDetectionResult?
     @Published var advisory = DirectionalAdvisory()
     private let lock = NSLock()
@@ -179,7 +181,8 @@ final class DemoController: ObservableObject {
             } else {
                 let source = StereoCapture(onFrame: receive, onError: fail,
                     strategy: self.stereoStrategy, captureOnly: self.stereoCaptureOnly,
-                    depthRequested: self.wantsStereoDepth, motionRate: { [weak self] in self?.currentYaw() ?? 0 },
+                    depthRequested: self.wantsStereoDepth, calibrationPreview: self.calibrationPreview,
+                    motionRate: { [weak self] in self?.currentYaw() ?? 0 },
                     onReset: { [weak self] in
                         DispatchQueue.main.async {
                             guard let self, self.captureEpoch == captureToken else { return }
@@ -299,6 +302,7 @@ final class DemoController: ObservableObject {
             stereoDisparity = frame.stereoDisparity.flatMap(Self.disparityImage)
             stereoDepth = frame.stereoDepthPreview.flatMap(Self.disparityImage)
             provisionalROICM = frame.provisionalROICM
+            if calibrationPreview { calibrationQuality = frame.calibrationQuality }
             if !stereoDiagnosticReady {
                 stereoDiagnosticReady = true
                 journal.switchOutcome(frame.source, outcome: "capture_ready")
@@ -354,6 +358,7 @@ final class DemoController: ObservableObject {
             stereoDepth = nil
             stereoDisparity = nil
             provisionalROICM = nil
+            calibrationQuality = nil
         }
         guard active else { return }
         let age = now - lastAcceptedTimestamp
@@ -408,6 +413,12 @@ final class DemoController: ObservableObject {
 
     func toggle() { setActive(!active) }
 
+    func retryCapture() {
+        resetEvidence(active)
+        preview = nil
+        restartCapture()
+    }
+
     private func sourceFailed(_ reason: String) {
         resetEvidence(active)
         diagnostics = reason
@@ -435,19 +446,29 @@ final class DemoController: ObservableObject {
             + "\n" + (stats.medianSkewMS == nil ? "Candidate" : "Paired") + " skew median/P95 " + skew.joined(separator: "/") + " ms"
     }
 
-    private static func disparityImage(_ disparity: StereoDisparityPreview) -> CGImage? {
+    static func disparityImage(_ disparity: StereoDisparityPreview) -> CGImage? {
         guard let provider = CGDataProvider(data: disparity.pixels as CFData) else { return nil }
         return CGImage(width: disparity.width, height: disparity.height, bitsPerComponent: 8, bitsPerPixel: 8,
             bytesPerRow: disparity.width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: [],
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
-    func captureCalibrationPair(_ completion: @escaping (URL?) -> Void) {
-        guard mode == .stereo, let stereo else { completion(nil); return }
+    func setCalibrationPreview(_ value: Bool) {
+        calibrationPreview = value
+        calibrationQuality = nil
+        stereo?.setCalibrationPreview(value)
+    }
+
+    func captureCalibrationPair(_ completion: @escaping (URL?, StereoCalibrationQuality?) -> Void) {
+        guard mode == .stereo, let stereo else { completion(nil, nil); return }
         let token = captureEpoch
-        stereo.requestPair(calibration: true) { [weak self] url in
-            guard self?.captureEpoch == token else { completion(nil); return }
-            completion(url)
+        stereo.requestPair(calibration: true) { [weak self] url, quality in
+            guard self?.captureEpoch == token else {
+                if let url { try? FileManager.default.removeItem(at: url) }
+                completion(nil, nil)
+                return
+            }
+            completion(url, quality)
         }
     }
 
@@ -474,7 +495,7 @@ final class DemoController: ObservableObject {
         stereoPairURL = nil
         stereoPairFailed = false
         let token = captureEpoch
-        stereo.requestPair { [weak self] url in
+        stereo.requestPair { [weak self] url, _ in
             guard let self, self.captureEpoch == token else { return }
             self.stereoPairURL = url
             self.stereoPairFailed = url == nil
@@ -647,6 +668,10 @@ struct ContentView: View {
             if phase == .active { model.appear() }
             else { model.disappear() }
         }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { event in
+            let type = event.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            if type == AVAudioSession.InterruptionType.began.rawValue { model.setActive(false) }
+        }
     }
 
     private var camera: some View {
@@ -690,6 +715,9 @@ struct ContentView: View {
                 }
                 Menu {
                     Button { diagnosticsSheet = true } label: { Label("Research diagnostics", systemImage: "waveform.path") }
+                    if model.lifecycle == .sensorFault {
+                        Button { model.retryCapture() } label: { Label("Restart camera", systemImage: "arrow.clockwise") }
+                    }
                     if model.mode == .stereo {
                         Button { openCalibration() } label: { Label("Acquire calibration dataset", systemImage: "viewfinder") }
                         Button { calibrationImporter = true } label: { Label("Import calibration profile", systemImage: "square.and.arrow.down") }
@@ -709,6 +737,8 @@ struct ContentView: View {
 
     private func openCalibration() {
         model.setActive(false)
+        model.showStereoDepth = false
+        model.showStereoDisparity = false
         calibrationSheet = true
     }
 
@@ -734,7 +764,7 @@ struct ContentView: View {
     }
 
     private var runLabel: some View {
-        Label(model.active ? "T?m d?ng" : "B?t ??u", systemImage: model.active ? "pause.fill" : "play.fill")
+        Label(model.active ? "Tạm dừng" : "Bắt đầu", systemImage: model.active ? "pause.fill" : "play.fill")
             .font(.headline)
             .foregroundStyle(.black)
             .frame(maxWidth: .infinity, minHeight: 44)
@@ -810,12 +840,12 @@ struct DirectionIndicator: View {
     }
 
     private var status: (String, String, Color) {
-        if lifecycle == .paused { return ("T?m d?ng", "pause.fill", .white) }
-        if lifecycle == .initializing { return ("?ang kh?i ??ng", "hourglass", .white) }
-        if advisory.isFreshStop(now: CACurrentMediaTime()) { return ("D?ng l?i", "hand.raised.fill", .red) }
-        if risk == .critical { return ("Nguy hi?m ? Ch?a r? h??ng", "exclamationmark.triangle.fill", .red) }
-        if risk == .warning || risk == .unresolved { return ("C?n th?n ? Ch?a r? h??ng", "exclamationmark.triangle", .orange) }
-        if lifecycle == .sensorFault { return ("C?m bi?n gi?n ?o?n", "sensor.fill", .white) }
-        return ("Ch?a ?? d? li?u", "minus.circle", .white)
+        if lifecycle == .paused { return ("Tạm dừng", "pause.fill", .white) }
+        if lifecycle == .initializing { return ("Đang khởi động", "hourglass", .white) }
+        if advisory.isFreshStop(now: CACurrentMediaTime()) { return ("Dừng lại", "hand.raised.fill", .red) }
+        if risk == .critical { return ("Nguy hiểm · Chưa rõ hướng", "exclamationmark.triangle.fill", .red) }
+        if risk == .warning || risk == .unresolved { return ("Cẩn thận · Chưa rõ hướng", "exclamationmark.triangle", .orange) }
+        if lifecycle == .sensorFault { return ("Cảm biến gián đoạn", "sensor.fill", .white) }
+        return ("Chưa đủ dữ liệu", "minus.circle", .white)
     }
 }
