@@ -16,8 +16,8 @@ final class DemoController: ObservableObject {
     @Published private(set) var stereoHealth = ""
     @Published private(set) var stereoStrategy: StereoDeliveryStrategy = .automatic
     @Published private(set) var stereoCaptureOnly = false
-    @Published var showStereoDisparity = false
-    @Published var showStereoDepth = false
+    @Published var showStereoDisparity = false { didSet { updateStereoProcessing() } }
+    @Published var showStereoDepth = false { didSet { updateStereoProcessing() } }
     @Published private(set) var stereoDepth: CGImage?
     @Published private(set) var stereoDisparity: CGImage?
     @Published private(set) var stereoPairFailed = false
@@ -33,11 +33,15 @@ final class DemoController: ObservableObject {
     private var modeReady = false
     private var stereoDiagnosticReady = false
     private var lastStereoPreviewAt: Double = 0
-    private var previousStereoObservation: ObstacleDetectionResult?
     @Published var active = false
-    @Published var threat = "PAUSED"
+    @Published private(set) var lifecycle: PerceptionLifecycle = .paused
+    @Published private(set) var readiness: DepthReadiness = .captureReady
+    @Published private(set) var risk: PerceptionRisk = .unknown
+    @Published private(set) var displayTracks: [MetricObstacleTracker.Track] = []
+    @Published private(set) var provisionalROICM: Float?
+    @Published private(set) var calibrationQuality: StereoCalibrationQuality?
+    private var calibrationPreview = false
     @Published var result: ObstacleDetectionResult?
-    @Published var sourceTimestamp: Double = 0
     @Published var advisory = DirectionalAdvisory()
     private let lock = NSLock()
     private let inferenceQueue = DispatchQueue(label: "com.horuseyes.inference", qos: .userInitiated)
@@ -46,26 +50,22 @@ final class DemoController: ObservableObject {
     private var workerGeneration = -1
     private var depth: DepthEngine?
     private var kin = KinematicsEngine()
+    private var tracker = MetricObstacleTracker()
+    private var coordinator = AdvisoryCoordinator()
+    private var unavailableSince: Double?
+    private var statusCueUntil = 0.0
+    private var lastStatusCueAt = -Double.infinity
+    private var currentAudioCue = "MUTED"
+    private var lastCaptureTimestamp = 0.0
+    private var captureInterval = 0.0
     private var budget = AuditoryBudgetManager()
     private var timer: Timer?
     private var started: Double = 0
-    private var lastFrame: Double = 0
     private var yaw: Float = 0
     private var prevAngle: Double? = nil
     private var isAppeared: Bool = false
     private var lastAcceptedFrameId: UInt64 = 0
     private var lastAcceptedTimestamp: Double = 0.0
-    private struct ObservationSnapshot {
-        let frameId: UInt64
-        let timestamp: Double
-        let threat: String
-        let state: String
-        let angleDeg: Double?
-        let confidence: Double
-        let reasonCode: String
-    }
-    private var observationHistory: [ObservationSnapshot] = []
-
     func appear() {
         guard !isAppeared else { return }
         isAppeared = true
@@ -76,7 +76,7 @@ final class DemoController: ObservableObject {
         reconcileCapture()
         imu.startMotionTracking()
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.10, repeats: true) { [weak self] _ in self?.tick() }
     }
 
     static func unsupported(_ mode: DepthMode) -> String? {
@@ -94,10 +94,6 @@ final class DemoController: ObservableObject {
         guard selected != mode || selected != .midas else { return }
         mode = selected
         resetEvidence(active)
-        if active {
-            if mode == .stereo { audio.stop() }
-            else { audio.start() }
-        }
         journal.switchRequested(selected)
         exportURL = nil
         stereoPairURL = nil
@@ -140,7 +136,7 @@ final class DemoController: ObservableObject {
         let selected = mode
         if selected == .midas {
             camera.setFrameHandler { [weak self] buffer, _, settle, luma, capturedAt in
-                self?.submit(captureToken: captureToken, timestamp: capturedAt, settle: settle) {
+                self?.submit(captureToken: captureToken, timestamp: capturedAt, settle: settle) { _ in
                     if self?.depth == nil { self?.depth = DepthEngine() }
                     var frame: DepthFrame?
                     let obs = self?.depth?.processFrame(pixelBuffer: buffer, frameId: 0, sourceTimestamp: capturedAt,
@@ -163,10 +159,10 @@ final class DemoController: ObservableObject {
             }
             let receive: (DepthFrame, CVPixelBuffer?) -> Void = { [weak self] frame, buffer in
                 guard let self else { return }
-                self.submit(captureToken: captureToken, timestamp: frame.timestamp, settle: 0, previewWhilePaused: true) {
+                self.submit(captureToken: captureToken, timestamp: frame.timestamp, settle: 0, previewWhilePaused: true) { evaluate in
                     let portrait = buffer.map { CIImage(cvPixelBuffer: $0).oriented(.right) }
                     let image = portrait.flatMap { self.imageContext.createCGImage($0, from: $0.extent) }
-                    let observation = frame.error == nil ? frame.spatialObservation() : nil
+                    let observation = evaluate && frame.error == nil ? frame.spatialObservation() : nil
                     return (observation, frame, image)
                 }
             }
@@ -187,11 +183,13 @@ final class DemoController: ObservableObject {
                 source.start()
             } else {
                 let source = StereoCapture(onFrame: receive, onError: fail,
-                    strategy: self.stereoStrategy, captureOnly: self.stereoCaptureOnly, onReset: { [weak self] in
+                    strategy: self.stereoStrategy, captureOnly: self.stereoCaptureOnly,
+                    depthRequested: self.wantsStereoDepth, calibrationPreview: self.calibrationPreview,
+                    motionRate: { [weak self] in self?.currentYaw() ?? 0 },
+                    onReset: { [weak self] in
                         DispatchQueue.main.async {
                             guard let self, self.captureEpoch == captureToken else { return }
                             self.resetEvidence(self.active)
-                            self.audio.stop()
                             self.preview = nil
                             self.stereoDisparity = nil
                             self.stereoDepth = nil
@@ -205,10 +203,6 @@ final class DemoController: ObservableObject {
                         guard self.captureEpoch == captureToken else { return }
                         if !event.message.isEmpty { self.diagnostics = event.message }
                         self.stereoHealth = Self.stereoSummary(event)
-                        if self.stereoCaptureOnly && self.active {
-                            self.threat = "UNAVAILABLE"
-                            self.advisory = DirectionalAdvisory(state: "UNAVAILABLE", reasonCode: "STEREO_CAPTURE_ONLY")
-                        }
                     }
                 }
                 self.stereo = source
@@ -222,204 +216,177 @@ final class DemoController: ObservableObject {
         }
     }
 
-    private func submit(captureToken: Int, timestamp capturedAt: Double, settle: Int, previewWhilePaused: Bool = false,
-                        work: @escaping () -> (ObstacleDetectionResult?, DepthFrame?, CGImage?)) {
+    private var wantsStereoDepth: Bool { active || showStereoDepth || showStereoDisparity }
+
+    private func updateStereoProcessing() {
+        stereo?.setDepthRequested(wantsStereoDepth)
+    }
+
+    private func currentYaw() -> Float {
         lock.lock()
-        guard captureEpoch == captureToken, (enabled || previewWhilePaused), !busy else { lock.unlock(); return }
-        lastFrame = capturedAt
+        defer { lock.unlock() }
+        return yaw
+    }
+
+    private func submit(captureToken: Int, timestamp capturedAt: Double, settle: Int, previewWhilePaused: Bool = false,
+                        work: @escaping (Bool) -> (ObstacleDetectionResult?, DepthFrame?, CGImage?)) {
+        lock.lock()
+        guard captureEpoch == captureToken, (enabled || previewWhilePaused) else {
+            lock.unlock()
+            return
+        }
+        if capturedAt.isFinite, capturedAt > lastCaptureTimestamp {
+            let dt = capturedAt - lastCaptureTimestamp
+            captureInterval = (0.002...0.5).contains(dt)
+                ? (captureInterval == 0 ? dt : captureInterval * 0.9 + dt * 0.1) : 0
+            lastCaptureTimestamp = capturedAt
+        }
+        guard !busy else {
+            lock.unlock()
+            return
+        }
         busy = true
         let token = epoch.value
         let rate = yaw
         sequence += 1
         let frameId = sequence
         let evaluate = enabled
+        let captureFPS: Double? = captureInterval > 0 ? 1 / captureInterval : nil
         lock.unlock()
+
         inferenceQueue.async {
             defer { self.lock.lock(); self.busy = false; self.lock.unlock() }
             let began = CACurrentMediaTime()
-            let (observation, frame, image) = work()
+            let (observation, frame, image) = work(evaluate)
+            var obs = observation
+            var display: [MetricObstacleTracker.Track] = []
+            var kinematics: KinematicsResult?
+            if evaluate {
+                if self.workerGeneration != token {
+                    self.kin = KinematicsEngine()
+                    self.tracker = MetricObstacleTracker()
+                    self.workerGeneration = token
+                }
+                if var measured = obs {
+                    if frame?.source != .midas, measured.isValid {
+                        let update = self.tracker.update(measured.allObstacles, timestamp: capturedAt,
+                            imageSize: CGSize(width: measured.camWidth, height: measured.camHeight), yawRate: rate)
+                        measured.allObstacles = update.observations
+                        measured.primaryTrackID = update.observations.first {
+                            $0.x == measured.x && $0.y == measured.y && $0.distCM == measured.distCM
+                        }?.id
+                        display = update.display
+                    }
+                    obs = measured
+                    kinematics = self.kin.compute(obstacleResult: measured, frameId: frameId, timestamp: capturedAt,
+                        aeSettleRemaining: settle, imuYawRateRadS: rate)
+                }
+            }
             let inferenceMS = (CACurrentMediaTime() - began) * 1000 + (frame?.captureProcessingMS ?? 0)
-            if let frame {
-                DispatchQueue.main.async {
-                    guard self.captureEpoch == captureToken, self.epoch.value == token,
-                          (-0.05...0.75).contains(CACurrentMediaTime() - capturedAt) else { return }
-                    if let image { self.preview = image }
-                    if frame.source == .stereo {
-                        self.lastStereoPreviewAt = capturedAt
-                        self.stereoDisparity = frame.stereoDisparity.flatMap(Self.disparityImage)
-                        self.stereoDepth = frame.stereoDepthPreview.flatMap(Self.disparityImage)
-                        if observation?.isValid != true { self.previousStereoObservation = nil }
-                    }
-                    self.diagnostics = self.journal.label(frame: frame, observation: observation, latencyMS: inferenceMS)
-                    if frame.source == .stereo && frame.error != nil && !self.stereoDiagnosticReady {
-                        self.stereoDiagnosticReady = true
-                        self.journal.switchOutcome(frame.source, outcome: "diagnostics_ready")
-                    } else if frame.error == nil && observation?.isValid == true, !self.modeReady {
-                        self.modeReady = true
-                        self.journal.switchOutcome(frame.source, outcome: "depth_ready")
-                    }
-                    if evaluate && frame.source != .midas && observation?.isValid != true {
-                        self.sourceTimestamp = capturedAt
-                        self.result = nil
-                        self.prevAngle = nil
-                        if frame.source == .stereo || self.modeReady || CACurrentMediaTime() - self.started > 1 {
-                            self.threat = "UNAVAILABLE"
-                            self.advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: capturedAt,
-                                reasonCode: frame.error ?? (frame.source == .stereo ? "INSUFFICIENT_DEPTH_COVERAGE" : "INSUFFICIENT_DEPTH"))
-                        }
-                        self.audio.update(decision: self.silentDecision())
-                    }
-                    if evaluate && observation?.isValid != true {
-                        self.journal.record(frame: frame, observation: observation, state: self.advisory.state,
-                            reason: self.advisory.reasonCode, inferenceMS: inferenceMS, endToEndMS: (CACurrentMediaTime() - capturedAt) * 1000)
-                    }
-                }
-            }
-            guard evaluate, let obs = observation,
-                  frame?.source == .midas || obs.isValid else { return }
-            if self.workerGeneration != token {
-                self.kin = KinematicsEngine()
-                self.workerGeneration = token
-            }
-            let risk = self.kin.compute(
-                obstacleResult: obs,
-                frameId: frameId,
-                timestamp: capturedAt,
-                aeSettleRemaining: settle,
-                imuYawRateRadS: rate
-            )
-
+            let acceptedObservation = obs
+            let acceptedTracks = display
+            let acceptedRisk = kinematics
             DispatchQueue.main.async {
-                let consumedAt = CACurrentMediaTime()
-                self.lock.lock()
-                let current = self.enabled && self.epoch.accepts(token, timestamp: obs.timestamp,
-                    now: consumedAt, after: self.lastAcceptedTimestamp)
-                self.lock.unlock()
-                guard current, frameId > self.lastAcceptedFrameId else { return }
-
+                let now = CACurrentMediaTime()
+                guard self.captureEpoch == captureToken, self.epoch.value == token,
+                      frameId > self.lastAcceptedFrameId else { return }
+                guard self.epoch.accepts(token, timestamp: capturedAt, now: now, after: self.lastAcceptedTimestamp) else {
+                    if let frame, now - capturedAt > 0.75 {
+                        self.journal.record(frame: frame, observation: nil, state: "UNAVAILABLE",
+                            reason: "SOURCE_FRAME_STALE", inferenceMS: inferenceMS, endToEndMS: (now - capturedAt) * 1000)
+                    }
+                    return
+                }
                 self.lastAcceptedFrameId = frameId
-                self.lastAcceptedTimestamp = obs.timestamp
-                self.result = obs.isValid ? obs : nil
-                self.sourceTimestamp = obs.timestamp
-                self.threat = risk.threatLevel
-                let rawAdv = estimateDirectionalAdvisory(
-                    observation: obs,
-                    threat: risk.threatLevel,
-                    now: consumedAt,
-                    prevAngle: self.prevAngle
-                )
-
-                var finalAdv = rawAdv
-
-                // Evidence-Aware Temporal Stability (P0-03)
-                if risk.threatLevel == "CRITICAL" || rawAdv.state == "STOP" {
-                    // Critical hazard: immediate preemption with ZERO smoothing delay
-                    self.observationHistory.removeAll()
-                    finalAdv = rawAdv
-                } else if risk.threatLevel == "SENSOR_FAULT" || rawAdv.state == "UNKNOWN" {
-                    self.observationHistory.removeAll()
-                    finalAdv = rawAdv
-                } else if rawAdv.state == "AVAILABLE" {
-                    self.observationHistory.append(ObservationSnapshot(
-                        frameId: frameId,
-                        timestamp: obs.timestamp,
-                        threat: risk.threatLevel,
-                        state: rawAdv.state,
-                        angleDeg: rawAdv.angleDeg,
-                        confidence: rawAdv.confidence ?? 0.55,
-                        reasonCode: rawAdv.reasonCode
-                    ))
-                    if self.observationHistory.count > 4 {
-                        self.observationHistory.removeFirst()
-                    }
-                    finalAdv = rawAdv
-                } else if rawAdv.state == "UNAVAILABLE" && self.mode == .midas {
-                    // Check for transient 1-frame degradation over otherwise stable, fresh observation
-                    let recentValid = self.observationHistory.filter {
-                        $0.state == "AVAILABLE" && (consumedAt - $0.timestamp) <= 0.28
-                    }
-                    if recentValid.count >= 2, let lastValid = recentValid.last, let heldAngle = lastValid.angleDeg {
-                        // Bounded transient hold: maintain direction for this single frame
-                        finalAdv = DirectionalAdvisory(
-                            state: "AVAILABLE",
-                            angleDeg: heldAngle,
-                            confidence: lastValid.confidence * 0.85,
-                            observedAngularRange: rawAdv.observedAngularRange,
-                            sourceTimestamp: lastValid.timestamp,
-                            reasonCode: "TRANSIENT_HOLD"
-                        )
-                        self.observationHistory.append(ObservationSnapshot(
-                            frameId: frameId,
-                            timestamp: obs.timestamp,
-                            threat: risk.threatLevel,
-                            state: "TRANSIENT_HOLD",
-                            angleDeg: heldAngle,
-                            confidence: lastValid.confidence * 0.85,
-                            reasonCode: "TRANSIENT_HOLD"
-                        ))
-                        if self.observationHistory.count > 4 {
-                            self.observationHistory.removeFirst()
-                        }
-                    } else {
-                        self.observationHistory.removeAll()
-                        finalAdv = rawAdv
-                    }
+                self.lastAcceptedTimestamp = capturedAt
+                if let image { self.preview = image }
+                if let frame {
+                    self.updateDiagnostics(frame, observation: acceptedObservation, latencyMS: inferenceMS)
                 }
-
-                if self.mode == .stereo {
-                    if finalAdv.state == "AVAILABLE", let angle = finalAdv.angleDeg {
-                        let priorSupported = self.previousStereoObservation.map {
-                            (0.0...0.50).contains(capturedAt - $0.timestamp) &&
-                                stereoCorridorObserved($0, angle: angle)
-                        } ?? false
-                        if !priorSupported || !stereoCorridorObserved(obs, angle: angle) {
-                            finalAdv = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: capturedAt,
-                                reasonCode: "INSUFFICIENT_DEPTH_COVERAGE")
-                        }
-                    }
-                    self.previousStereoObservation = obs
-                }
-                if finalAdv.state == "UNKNOWN" && self.mode != .midas {
-                    finalAdv.state = "UNAVAILABLE"
-                }
-                self.advisory = finalAdv
-                if let frame, obs.isValid {
-                    self.journal.record(frame: frame, observation: obs, state: finalAdv.state,
-                        reason: finalAdv.reasonCode, inferenceMS: inferenceMS, endToEndMS: (consumedAt - capturedAt) * 1000)
-                }
-                self.prevAngle = finalAdv.state == "AVAILABLE" ? finalAdv.angleDeg : nil
-
-                // P0: Coordinate final authoritative advisory with auditory budget manager BEFORE updating audio
-                let decision = self.budget.coordinate(obstacleResult: obs, kinematicsResult: risk, advisory: finalAdv)
-                if self.mode == .stereo { self.audio.start() }
-                self.audio.update(decision: decision)
+                guard evaluate else { return }
+                self.publishDecision(observation: acceptedObservation, tracks: acceptedTracks, frame: frame,
+                    risk: acceptedRisk, yawRate: rate, timestamp: capturedAt, now: now, inferenceMS: inferenceMS,
+                    captureFPS: captureFPS)
             }
         }
     }
 
+    private func updateDiagnostics(_ frame: DepthFrame, observation: ObstacleDetectionResult?, latencyMS: Double) {
+        if frame.source == .stereo {
+            lastStereoPreviewAt = frame.timestamp
+            stereoDisparity = frame.stereoDisparity.flatMap(Self.disparityImage)
+            stereoDepth = frame.stereoDepthPreview.flatMap(Self.disparityImage)
+            provisionalROICM = frame.provisionalROICM
+            if calibrationPreview { calibrationQuality = frame.calibrationQuality }
+            if !stereoDiagnosticReady {
+                stereoDiagnosticReady = true
+                journal.switchOutcome(frame.source, outcome: "capture_ready", completing: false)
+            }
+        }
+        readiness = frame.readiness
+        diagnostics = journal.label(frame: frame, observation: observation, latencyMS: latencyMS)
+        if observation?.isValid == true, !modeReady {
+            modeReady = true
+            journal.switchOutcome(frame.source, outcome: "depth_ready")
+        }
+    }
+
+    private func publishDecision(observation: ObstacleDetectionResult?, tracks: [MetricObstacleTracker.Track],
+                                 frame: DepthFrame?, risk kinematics: KinematicsResult?, yawRate: Float,
+                                 timestamp: Double, now: Double, inferenceMS: Double, captureFPS: Double?) {
+        if let observation, observation.isValid, let kinematics {
+            lifecycle = .running
+            risk = PerceptionRisk(kinematics.threatLevel)
+            result = observation
+            displayTracks = tracks
+            advisory = coordinator.decide(source: mode, observation: observation, risk: kinematics,
+                now: now, yawRate: yawRate, previousAngle: prevAngle)
+            prevAngle = advisory.status == .available ? advisory.angleDeg : nil
+            let decision = budget.coordinate(obstacleResult: observation, kinematicsResult: kinematics, advisory: advisory)
+            if decision.isActive {
+                clearStatusCue()
+                outputAudio(decision)
+            } else if advisory.status == .unavailable {
+                indicateUnavailable(now: now)
+            } else {
+                clearStatusCue()
+                outputAudio(decision)
+            }
+        } else {
+            if frame?.readiness == .depthReady { readiness = .insufficientEvidence }
+            let reason = frame?.error ?? (mode == .stereo ? "INSUFFICIENT_DEPTH_COVERAGE" : "INSUFFICIENT_EVIDENCE")
+            withhold(reason, at: timestamp, now: now, fault: observation?.isZeroLuxBlind == true)
+        }
+        if let frame {
+            journal.record(frame: frame, observation: observation, state: advisory.state,
+                reason: advisory.reasonCode, inferenceMS: inferenceMS, endToEndMS: (now - timestamp) * 1000,
+                tracks: tracks, angle: advisory.angleDeg, risk: kinematics?.threatLevel ?? "UNKNOWN",
+                audioCue: currentAudioCue, captureFPS: frame.source == .stereo ? nil : captureFPS)
+        }
+    }
+
     private func tick() {
-        lock.lock(); yaw = imu.yawRateRadS; let frameTime = lastFrame; lock.unlock()
+        lock.lock()
+        yaw = imu.yawRateRadS
+        lock.unlock()
         let now = CACurrentMediaTime()
         if mode == .stereo, now - lastStereoPreviewAt > 0.75 {
             stereoDepth = nil
             stereoDisparity = nil
+            provisionalROICM = nil
+            calibrationQuality = nil
         }
         guard active else { return }
-        if now-started > 1 && (now-frameTime > 1 || now-sourceTimestamp > 1) {
-            if mode == .midas { fault() }
-            else if mode == .lidar, threat != "UNAVAILABLE" || result != nil { sourceFailed("Depth frames timed out") }
+        let age = now - lastAcceptedTimestamp
+        if age > 0.25 {
+            result = nil
+            displayTracks = []
         }
-        // Preview remains live; stale boxes must disappear independently of frames.
-        if now-sourceTimestamp > 0.25 { result = nil }
-        // Expire directional advisory and guidance-dependent audio at 750ms
-        if now-sourceTimestamp > 0.75 {
-            if advisory.state == "AVAILABLE" || (mode != .midas && advisory.state == "STOP") {
-                advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: sourceTimestamp, reasonCode: "SOURCE_FRAME_STALE")
-                prevAngle = nil
-            }
-            if mode != .midas || (threat != "CRITICAL" && threat != "SENSOR_FAULT") {
-                audio.update(decision: silentDecision())
-            }
+        if (lastAcceptedTimestamp > 0 && age > 0.75) || (mode != .stereo && now - started > 1.5 && lastAcceptedTimestamp == 0) {
+            readiness = .stale
+            withhold("SOURCE_FRAME_STALE", at: lastAcceptedTimestamp, now: now, fault: true)
+        } else if unavailableSince != nil {
+            indicateUnavailable(now: now)
         }
     }
 
@@ -428,23 +395,55 @@ final class DemoController: ObservableObject {
             priorityScore: 0, volumeFactor: 0, safeDirection: "NONE", cueMode: "MUTED", threatLevel: "UNKNOWN", suppressedCount: 0)
     }
 
-    private func fault() {
-        threat = "SENSOR_FAULT"; result = nil; advisory = DirectionalAdvisory(state: "UNKNOWN", sourceTimestamp: CACurrentMediaTime(), reasonCode: "SENSOR_FAULT"); prevAngle = nil
-        observationHistory.removeAll()
-        audio.update(decision: BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
-            ttc: .infinity, priorityScore: 99, volumeFactor: 0.35, safeDirection: "STOP",
-            cueMode: "SYSTEM_FAULT_TONE", threatLevel: "SENSOR_FAULT", suppressedCount: 0))
+    private func indicateUnavailable(now: Double) {
+        if unavailableSince == nil { unavailableSince = now }
+        if let since = unavailableSince, now - since >= 0.20, lastStatusCueAt < since,
+           now - lastStatusCueAt >= 2.5 {
+            lastStatusCueAt = now
+            statusCueUntil = now + 0.35
+        }
+        if now < statusCueUntil {
+            outputAudio(BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
+                ttc: .infinity, priorityScore: 0, volumeFactor: 0.35, safeDirection: "NONE",
+                cueMode: "SYSTEM_FAULT_TONE", threatLevel: "SENSOR_FAULT", suppressedCount: 0))
+        } else {
+            outputAudio(silentDecision())
+        }
+    }
+
+    private func outputAudio(_ decision: BudgetDecision) {
+        currentAudioCue = decision.isActive ? decision.cueMode : "MUTED"
+        audio.update(decision: decision)
+    }
+
+    private func clearStatusCue() {
+        unavailableSince = nil
+        statusCueUntil = 0
+    }
+
+    private func withhold(_ reason: String, at timestamp: Double, now: Double, fault: Bool = false) {
+        lifecycle = fault ? .sensorFault : .running
+        risk = .unknown
+        result = nil
+        displayTracks = []
+        prevAngle = nil
+        coordinator = AdvisoryCoordinator()
+        advisory = DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: timestamp, reasonCode: reason)
+        indicateUnavailable(now: now)
     }
 
     func toggle() { setActive(!active) }
 
+    func retryCapture() {
+        resetEvidence(active)
+        preview = nil
+        restartCapture()
+    }
+
     private func sourceFailed(_ reason: String) {
         resetEvidence(active)
         diagnostics = reason
-        if active {
-            threat = "UNAVAILABLE"
-            advisory = DirectionalAdvisory(state: "UNAVAILABLE", reasonCode: reason)
-        }
+        if active { withhold(reason, at: 0, now: CACurrentMediaTime(), fault: true) }
         journal.switchOutcome(mode, outcome: reason)
     }
 
@@ -468,19 +467,29 @@ final class DemoController: ObservableObject {
             + "\n" + (stats.medianSkewMS == nil ? "Candidate" : "Paired") + " skew median/P95 " + skew.joined(separator: "/") + " ms"
     }
 
-    private static func disparityImage(_ disparity: StereoDisparityPreview) -> CGImage? {
+    static func disparityImage(_ disparity: StereoDisparityPreview) -> CGImage? {
         guard let provider = CGDataProvider(data: disparity.pixels as CFData) else { return nil }
         return CGImage(width: disparity.width, height: disparity.height, bitsPerComponent: 8, bitsPerPixel: 8,
             bytesPerRow: disparity.width, space: CGColorSpaceCreateDeviceGray(), bitmapInfo: [],
             provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
     }
 
-    func captureCalibrationPair(_ completion: @escaping (URL?) -> Void) {
-        guard mode == .stereo, let stereo else { completion(nil); return }
+    func setCalibrationPreview(_ value: Bool) {
+        calibrationPreview = value
+        calibrationQuality = nil
+        stereo?.setCalibrationPreview(value)
+    }
+
+    func captureCalibrationPair(_ completion: @escaping (URL?, StereoCalibrationQuality?) -> Void) {
+        guard mode == .stereo, let stereo else { completion(nil, nil); return }
         let token = captureEpoch
-        stereo.requestPair(calibration: true) { [weak self] url in
-            guard self?.captureEpoch == token else { completion(nil); return }
-            completion(url)
+        stereo.requestPair(calibration: true) { [weak self] url, quality in
+            guard self?.captureEpoch == token else {
+                if let url { try? FileManager.default.removeItem(at: url) }
+                completion(nil, nil)
+                return
+            }
+            completion(url, quality)
         }
     }
 
@@ -493,9 +502,7 @@ final class DemoController: ObservableObject {
         let profile = try JSONDecoder().decode(StereoCalibration.self, from: data)
         let issues = profile.validationIssues()
         guard issues.isEmpty else { throw CalibrationImportError(message: issues.joined(separator: "\n")) }
-        let path = StereoCalibration.file
-        try FileManager.default.createDirectory(at: path.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: path, options: .atomic)
+        try profile.save(data)
         select(.stereo)
     }
 
@@ -509,7 +516,7 @@ final class DemoController: ObservableObject {
         stereoPairURL = nil
         stereoPairFailed = false
         let token = captureEpoch
-        stereo.requestPair { [weak self] url in
+        stereo.requestPair { [weak self] url, _ in
             guard let self, self.captureEpoch == token else { return }
             self.stereoPairURL = url
             self.stereoPairFailed = url == nil
@@ -522,38 +529,44 @@ final class DemoController: ObservableObject {
     }
 
     func setActive(_ value: Bool) {
+        guard active != value else { return }
         resetEvidence(value)
         if mode == .midas {
             camera.setGuidanceActive(value)
             if !value { camera.forceTorchOff() }
         }
-        if value && mode != .stereo { audio.start() } else { audio.stop() }
-        if value && mode == .stereo && stereoCaptureOnly {
-            threat = "UNAVAILABLE"
-            advisory = DirectionalAdvisory(state: "UNAVAILABLE", reasonCode: "STEREO_CAPTURE_ONLY")
-        }
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        if value { audio.start() } else { audio.stop() }
+        updateStereoProcessing()
+        UIImpactFeedbackGenerator(style: .soft).impactOccurred()
     }
 
     private func resetEvidence(_ value: Bool) {
         lock.lock()
         epoch.invalidate()
         enabled = value
-        lastFrame = 0
+        lastCaptureTimestamp = 0
+        captureInterval = 0
         lock.unlock()
         active = value
+        lifecycle = value ? .initializing : .paused
+        readiness = .captureReady
+        risk = .unknown
         modeReady = false
         stereoDiagnosticReady = false
-        previousStereoObservation = nil
+        coordinator = AdvisoryCoordinator()
         budget = AuditoryBudgetManager()
         result = nil
+        displayTracks = []
+        provisionalROICM = nil
         advisory = DirectionalAdvisory()
         prevAngle = nil
-        observationHistory.removeAll()
-        lastAcceptedFrameId = 0; lastAcceptedTimestamp = 0.0
-        started = CACurrentMediaTime(); sourceTimestamp = started
-        threat = value ? "INITIALIZING" : "PAUSED"
-        audio.update(decision: silentDecision())
+        lastAcceptedFrameId = 0
+        lastAcceptedTimestamp = 0
+        started = CACurrentMediaTime()
+        clearStatusCue()
+        lastStatusCueAt = -.infinity
+        outputAudio(silentDecision())
+        journal.recordLifecycle(mode, state: value ? "INITIALIZING" : "PAUSED", timestamp: started)
     }
 
     func disappear() {
@@ -571,69 +584,7 @@ final class DemoController: ObservableObject {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// APPLE-INSPIRED LIQUID GLASS BUTTON STYLE
-// ═══════════════════════════════════════════════════════════════════════════════
-struct LiquidButtonStyle: ButtonStyle {
-    let isActive: Bool
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 30, weight: .bold))
-            .foregroundColor(isActive ? Color.white : Color(white: 0.08))
-            .frame(maxWidth: .infinity, minHeight: 124)
-            .background(
-                ZStack {
-                    if isActive {
-                        // Active DỪNG state: Apple System Red liquid gradient with specular top highlight
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color(red: 1.0, green: 0.27, blue: 0.23), Color(red: 0.85, green: 0.12, blue: 0.09)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(0.45), Color.white.opacity(0.1)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                ),
-                                lineWidth: 1
-                            )
-                    } else {
-                        // Paused CHẠY state: Frosted glass finish with subtle specular highlight
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .fill(
-                                LinearGradient(
-                                    colors: [Color(red: 0.97, green: 0.97, blue: 0.98), Color(red: 0.89, green: 0.89, blue: 0.92)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                )
-                            )
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .stroke(
-                                LinearGradient(
-                                    colors: [Color.white.opacity(0.8), Color.white.opacity(0.2)],
-                                    startPoint: .top,
-                                    endPoint: .bottom
-                                ),
-                                lineWidth: 1
-                            )
-                    }
-                }
-            )
-            .shadow(color: isActive ? Color.red.opacity(0.3) : Color.black.opacity(0.25), radius: 8, x: 0, y: 4)
-            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
-            .animation(.spring(response: 0.24, dampingFraction: 0.68), value: configuration.isPressed)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MANUAL FLASHLIGHT BUTTON (P1-01)
-// ═══════════════════════════════════════════════════════════════════════════════
 struct FlashlightButton: View {
     let isTorchActive: Bool
     let action: () -> Void
@@ -670,265 +621,255 @@ struct FlashlightButton: View {
 // ═══════════════════════════════════════════════════════════════════════════════
 struct ContentView: View {
     @StateObject private var model = DemoController()
-    @State private var stereoDetails = false
+    @State private var diagnosticsSheet = false
     @State private var calibrationSheet = false
     @State private var calibrationImporter = false
     @State private var calibrationError: String?
     @Environment(\.scenePhase) private var scenePhase
 
+    private var showingDepth: Bool {
+        model.mode == .stereo && (model.showStereoDepth || model.showStereoDisparity)
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            // Rounded Camera Preview Container (P1-01)
-            ZStack {
-                if model.mode == .stereo && (model.showStereoDepth || model.showStereoDisparity) {
-                    if let disparity = model.showStereoDepth ? model.stereoDepth : model.stereoDisparity {
-                        Image(decorative: disparity, scale: 1)
-                            .resizable().interpolation(.none).scaledToFit()
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .background(Color.black)
-                    } else {
-                        Color.black.overlay { Text(model.showStereoDepth ? "Metric depth unavailable" : "Disparity unavailable").font(.caption).foregroundStyle(.white) }
-                    }
-                } else if model.mode == .midas {
-                    CameraPreviewView(session: model.camera.session)
-                } else if let preview = model.preview {
-                    GeometryReader { geometry in
-                        Image(decorative: preview, scale: 1)
-                            .resizable().scaledToFit()
-                            .frame(width: geometry.size.width, height: geometry.size.height)
-                            .clipped()
-                    }
-                } else {
-                    Color.black
-                }
-                let isStop = model.advisory.state == "STOP" && model.threat != "PAUSED"
-                TrackingOverlayView(result: model.mode == .stereo && (model.showStereoDepth || model.showStereoDisparity) ? nil : model.result, threatLevel: model.threat, mode: model.mode, isStop: isStop)
+        VStack(spacing: 12) {
+            camera
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .accessibilityElement(children: .contain)
 
-                // Centered Direction Indicator & Status Badge
-                VStack(spacing: 0) {
-                    Spacer()
-                    DirectionIndicator(advisory: model.advisory, threat: model.threat)
-                        .padding(.bottom, 28)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-
-                // Top-Right Floating Flashlight Button (Enlarged)
-                VStack(spacing: 0) {
-                    HStack(spacing: 0) {
-                        Spacer()
-                        FlashlightButton(isTorchActive: model.camera.isTorchActive) {
-                            model.camera.toggleManualTorch()
-                        }
-                        .disabled(model.mode != .midas)
-                        .opacity(model.mode == .midas ? 1 : 0.35)
-                        .accessibilityHint(model.mode == .midas ? "" : "Torch control is available in MiDaS")
-                        .padding(.top, 16)
-                        .padding(.trailing, 16)
-                    }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 26, style: .continuous)
-                    .stroke(Color.white.opacity(0.12), lineWidth: 1)
-            )
-            .background(Color.black)
-            .padding(.horizontal, 14)
-            .padding(.top, 8)
-            .padding(.bottom, 8)
-
-            HStack(spacing: 3) {
+            HStack(spacing: 4) {
                 ForEach(DepthMode.allCases) { mode in
                     let unsupported = DemoController.unsupported(mode)
                     Button { model.select(mode) } label: {
                         Text(mode.rawValue)
-                            .font(.caption.weight(.semibold))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 8)
-                            .background(model.mode == mode ? Color.white.opacity(0.2) : Color.clear,
-                                        in: RoundedRectangle(cornerRadius: 8))
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .background(model.mode == mode ? Color.white.opacity(0.17) : Color.clear,
+                                        in: RoundedRectangle(cornerRadius: 9))
                     }
                     .buttonStyle(.plain)
-                    .foregroundStyle(unsupported == nil ? Color.white : Color.gray)
                     .disabled(unsupported != nil)
-                    .accessibilityHint(unsupported ?? "Select depth method")
+                    .foregroundStyle(unsupported == nil ? Color.primary : Color.secondary)
+                    .accessibilityAddTraits(model.mode == mode ? [.isSelected] : [])
+                    .accessibilityHint(unsupported ?? "Select depth source")
                 }
             }
             .padding(3)
-            .background(Color.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-            .padding(.horizontal, 16)
+            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
 
-            let unsupported = DepthMode.allCases.compactMap(DemoController.unsupported)
-            if !unsupported.isEmpty {
-                Text(unsupported.joined(separator: " • "))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 16)
-            }
-            if model.mode == .stereo && (model.advisory.reasonCode == "CALIBRATION_REQUIRED"
-                || model.diagnostics.contains("CALIBRATION REQUIRED")) {
-                HStack(spacing: 8) {
-                    Text("Stereo images are available. Calibrate the cameras to enable verified centimeter depth; navigation remains disabled until then.")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                    Spacer(minLength: 4)
-                    Button("Calibrate") {
-                        if model.active { model.setActive(false) }
-                        calibrationSheet = true
-                    }
-                    .font(.caption2.weight(.semibold))
-                    .buttonStyle(.bordered)
+            if model.mode == .stereo && (model.readiness == .calibrationRequired || model.readiness == .calibrationInvalid) {
+                Button { openCalibration() } label: {
+                    Label(model.readiness == .calibrationInvalid ? "Review Stereo calibration" : "Calibrate Stereo",
+                          systemImage: "viewfinder")
+                        .frame(minHeight: 44)
                 }
-                .padding(.horizontal, 16)
+                .buttonStyle(.borderless)
             }
-            if model.mode == .stereo && stereoDetails {
-                Text(model.stereoHealth.isEmpty ? "Waiting for Stereo diagnostics" : model.stereoHealth)
-                    .font(.caption2.monospacedDigit())
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 16)
-                    .foregroundStyle(.white)
-            }
-            HStack {
-                let status = model.mode == .stereo && model.advisory.state == "UNAVAILABLE"
-                    ? (model.advisory.reasonCode == "CALIBRATION_REQUIRED"
-                       ? "CALIBRATION REQUIRED • GUIDANCE DISABLED"
-                       : model.advisory.reasonCode.hasPrefix("CALIBRATION_INVALID")
-                       ? "CALIBRATION INVALID • GUIDANCE DISABLED"
-                       : model.advisory.reasonCode == "INSUFFICIENT_DEPTH_COVERAGE"
-                       ? "INSUFFICIENT DEPTH COVERAGE • UNSAFE TO ADVISE"
-                       : "UNAVAILABLE — UNSAFE TO ADVISE")
-                    : model.advisory.state
-                Text((model.diagnostics.isEmpty ? model.mode.rawValue : model.diagnostics) + " • " + status)
-                    .font(.caption2.monospacedDigit())
-                Spacer()
-                if model.mode == .stereo {
-                    Menu {
-                        Button(stereoDetails ? "Hide capture metrics" : "Show capture metrics") { stereoDetails.toggle() }
-                        Toggle("Show disparity", isOn: $model.showStereoDisparity)
-                        Toggle("Show metric depth", isOn: $model.showStereoDepth)
-                        Button("Acquire calibration dataset") {
-                            if model.active { model.setActive(false) }
-                            calibrationSheet = true
-                        }
-                        Button("Import calibration profile") { calibrationImporter = true }
-                        Button(model.stereoCaptureOnly ? "Enable depth processing" : "Capture only") {
-                            model.configureStereo(strategy: model.stereoStrategy, captureOnly: !model.stereoCaptureOnly)
-                        }
-                        ForEach(StereoDeliveryStrategy.allCases) { strategy in
-                            Button(strategy.rawValue + (model.stereoStrategy == strategy ? " ✓" : "")) {
-                                model.configureStereo(strategy: strategy, captureOnly: model.stereoCaptureOnly)
-                            }
-                        }
-                    } label: { Image(systemName: "waveform.path") }
-                        .accessibilityLabel("Stereo diagnostics and strategy")
-                    Button { model.captureStereoPair() } label: { Image(systemName: "camera") }
-                        .accessibilityLabel("Capture synchronized stereo calibration pair")
-                    if model.stereoPairFailed { Image(systemName: "exclamationmark.triangle").accessibilityLabel("Stereo pair unavailable") }
-                    if let url = model.stereoPairURL {
-                        ShareLink(item: url) { Image(systemName: "square.and.arrow.up.on.square") }
-                            .accessibilityLabel("Share synchronized stereo calibration pair")
-                    }
-                }
-                if let url = model.exportURL {
-                    Button { model.prepareExport() } label: { Image(systemName: "arrow.clockwise") }
-                        .accessibilityLabel("Refresh diagnostics export")
-                    ShareLink(item: url) { Image(systemName: "square.and.arrow.up") }
-                        .accessibilityLabel("Share diagnostics")
-                } else {
-                    Button { model.prepareExport() } label: { Image(systemName: "doc.badge.arrow.up") }
-                        .accessibilityLabel("Prepare diagnostics export")
-                }
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 5)
-
-            // Enlarged Liquid START/STOP Button (P0-03)
-            Button(action: model.toggle) {
-                Text(model.active ? "DỪNG" : "CHẠY")
-            }
-            .buttonStyle(LiquidButtonStyle(isActive: model.active))
-            .accessibilityLabel(model.active ? "Dừng nhận thức tránh va chạm" : "Bắt đầu nhận thức tránh va chạm")
-            .padding(.horizontal, 16)
-            .padding(.bottom, 16)
+            runControl
         }
-        .background(Color(red: 0.04, green: 0.04, blue: 0.05)) // Apple Dark Chassis (#0A0A0C)
-        .sheet(isPresented: $calibrationSheet) {
-            StereoCalibrationView(model: model)
-        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color.black.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .sheet(isPresented: $calibrationSheet) { StereoCalibrationView(model: model) }
+        .sheet(isPresented: $diagnosticsSheet) { diagnostics }
         .fileImporter(isPresented: $calibrationImporter, allowedContentTypes: [.json]) { result in
             do { try model.importStereoCalibration(result.get()) }
+            catch let error as CocoaError where error.code == .userCancelled { return }
             catch { calibrationError = error.localizedDescription }
         }
-        .alert("Calibration invalid", isPresented: Binding(get: { calibrationError != nil },
+        .alert("Calibration import", isPresented: Binding(get: { calibrationError != nil },
               set: { if !$0 { calibrationError = nil } })) {
             Button("OK", role: .cancel) { calibrationError = nil }
         } message: {
             Text(calibrationError ?? "")
         }
-        .onAppear { model.appear() }
+        .onAppear { if scenePhase == .active { model.appear() } }
         .onDisappear { model.disappear() }
         .onChange(of: scenePhase) { phase in
             if phase == .active { model.appear() }
-            else if phase == .background { model.disappear() }
+            else { model.disappear() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: AVAudioSession.interruptionNotification)) { event in
+            let type = event.userInfo?[AVAudioSessionInterruptionTypeKey] as? UInt
+            if type == AVAudioSession.InterruptionType.began.rawValue { model.setActive(false) }
+        }
+    }
+
+    private var camera: some View {
+        ZStack(alignment: .bottom) {
+            GeometryReader { geometry in
+                if showingDepth {
+                    let image = model.showStereoDepth ? model.stereoDepth : model.stereoDisparity
+                    if let image {
+                        Image(decorative: image, scale: 1)
+                            .resizable().interpolation(.none).scaledToFit()
+                            .frame(width: geometry.size.width, height: geometry.size.height)
+                    } else {
+                        Text(model.showStereoDepth ? "Calibrated depth unavailable" : "Disparity unavailable")
+                            .font(.footnote)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+                } else if model.mode == .midas {
+                    CameraPreviewView(session: model.camera.session)
+                } else if let preview = model.preview {
+                    Image(decorative: preview, scale: 1)
+                        .resizable().scaledToFit()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
+                }
+            }
+            .background(Color(white: 0.07))
+
+            if !showingDepth {
+                TrackingOverlayView(result: model.result, tracks: model.displayTracks,
+                    risk: model.risk, mode: model.mode, isStop: model.advisory.status == .stop)
+            }
+
+            DirectionIndicator(advisory: model.advisory, lifecycle: model.lifecycle, risk: model.risk)
+                .padding(12)
+        }
+        .overlay(alignment: .topTrailing) {
+            HStack(spacing: 8) {
+                if model.mode == .midas {
+                    FlashlightButton(isTorchActive: model.camera.isTorchActive) {
+                        model.camera.toggleManualTorch()
+                    }
+                }
+                Menu {
+                    Button { diagnosticsSheet = true } label: { Label("Research diagnostics", systemImage: "waveform.path") }
+                    if model.lifecycle == .sensorFault {
+                        Button { model.retryCapture() } label: { Label("Restart camera", systemImage: "arrow.clockwise") }
+                    }
+                    if model.mode == .stereo {
+                        Button { openCalibration() } label: { Label("Acquire calibration dataset", systemImage: "viewfinder") }
+                        Button { calibrationImporter = true } label: { Label("Import calibration profile", systemImage: "square.and.arrow.down") }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis")
+                        .font(.headline)
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: Circle())
+                }
+                .accessibilityLabel("Camera options")
+            }
+            .padding(12)
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func openCalibration() {
+        model.setActive(false)
+        model.showStereoDepth = false
+        model.showStereoDisparity = false
+        calibrationSheet = true
+    }
+
+    @ViewBuilder private var runControl: some View {
+        #if compiler(>=6.2)
+        if #available(iOS 26.0, *) {
+            Button(action: model.toggle) { runLabel }
+                .buttonStyle(.glassProminent)
+                .tint(.white)
+        } else {
+            legacyRunControl
+        }
+        #else
+        legacyRunControl
+        #endif
+    }
+
+    private var legacyRunControl: some View {
+        Button(action: model.toggle) { runLabel }
+            .buttonStyle(.borderedProminent)
+            .buttonBorderShape(.capsule)
+            .tint(.white)
+    }
+
+    private var runLabel: some View {
+        Label(model.active ? "Tạm dừng" : "Bắt đầu", systemImage: model.active ? "pause.fill" : "play.fill")
+            .font(.headline)
+            .foregroundStyle(.black)
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .accessibilityHint(model.active ? "Stops guidance and audio" : "Starts obstacle perception and guidance")
+    }
+
+    private var diagnostics: some View {
+        NavigationStack {
+            Form {
+                Section(model.mode.rawValue) {
+                    Text(model.diagnostics.isEmpty ? "Waiting for frames" : model.diagnostics)
+                        .font(.footnote.monospacedDigit())
+                    Text(model.advisory.reasonCode)
+                        .font(.caption.monospaced())
+                    if model.mode == .stereo {
+                        Text(model.stereoHealth.isEmpty ? "Waiting for synchronized capture" : model.stereoHealth)
+                            .font(.footnote.monospacedDigit())
+                        if let value = model.provisionalROICM {
+                            Text("Unvalidated factory estimate, central region: \(value, specifier: "%.0f") cm")
+                        }
+                    }
+                }
+                if model.mode == .stereo {
+                    Section("Stereo research controls") {
+                        Toggle("Show disparity", isOn: $model.showStereoDisparity)
+                            .onChange(of: model.showStereoDisparity) { if $0 { model.showStereoDepth = false } }
+                        Toggle("Show calibrated depth", isOn: $model.showStereoDepth)
+                            .onChange(of: model.showStereoDepth) { if $0 { model.showStereoDisparity = false } }
+                        Picker("Delivery", selection: Binding(get: { model.stereoStrategy },
+                               set: { model.configureStereo(strategy: $0, captureOnly: model.stereoCaptureOnly) })) {
+                            ForEach(StereoDeliveryStrategy.allCases) { strategy in Text(strategy.rawValue).tag(strategy) }
+                        }
+                        Toggle("Capture only", isOn: Binding(get: { model.stereoCaptureOnly },
+                               set: { model.configureStereo(strategy: model.stereoStrategy, captureOnly: $0) }))
+                        Button("Capture synchronized pair") { model.captureStereoPair() }
+                        if model.stereoPairFailed { Text("Pair unavailable") }
+                        if let url = model.stereoPairURL { ShareLink("Share pair", item: url) }
+                    }
+                }
+                Section("Telemetry") {
+                    Button("Prepare CSV export") { model.prepareExport() }
+                    if let url = model.exportURL { ShareLink("Share CSV", item: url) }
+                }
+            }
+            .navigationTitle("Research diagnostics")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { diagnosticsSheet = false } }
         }
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// 3D DIRECTIONAL ADVISORY INDICATOR (P0-01)
-// ═══════════════════════════════════════════════════════════════════════════════
 struct DirectionIndicator: View {
     let advisory: DirectionalAdvisory
-    let threat: String
+    let lifecycle: PerceptionLifecycle
+    let risk: PerceptionRisk
 
     var body: some View {
-        ZStack {
-            let isStop = advisory.state == "STOP" && threat != "PAUSED"
-            let isPaused = threat == "PAUSED"
-
-            if !isStop && !isPaused, let angle = advisory.drawableAngle(now: CACurrentMediaTime()) {
-                // Perceptual visual rotation mapping (P0-01)
-                let visualAngle = max(-45.0, min(45.0, angle * 1.4))
-                let lateralOffset = max(-35.0, min(35.0, visualAngle * 0.9))
-
-                Image(systemName: "arrow.up")
-                    .font(.system(size: 84, weight: .heavy))
-                    .rotation3DEffect(.degrees(22), axis: (x: 1, y: 0, z: 0)) // 3D road perspective
-                    .rotationEffect(.degrees(visualAngle))
-                    .offset(x: lateralOffset)
-                    .foregroundStyle(
-                        LinearGradient(
-                            colors: [Color.white, Color(red: 0.88, green: 0.88, blue: 0.92)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .shadow(color: Color.black.opacity(0.75), radius: 6, x: 0, y: 5)
-                    .animation(.spring(response: 0.22, dampingFraction: 0.75), value: angle)
-                    .accessibilityLabel("Estimated direction advisory")
-            } else {
-                let labelText = isPaused ? "PAUSED" : (isStop ? "STOP" : (threat == "INITIALIZING" ? "INITIALIZING" : "UNAVAILABLE"))
-                let iconName = isStop ? "hand.raised.fill" : "minus.circle"
-
-                Label(labelText, systemImage: iconName)
-                    .font(.system(size: 22, weight: .bold))
-                    .foregroundColor(isStop ? Color(red: 1.0, green: 0.23, blue: 0.19) : Color(red: 0.95, green: 0.95, blue: 0.97))
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 18, style: .continuous)
-                            .fill(Color(white: 0.05).opacity(0.85))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                                    .stroke(Color.white.opacity(0.18), lineWidth: 1)
-                            )
-                    )
-                    .accessibilityLabel(isStop ? "Stop. Obstacle detected" : (isPaused ? "Perception paused" : "Direction unavailable"))
-            }
+        if lifecycle == .running, let angle = advisory.drawableAngle(now: CACurrentMediaTime()) {
+            Image(systemName: "arrow.up.circle.fill")
+                .font(.system(size: 44, weight: .semibold))
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.black, risk == .critical ? Color.red : risk == .warning ? .orange : .white)
+                .rotationEffect(.degrees(angle))
+                .accessibilityLabel(angle < -2 ? "Direction left" : angle > 2 ? "Direction right" : "Direction ahead")
+        } else {
+            Label(status.0, systemImage: status.1)
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(status.2)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .background(.regularMaterial, in: Capsule())
         }
-        .frame(maxWidth: .infinity)
+    }
+
+    private var status: (String, String, Color) {
+        if lifecycle == .paused { return ("Tạm dừng", "pause.fill", .white) }
+        if lifecycle == .initializing { return ("Đang khởi động", "hourglass", .white) }
+        if advisory.isFreshStop(now: CACurrentMediaTime()) { return ("Dừng lại", "hand.raised.fill", .red) }
+        if risk == .critical { return ("Nguy hiểm · Chưa rõ hướng", "exclamationmark.triangle.fill", .red) }
+        if risk == .warning || risk == .unresolved { return ("Cẩn thận · Chưa rõ hướng", "exclamationmark.triangle", .orange) }
+        if lifecycle == .sensorFault { return ("Cảm biến gián đoạn", "sensor.fill", .white) }
+        return ("Chưa đủ dữ liệu", "minus.circle", .white)
     }
 }

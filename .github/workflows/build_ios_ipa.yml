@@ -2,7 +2,7 @@ name: Build Unsigned iOS IPA (iPhone 14 Sideloadly)
 
 on:
   push:
-    branches: [ main, master, feature/demo-ready-unified-ux, feature/ios-trimode-depth-prototype ]
+    branches: [ main, master, feature/demo-ready-unified-ux, feature/ios-trimode-depth-prototype, feature/vampior-final-integration ]
   workflow_dispatch:
 
 concurrency:
@@ -26,15 +26,15 @@ jobs:
 
       - name: Run portable depth prototype tests
         run: |
-          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/tests/DepthPrototypeTests.swift -o /tmp/depth-prototype
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift testing/ios/DepthPrototypeTests.swift -o /tmp/depth-prototype
           /tmp/depth-prototype
-          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoCalibration.swift ios/tests/StereoCalibrationTests.swift -o /tmp/stereo-calibration
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoCalibration.swift testing/ios/StereoCalibrationTests.swift -o /tmp/stereo-calibration
           /tmp/stereo-calibration
-          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoNegotiation.swift ios/tests/StereoNegotiationTests.swift -o /tmp/stereo-negotiation
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoNegotiation.swift testing/ios/StereoNegotiationTests.swift -o /tmp/stereo-negotiation
           /tmp/stereo-negotiation
-          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoPairing.swift ios/tests/StereoPairingTests.swift -o /tmp/stereo-pairing
+          swiftc ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/StereoPairing.swift testing/ios/StereoPairingTests.swift -o /tmp/stereo-pairing
           /tmp/stereo-pairing
-          swiftc -O ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/DenseStereo.swift ios/tests/DenseStereoTests.swift -o /tmp/dense-stereo
+          swiftc -O ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/DenseStereo.swift testing/ios/DenseStereoTests.swift -o /tmp/dense-stereo
           /tmp/dense-stereo
 
       - name: Set up Python 3.10
@@ -42,6 +42,7 @@ jobs:
         with:
           python-version: '3.10'
           cache: 'pip'
+          cache-dependency-path: python/requirements.txt
 
       - name: Install CoreML Exporter Dependencies
         run: |
@@ -51,7 +52,7 @@ jobs:
       - name: Run synthetic Stereo calibration fixture
         run: |
           pip install "opencv-python-headless==4.11.0.86"
-          PYTHONDONTWRITEBYTECODE=1 python ios/tests/test_stereo_calibration_fixture.py
+          PYTHONDONTWRITEBYTECODE=1 python -m testing.ios.test_stereo_calibration_fixture
 
       - name: Pre-cache MiDaS PyTorch Weights and Architecture
         run: |
@@ -78,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== Compiling native Swift behavior regressions ==="
-          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/MetricSpatialObservation.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift ios/tests/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
+          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/MetricSpatialObservation.swift ios/HorusEyes/Vision/MetricObstacleTracker.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift testing/ios/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
             echo "FATAL: swiftc compilation failed"
             cat swiftc.log
             exit 1

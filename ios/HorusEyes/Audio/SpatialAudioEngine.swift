@@ -79,6 +79,7 @@ final class SpatialAudioEngine: ObservableObject {
         var lpStateR: Float = 0.0
 
         var faultTimer: Float = 0.0
+        var wasFault = false
         var earconTimer: Float = 0.0
         var activeEarconFreq: Float = 0.0
 
@@ -118,22 +119,24 @@ final class SpatialAudioEngine: ObservableObject {
 
             // 2. System Fault Tone
             if currentState.cueMode == 2 {
+                if !wasFault { faultTimer = 0 }
+                wasFault = true
                 for i in 0..<frames {
                     faultTimer += dt
                     let cycle = 2.0 * Config.faultToneDuration + Config.faultToneGap
-                    let pos = fmod(faultTimer, cycle)
+                    let pos = min(cycle, faultTimer)
                     var sig: Float = 0.0
 
                     if pos < Config.faultToneDuration {
                         let env = min(1.0, pos / 0.003) * min(1.0, (Config.faultToneDuration - pos) / 0.005)
                         sig = 0.35 * env * sin(2.0 * .pi * Config.faultToneFreqHi * pos)
-                    } else if pos > (Config.faultToneDuration + Config.faultToneGap) {
+                    } else if pos > (Config.faultToneDuration + Config.faultToneGap), pos < cycle {
                         let pos2 = pos - Config.faultToneDuration - Config.faultToneGap
                         let env = min(1.0, pos2 / 0.003) * min(1.0, (Config.faultToneDuration - pos2) / 0.005)
                         sig = 0.35 * env * sin(2.0 * .pi * Config.faultToneFreqLo * pos2)
                     }
 
-                    let lim = tanh(sig * 0.891)
+                    let lim = tanh(sig * 0.891 * currentState.volumeFactor)
                     if isDualBuffer {
                         leftPtr[i] = lim
                         rightPtr[i] = lim
@@ -144,6 +147,7 @@ final class SpatialAudioEngine: ObservableObject {
                 }
                 return noErr
             }
+            wasFault = false
 
             // 3. Silence / Muted Check
             if !currentState.isActive || currentState.cueMode == 3 {

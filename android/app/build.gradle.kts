@@ -40,6 +40,7 @@ android {
     }
 
     testOptions { unitTests.isReturnDefaultValues = true }
+    sourceSets.getByName("test").resources.srcDir(rootProject.file("../data/fixtures"))
 
     buildFeatures {
         viewBinding = true

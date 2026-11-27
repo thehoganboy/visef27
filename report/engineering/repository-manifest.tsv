@@ -1,0 +1,239 @@
+Original path	Action	Current path	Classification	Dependency and evidence
+.github/workflows/build_ios_ipa.yml	retain	.github/workflows/build_ios_ipa.yml	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+.gitignore	retain	.gitignore	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+Bao_Cao_Ky_Thuat_HorusEyes_2.0.html	move	report/research/Bao_Cao_Ky_Thuat_HorusEyes_2.0.html	Report/documentation	Current entry point or preserved technical history.
+Bao_Cao_Ky_Thuat_HorusEyes_2.0.pdf	move	report/research/Bao_Cao_Ky_Thuat_HorusEyes_2.0.pdf	Report/documentation	Current entry point or preserved technical history.
+CODEBASE_DOCUMENTATION.md	move	report/archive/CODEBASE_DOCUMENTATION.md	Report/documentation	Current entry point or preserved technical history.
+DEMO_FINAL_CORRECTIVE_REPORT.md	move	report/archive/DEMO_FINAL_CORRECTIVE_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+DEMO_GUIDANCE_UI_FINAL_REPORT.md	move	report/archive/DEMO_GUIDANCE_UI_FINAL_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+DEMO_READY_AUDIT.md	move	report/archive/DEMO_READY_AUDIT.md	Report/documentation	Current entry point or preserved technical history.
+DEMO_READY_FINAL_ACCEPTANCE.md	move	report/archive/DEMO_READY_FINAL_ACCEPTANCE.md	Report/documentation	Current entry point or preserved technical history.
+DEMO_READY_FINAL_REPORT.md	move	report/archive/DEMO_READY_FINAL_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+DEMO_STABILIZATION_FINAL_REPORT.md	move	report/archive/DEMO_STABILIZATION_FINAL_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+MOBILE_RETEST_RELEASE_CANDIDATE_REPORT.md	move	report/archive/MOBILE_RETEST_RELEASE_CANDIDATE_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+PRE_MOBILE_RETEST_FINAL_ACCEPTANCE.md	move	report/archive/PRE_MOBILE_RETEST_FINAL_ACCEPTANCE.md	Report/documentation	Current entry point or preserved technical history.
+README.md	retain	README.md	Report/documentation	Current entry point or preserved technical history.
+Tong_Hop_Framework_KyThuat_ToanLy_HorusEyes.pdf	move	report/research/Tong_Hop_Framework_KyThuat_ToanLy_HorusEyes.pdf	Report/documentation	Current entry point or preserved technical history.
+VAMPIOR_3_1_COMPLETION_REPORT.md	move	report/archive/VAMPIOR_3_1_COMPLETION_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+VAMPIOR_FIELD_TEST_RELEASE.md	move	report/archive/VAMPIOR_FIELD_TEST_RELEASE.md	Report/documentation	Current entry point or preserved technical history.
+VAMPIOR_LOW_LIGHT_GUIDANCE_STABILITY_REPORT.md	move	report/archive/VAMPIOR_LOW_LIGHT_GUIDANCE_STABILITY_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+VAMPIOR_MOBILE_UI_FINAL_REPORT.md	move	report/archive/VAMPIOR_MOBILE_UI_FINAL_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+VAMPIOR_STEREO_MULTICAM_RECOVERY_REPORT.md	move	report/archive/VAMPIOR_STEREO_MULTICAM_RECOVERY_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+VAMPIOR_TRIMODE_PROTOTYPE_REPORT.md	move	report/archive/VAMPIOR_TRIMODE_PROTOTYPE_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+android/README.md	retain	android/README.md	Report/documentation	Current entry point or preserved technical history.
+android/app/build.gradle.kts	retain	android/app/build.gradle.kts	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/app/proguard-rules.pro	retain	android/app/proguard-rules.pro	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/app/src/main/AndroidManifest.xml	retain	android/app/src/main/AndroidManifest.xml	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/app/src/main/assets/midas_small.onnx	retain	android/app/src/main/assets/midas_small.onnx	Runtime model/resource	Gradle packages this asset. Desktop and Core ML parity also load midas_small.onnx by exact path.
+android/app/src/main/assets/midas_small_int8.onnx	retain	android/app/src/main/assets/midas_small_int8.onnx	Runtime model/resource	Gradle packages this asset. Desktop and Core ML parity also load midas_small.onnx by exact path.
+android/app/src/main/java/com/horuseyes/app/Config.kt	retain	android/app/src/main/java/com/horuseyes/app/Config.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/MainActivity.kt	retain	android/app/src/main/java/com/horuseyes/app/MainActivity.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/audio/SpatialAudioEngine.kt	retain	android/app/src/main/java/com/horuseyes/app/audio/SpatialAudioEngine.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/budget/AuditoryBudgetManager.kt	retain	android/app/src/main/java/com/horuseyes/app/budget/AuditoryBudgetManager.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/kinematics/KinematicsEngine.kt	retain	android/app/src/main/java/com/horuseyes/app/kinematics/KinematicsEngine.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/math/PchipInterpolator.kt	retain	android/app/src/main/java/com/horuseyes/app/math/PchipInterpolator.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/ui/OverlayView.kt	retain	android/app/src/main/java/com/horuseyes/app/ui/OverlayView.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/vision/CameraAnalyzer.kt	retain	android/app/src/main/java/com/horuseyes/app/vision/CameraAnalyzer.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/java/com/horuseyes/app/vision/DepthEngine.kt	retain	android/app/src/main/java/com/horuseyes/app/vision/DepthEngine.kt	Production source	Native target source discovery or Python application imports.
+android/app/src/main/res/drawable/bg_button_chay.xml	retain	android/app/src/main/res/drawable/bg_button_chay.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/drawable/bg_button_dung.xml	retain	android/app/src/main/res/drawable/bg_button_dung.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/drawable/bg_torch_button.xml	retain	android/app/src/main/res/drawable/bg_torch_button.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/drawable/ic_launcher_background.xml	retain	android/app/src/main/res/drawable/ic_launcher_background.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/drawable/ic_launcher_foreground.xml	retain	android/app/src/main/res/drawable/ic_launcher_foreground.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/drawable/ic_torch.xml	retain	android/app/src/main/res/drawable/ic_torch.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/layout/activity_main.xml	retain	android/app/src/main/res/layout/activity_main.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml	retain	android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml	retain	android/app/src/main/res/mipmap-anydpi-v26/ic_launcher_round.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-hdpi/ic_launcher.png	retain	android/app/src/main/res/mipmap-hdpi/ic_launcher.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png	retain	android/app/src/main/res/mipmap-hdpi/ic_launcher_foreground.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png	retain	android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-mdpi/ic_launcher.png	retain	android/app/src/main/res/mipmap-mdpi/ic_launcher.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png	retain	android/app/src/main/res/mipmap-mdpi/ic_launcher_foreground.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png	retain	android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xhdpi/ic_launcher.png	retain	android/app/src/main/res/mipmap-xhdpi/ic_launcher.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png	retain	android/app/src/main/res/mipmap-xhdpi/ic_launcher_foreground.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png	retain	android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png	retain	android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png	retain	android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png	retain	android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png	retain	android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png	retain	android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_foreground.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png	retain	android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/values/colors.xml	retain	android/app/src/main/res/values/colors.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/values/strings.xml	retain	android/app/src/main/res/values/strings.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/main/res/values/themes.xml	retain	android/app/src/main/res/values/themes.xml	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+android/app/src/test/java/com/horuseyes/app/DemoBehaviorTest.kt	retain	android/app/src/test/java/com/horuseyes/app/DemoBehaviorTest.kt	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+android/app/src/test/java/com/horuseyes/app/DirectionalGoldenTest.kt	retain	android/app/src/test/java/com/horuseyes/app/DirectionalGoldenTest.kt	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+android/app/src/test/java/com/horuseyes/app/TensorSpatialIntegrationTest.kt	retain	android/app/src/test/java/com/horuseyes/app/TensorSpatialIntegrationTest.kt	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+android/app/src/test/resources/golden_directional_scenarios.json	delete	data/fixtures/golden_directional_scenarios.json	Verified redundant	Identical Git blob 45d5c4c1434be05d1f1047d0d147fd4f6fd25018. Gradle test resources use the shared fixture.
+android/build.gradle.kts	retain	android/build.gradle.kts	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/export_onnx.py	retain	android/export_onnx.py	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+android/gradle.properties	retain	android/gradle.properties	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/gradle/wrapper/gradle-wrapper.jar	retain	android/gradle/wrapper/gradle-wrapper.jar	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/gradle/wrapper/gradle-wrapper.properties	retain	android/gradle/wrapper/gradle-wrapper.properties	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/gradlew	retain	android/gradlew	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/gradlew.bat	retain	android/gradlew.bat	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+android/settings.gradle.kts	retain	android/settings.gradle.kts	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+audio_synth.py	move	python/audio_synth.py	Production source	Native target source discovery or Python application imports.
+auditory_budget.py	move	python/auditory_budget.py	Production source	Native target source discovery or Python application imports.
+benchmark_master_suite.py	move	testing/benchmarks/benchmark_master_suite.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+benchmark_nyu_pipeline.py	move	testing/benchmarks/benchmark_nyu_pipeline.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+benchmark_tum_motion.py	move	testing/benchmarks/benchmark_tum_motion.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+benchmark_viz/eval_sample_00000.jpg	move	data/evaluation/nyu_images/eval_sample_00000.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+benchmark_viz/eval_sample_00046.jpg	move	data/evaluation/nyu_images/eval_sample_00046.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+benchmark_viz/eval_sample_00093.jpg	move	data/evaluation/nyu_images/eval_sample_00093.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+benchmark_viz/eval_sample_00139.jpg	move	data/evaluation/nyu_images/eval_sample_00139.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+benchmark_viz/eval_sample_00186.jpg	move	data/evaluation/nyu_images/eval_sample_00186.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+benchmark_viz/eval_sample_00279.jpg	move	data/evaluation/nyu_images/eval_sample_00279.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+benchmark_viz/eval_sample_00419.jpg	move	data/evaluation/nyu_images/eval_sample_00419.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+benchmark_viz/eval_sample_00559.jpg	move	data/evaluation/nyu_images/eval_sample_00559.jpg	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+config.py	move	python/config.py	Production source	Native target source discovery or Python application imports.
+debug_motion_live.py	move	testing/tools/debug_motion_live.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+demo_runtime.py	move	python/demo_runtime.py	Production source	Native target source discovery or Python application imports.
+demo_ui.py	move	python/demo_ui.py	Production source	Native target source discovery or Python application imports.
+depth_engine.py	move	python/depth_engine.py	Production source	Native target source discovery or Python application imports.
+diagnose_system.py	move	testing/tools/diagnose_system.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+directional_advisory.py	move	python/directional_advisory.py	Production source	Native target source discovery or Python application imports.
+export_clean_pchip_chart.py	move	scripts/export_clean_pchip_chart.py	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+generate_pdf_report.py	move	scripts/generate_pdf_report.py	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@2x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@2x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@3x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-20x20@3x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@2x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@2x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@3x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-29x29@3x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@2x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@2x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@3x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-40x40@3x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-60x60@2x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-60x60@2x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-60x60@3x.png	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/AppIcon-60x60@3x.png	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/Contents.json	retain	ios/HorusEyes/Assets.xcassets/AppIcon.appiconset/Contents.json	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Assets.xcassets/Contents.json	retain	ios/HorusEyes/Assets.xcassets/Contents.json	Runtime model/resource	Scoped by XcodeGen or Android resource linking.
+ios/HorusEyes/Audio/SpatialAudioEngine.swift	retain	ios/HorusEyes/Audio/SpatialAudioEngine.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Budget/AuditoryBudgetManager.swift	retain	ios/HorusEyes/Budget/AuditoryBudgetManager.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Config.swift	retain	ios/HorusEyes/Config.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/HorusEyesApp.swift	retain	ios/HorusEyes/HorusEyesApp.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Info.plist	retain	ios/HorusEyes/Info.plist	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+ios/HorusEyes/Kinematics/IMUManager.swift	retain	ios/HorusEyes/Kinematics/IMUManager.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Kinematics/KinematicsEngine.swift	retain	ios/HorusEyes/Kinematics/KinematicsEngine.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Math/PchipInterpolator.swift	retain	ios/HorusEyes/Math/PchipInterpolator.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/UI/CameraPreviewView.swift	retain	ios/HorusEyes/UI/CameraPreviewView.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/UI/ContentView.swift	retain	ios/HorusEyes/UI/ContentView.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/UI/DirectionalAdvisory.swift	retain	ios/HorusEyes/UI/DirectionalAdvisory.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/UI/SpatialRadarView.swift	retain	ios/HorusEyes/UI/SpatialRadarView.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/UI/StereoCalibrationView.swift	retain	ios/HorusEyes/UI/StereoCalibrationView.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/UI/TelemetrySheetView.swift	retain	ios/HorusEyes/UI/TelemetrySheetView.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/UI/TrackingOverlayView.swift	retain	ios/HorusEyes/UI/TrackingOverlayView.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/CameraTorchManager.swift	retain	ios/HorusEyes/Vision/CameraTorchManager.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/DenseStereo.swift	retain	ios/HorusEyes/Vision/DenseStereo.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/DepthDiagnostics.swift	retain	ios/HorusEyes/Vision/DepthDiagnostics.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/DepthEngine.swift	retain	ios/HorusEyes/Vision/DepthEngine.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/DepthFrame.swift	retain	ios/HorusEyes/Vision/DepthFrame.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/MetricSpatialObservation.swift	retain	ios/HorusEyes/Vision/MetricSpatialObservation.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/NativeDepthCapture.swift	retain	ios/HorusEyes/Vision/NativeDepthCapture.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/StereoCalibration.swift	retain	ios/HorusEyes/Vision/StereoCalibration.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/StereoIngress.swift	retain	ios/HorusEyes/Vision/StereoIngress.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/StereoNegotiation.swift	retain	ios/HorusEyes/Vision/StereoNegotiation.swift	Production source	Native target source discovery or Python application imports.
+ios/HorusEyes/Vision/StereoPairing.swift	retain	ios/HorusEyes/Vision/StereoPairing.swift	Production source	Native target source discovery or Python application imports.
+ios/STEREO_3_3_REPORT.md	move	report/archive/STEREO_3_3_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+ios/project.yml	retain	ios/project.yml	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+ios/scripts/export_coreml.py	retain	ios/scripts/export_coreml.py	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+ios/scripts/fit_stereo_calibration.py	retain	ios/scripts/fit_stereo_calibration.py	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+ios/tests/BehaviorTests.swift	move	testing/ios/BehaviorTests.swift	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+ios/tests/DenseStereoTests.swift	move	testing/ios/DenseStereoTests.swift	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+ios/tests/DepthPrototypeTests.swift	move	testing/ios/DepthPrototypeTests.swift	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+ios/tests/StereoCalibrationTests.swift	move	testing/ios/StereoCalibrationTests.swift	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+ios/tests/StereoNegotiationTests.swift	move	testing/ios/StereoNegotiationTests.swift	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+ios/tests/StereoPairingTests.swift	move	testing/ios/StereoPairingTests.swift	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+ios/tests/test_stereo_calibration_fixture.py	move	testing/ios/test_stereo_calibration_fixture.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+logo_vampior.png	move	scripts/assets/logo_vampior.png	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+main.py	move	python/main.py	Production source	Native target source discovery or Python application imports.
+midas_small_128.onnx	move	models/midas_small_128.onnx	Runtime model/resource	Retained model artifact. Master benchmark selects models by filename. See models/SHA256SUMS.
+midas_small_160.onnx	move	models/midas_small_160.onnx	Runtime model/resource	Retained model artifact. Master benchmark selects models by filename. See models/SHA256SUMS.
+midas_small_192.onnx	move	models/midas_small_192.onnx	Runtime model/resource	Retained model artifact. Master benchmark selects models by filename. See models/SHA256SUMS.
+midas_small_256.onnx	move	models/midas_small_256.onnx	Runtime model/resource	Retained model artifact. Master benchmark selects models by filename. See models/SHA256SUMS.
+model-small-int8.onnx	move	models/model-small-int8.onnx	Runtime model/resource	Retained model artifact. Master benchmark selects models by filename. See models/SHA256SUMS.
+model-small.onnx	move	models/model-small.onnx	Runtime model/resource	Retained model artifact. Master benchmark selects models by filename. See models/SHA256SUMS.
+motion_ttc.py	move	python/motion_ttc.py	Production source	Native target source discovery or Python application imports.
+nyu_evaluator.py	move	testing/benchmarks/nyu_evaluator.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+poc_demo.py	move	testing/tools/poc_demo.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+replay_demo.py	move	testing/tools/replay_demo.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+report_template.html	move	report/research/report_template.html	Report/documentation	Current entry point or preserved technical history.
+reports/BASELINE_METRICS.md	move	report/archive/BASELINE_METRICS.md	Report/documentation	Current entry point or preserved technical history.
+reports/Bao_Cao_Ky_Thuat_Moi_HorusEyes_2.0.md	move	report/research/Bao_Cao_Ky_Thuat_Moi_HorusEyes_2.0.md	Report/documentation	Current entry point or preserved technical history.
+reports/IMPLEMENTATION_PLAN.md	move	report/archive/IMPLEMENTATION_PLAN.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE00_AUDIT.md	move	report/archive/PHASE00_AUDIT.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01A_BENCHMARK.md	move	report/archive/PHASE01A_BENCHMARK.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01A_CHANGELOG.md	move	report/archive/PHASE01A_CHANGELOG.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01A_TEST_RESULTS.md	move	report/archive/PHASE01A_TEST_RESULTS.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_BASELINE.md	move	report/archive/PHASE01B_A_BASELINE.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_CHANGELOG.md	move	report/archive/PHASE01B_A_CHANGELOG.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_CHANGELOG.md	move	report/archive/PHASE01B_A_PLUS_CHANGELOG.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_CHANGELOG.md	move	report/archive/PHASE01B_A_PLUS_PLUS_CHANGELOG.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_CTO_SUMMARY.md	move	report/archive/PHASE01B_A_PLUS_PLUS_CTO_SUMMARY.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_FINAL_BENCHMARK.md	move	report/archive/PHASE01B_A_PLUS_PLUS_FINAL_BENCHMARK.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_FINAL_CHANGELOG.md	move	report/archive/PHASE01B_A_PLUS_PLUS_FINAL_CHANGELOG.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_FINAL_CTO_REPORT.md	move	report/archive/PHASE01B_A_PLUS_PLUS_FINAL_CTO_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_FINAL_PCHIP_AUDIT.md	move	report/archive/PHASE01B_A_PLUS_PLUS_FINAL_PCHIP_AUDIT.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_FINAL_SAFETY.md	move	report/archive/PHASE01B_A_PLUS_PLUS_FINAL_SAFETY.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_FINAL_TESTS.md	move	report/archive/PHASE01B_A_PLUS_PLUS_FINAL_TESTS.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_PCHIP_AUDIT.md	move	report/archive/PHASE01B_A_PLUS_PLUS_PCHIP_AUDIT.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_PERFORMANCE.md	move	report/archive/PHASE01B_A_PLUS_PLUS_PERFORMANCE.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_SAFETY_REVIEW.md	move	report/archive/PHASE01B_A_PLUS_PLUS_SAFETY_REVIEW.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_PLUS_TEST_RESULTS.md	move	report/archive/PHASE01B_A_PLUS_PLUS_TEST_RESULTS.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_REGRESSION_ANALYSIS.md	move	report/archive/PHASE01B_A_PLUS_REGRESSION_ANALYSIS.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_SAFETY_REPORT.md	move	report/archive/PHASE01B_A_PLUS_SAFETY_REPORT.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_PLUS_TEST_RESULTS.md	move	report/archive/PHASE01B_A_PLUS_TEST_RESULTS.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_SAFETY_AUDIT.md	move	report/archive/PHASE01B_A_SAFETY_AUDIT.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_A_TEST_RESULTS.md	move	report/archive/PHASE01B_A_TEST_RESULTS.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_B_DESIGN_PROPOSAL.md	move	report/archive/PHASE01B_B_DESIGN_PROPOSAL.md	Report/documentation	Current entry point or preserved technical history.
+reports/PHASE01B_PROPOSAL.md	move	report/archive/PHASE01B_PROPOSAL.md	Report/documentation	Current entry point or preserved technical history.
+reports/benchmark_raw_measurements.csv	move	data/raw/benchmark_raw_measurements.csv	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/benchmark_raw_measurements.json	move	data/raw/benchmark_raw_measurements.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/benchmark_summary.md	move	report/evaluation/benchmark_summary.md	Report/documentation	Current entry point or preserved technical history.
+reports/demo_ready/PRE_MOBILE_RETEST_FINAL_ACCEPTANCE.md	move	report/archive/demo_ready/PRE_MOBILE_RETEST_FINAL_ACCEPTANCE.md	Report/documentation	Current entry point or preserved technical history.
+reports/demo_ready/replay/annotated_replay.mp4	move	data/evaluation/demo_replay/annotated_replay.mp4	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/demo_ready/replay/frame_0.png	move	data/evaluation/demo_replay/frame_0.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/demo_ready/replay/frame_1.png	move	data/evaluation/demo_replay/frame_1.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/demo_ready/replay/frame_2.png	move	data/evaluation/demo_replay/frame_2.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/demo_ready/replay/frame_3.png	move	data/evaluation/demo_replay/frame_3.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/demo_ready/replay/frames.csv	move	data/evaluation/demo_replay/frames.csv	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/demo_ready/replay/summary.json	move	data/evaluation/demo_replay/summary.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/desktop_landscape_paused.png	move	data/evaluation/desktop_landscape_paused.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/desktop_landscape_running.png	move	data/evaluation/desktop_landscape_running.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/error_distribution_by_zone.png	move	data/evaluation/error_distribution_by_zone.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/full_benchmark_tum_nyu_report.md	move	report/evaluation/full_benchmark_tum_nyu_report.md	Report/documentation	Current entry point or preserved technical history.
+reports/nyu_zone_errors.png	move	data/evaluation/nyu_zone_errors.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/pchip_calibration_curve.png	move	data/calibration/pchip_calibration_curve.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/pchip_calibration_curve_vn.png	move	data/calibration/pchip_calibration_curve_vn.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/test_manifest.json	move	data/evaluation/test_manifest.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/tum_benchmark_summary.png	move	data/evaluation/tum_benchmark_summary.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/tum_motion_benchmark.md	move	report/evaluation/tum_motion_benchmark.md	Report/documentation	Current entry point or preserved technical history.
+reports/tum_motion_summary.json	move	data/evaluation/tum_motion_summary.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/tum_sitting_static_benchmark.md	move	report/evaluation/tum_sitting_static_benchmark.md	Report/documentation	Current entry point or preserved technical history.
+reports/tum_sitting_static_summary.json	move	data/evaluation/tum_sitting_static_summary.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/tum_telemetry_curves.png	move	data/evaluation/tum_telemetry_curves.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/tum_telemetry_rgbd_dataset_freiburg3_walking_static.png	move	data/evaluation/tum_telemetry_rgbd_dataset_freiburg3_walking_static.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+reports/tum_walking_static_benchmark.md	move	report/evaluation/tum_walking_static_benchmark.md	Report/documentation	Current entry point or preserved technical history.
+reports/tum_walking_static_summary.json	move	data/evaluation/tum_walking_static_summary.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+requirements.txt	move	python/requirements.txt	Build/configuration	Build definition, workflow, manifest, wrapper, dependencies or ignore rules.
+scripts/generate_icons.py	retain	scripts/generate_icons.py	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+scripts/generate_ui_previews.py	retain	scripts/generate_ui_previews.py	Development utility	Icon, report, calibration, benchmark or model generation workflow.
+technical_summary.html	move	report/research/technical_summary.html	Report/documentation	Current entry point or preserved technical history.
+telemetry_gui.py	move	python/telemetry_gui.py	Production source	Native target source discovery or Python application imports.
+test_horuseyes_benchmark.py	move	testing/benchmarks/test_horuseyes_benchmark.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+test_motion.py	move	testing/python/test_motion.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+test_pipeline.py	move	testing/python/test_pipeline.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+tests/benchmark_controlled_p1_f03.py	move	testing/benchmarks/benchmark_controlled_p1_f03.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+tests/fixtures/demo/frame_0.png	move	data/fixtures/demo/frame_0.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/fixtures/demo/frame_1.png	move	data/fixtures/demo/frame_1.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/fixtures/demo/frame_2.png	move	data/fixtures/demo/frame_2.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/fixtures/demo/frame_3.png	move	data/fixtures/demo/frame_3.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/fixtures/demo/manifest.json	move	data/fixtures/demo/manifest.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/fixtures/demo/nyu_00000.png	move	data/fixtures/demo/nyu_00000.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/fixtures/demo/tum_walking_static.png	move	data/fixtures/demo/tum_walking_static.png	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/golden_directional_scenarios.json	move	data/fixtures/golden_directional_scenarios.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/golden_test_cases.json	move	data/fixtures/golden_test_cases.json	Data/research evidence	Preserved bytes. See data/README.md for fixture and dataset dependencies.
+tests/test_demo_ready.py	move	testing/python/test_demo_ready.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+tests/test_golden_scenarios.py	move	testing/python/test_golden_scenarios.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+tests/test_phase01b_a_plus_plus_adversarial.py	move	testing/python/test_phase01b_a_plus_plus_adversarial.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+tests/test_tensor_spatial_integration.py	move	testing/python/test_tensor_spatial_integration.py	Testing/benchmark	Swift workflow, Gradle source sets, pytest discovery or documented benchmark invocation.
+video_capture.py	move	python/video_capture.py	Production source	Native target source discovery or Python application imports.

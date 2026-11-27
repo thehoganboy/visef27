@@ -3,7 +3,7 @@ import json
 from PIL import Image, ImageDraw
 
 def main():
-    logo_path = 'logo_vampior.png'
+    logo_path = 'scripts/assets/logo_vampior.png'
     if not os.path.exists(logo_path):
         print("ERROR: logo_vampior.png not found!")
         return

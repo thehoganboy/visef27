@@ -38,6 +38,59 @@ struct StereoDisparityPreview {
     let pixels: Data
 }
 
+struct StereoCalibrationQuality {
+    struct Camera {
+        let thumbnail: StereoDisparityPreview
+        let corners: Int
+        let edgeCorners: Int
+        let sharpness: Double
+        let centerX: Double
+        let centerY: Double
+        let spread: Double
+        var capturesTexture: Bool { corners >= 4 && sharpness >= 1 }
+        var framingHint: String {
+            if !capturesTexture { return "Hold still · add light or move closer" }
+            if edgeCorners * 3 > corners { return "Check the board edges" }
+            return "Texture and sharpness detected"
+        }
+    }
+
+    let a: Camera
+    let b: Camera
+    let skewMS: Double
+    let focusStable: Bool
+    var isCandidate: Bool { a.capturesTexture && b.capturesTexture && skewMS <= 8 && focusStable }
+}
+
+enum DepthCalibration: String {
+    case pchipEstimate
+    case sensorMetric
+    case required
+    case invalid
+    case profileValidated
+}
+
+enum DepthReadiness: String {
+    case captureReady, depthReady, calibrationRequired, calibrationInvalid, insufficientEvidence, stale
+}
+
+struct StereoFrameMetrics {
+    var stage = "geometry"
+    var width = 0
+    var height = 0
+    var overlapPixels = 0
+    var disparityPixels = 0
+    var rangeRejected = 0
+    var uncertaintyRejected = 0
+    var projectionRejected = 0
+    var skewMS = 0.0
+    var focalPx: Float = 0
+    var baselineMM: Float = 0
+    var motionPx: Float = 0
+    var rectificationMS = 0.0
+    var matchingMS = 0.0
+}
+
 struct DepthFrame {
     let source: DepthMode
     let timestamp: Double
@@ -52,17 +105,48 @@ struct DepthFrame {
     var stereoDisparity: StereoDisparityPreview?
     var stereoUncertaintyCM: [Float] = []
     var stereoDepthPreview: StereoDisparityPreview?
+    var stereoCalibration: DepthCalibration? = nil
+    var stereoMetrics: StereoFrameMetrics? = nil
+    var provisionalROICM: Float? = nil
+    var calibrationQuality: StereoCalibrationQuality? = nil
+
+    var calibration: DepthCalibration {
+        switch source {
+        case .midas: return .pchipEstimate
+        case .lidar: return .sensorMetric
+        case .stereo: return stereoCalibration ?? .required
+        }
+    }
+
+    var readiness: DepthReadiness {
+        if error == "STEREO_CAPTURE_ONLY" || error == "STEREO_PREVIEW" { return .captureReady }
+        if source == .stereo {
+            if calibration == .invalid { return .calibrationInvalid }
+            if calibration == .required { return .calibrationRequired }
+        }
+        return error == nil && centimeters.indices.contains(where: isValidSample) ? .depthReady : .insufficientEvidence
+    }
 
     var strongCoverage: Double? {
         guard !confidence.isEmpty, confidence.count == centimeters.count else { return nil }
         return Double(confidence.filter { $0 == 2 }.count) / Double(confidence.count)
     }
 
-    var validityMask: [Bool] { centimeters.map { $0.isFinite && $0 > 0 } }
+    func isValidSample(_ index: Int) -> Bool {
+        let value = centimeters[index]
+        guard value.isFinite, value > 0 else { return false }
+        if source == .midas { return true }
+        guard confidence.count == centimeters.count, (1...2).contains(confidence[index]) else { return false }
+        if source == .lidar { return true }
+        return calibration == .profileValidated && stereoUncertaintyCM.count == centimeters.count
+            && stereoUncertaintyCM[index].isFinite && stereoUncertaintyCM[index] > 0
+    }
+
+    var validityMask: [Bool] { centimeters.indices.map(isValidSample) }
 
     var coverage: Double {
         guard !centimeters.isEmpty else { return 0 }
-        return Double(centimeters.lazy.filter { $0.isFinite && $0 > 0 }.count) / Double(centimeters.count)
+        return Double(centimeters.indices.lazy.filter(isValidSample).count) / Double(centimeters.count)
     }
 
     static func centimeters(meters: Float, confidence: UInt8) -> Float {

@@ -57,7 +57,7 @@ def main():
         outputs=[ct.TensorType(name='depth')], minimum_deployment_target=ct.target.iOS16,
         compute_units=ct.ComputeUnit.CPU_ONLY, convert_to='mlprogram', compute_precision=ct.precision.FLOAT32)
     session = ort.InferenceSession(str(ROOT/'android/app/src/main/assets/midas_small.onnx'), providers=['CPUExecutionProvider'])
-    fixtures = sorted((ROOT/'tests/fixtures/demo').glob('*.png'))
+    fixtures = sorted((ROOT/'data/fixtures/demo').glob('*.png'))
     if len(fixtures) < 3:
         raise RuntimeError('Real-frame parity fixtures are required')
     evidence = []

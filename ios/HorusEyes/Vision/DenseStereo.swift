@@ -144,11 +144,23 @@ enum DenseStereo {
 
     static func metric(focal: Float, baselineMM: Float, disparity: Float, sigma: Float,
                        scaleFraction: Float) -> (depth: Float, sigma: Float)? {
+        guard let estimate = estimate(focal: focal, baselineMM: baselineMM, disparity: disparity,
+                                      sigma: sigma, scaleFraction: scaleFraction),
+              supportsClearance(depth: estimate.depth, sigma: estimate.sigma) else { return nil }
+        return estimate
+    }
+
+    static func supportsClearance(depth: Float, sigma: Float) -> Bool {
+        sigma.isFinite && sigma > 0 && sigma <= min(30, depth * 0.18)
+    }
+
+    static func estimate(focal: Float, baselineMM: Float, disparity: Float, sigma: Float,
+                         scaleFraction: Float, motionPx: Float = 0) -> (depth: Float, sigma: Float)? {
         guard disparity.isFinite, disparity > 0, sigma.isFinite, sigma > 0,
-              scaleFraction.isFinite, scaleFraction >= 0 else { return nil }
+              scaleFraction.isFinite, scaleFraction >= 0, motionPx.isFinite else { return nil }
         let z = StereoCorrespondence.depthCM(focalPixels: focal, baselineMM: baselineMM, subpixelDisparity: disparity)
-        let uncertainty = z * hypot(sigma / disparity, scaleFraction)
-        guard z.isFinite, (15...650).contains(z), uncertainty <= min(30, z * 0.18) else { return nil }
+        let uncertainty = z * hypot(hypot(sigma, motionPx) / disparity, scaleFraction)
+        guard z.isFinite, (15...650).contains(z), uncertainty.isFinite else { return nil }
         return (z, uncertainty)
     }
 }

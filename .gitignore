@@ -10,7 +10,8 @@ __pycache__/
 *.zip
 *.tar.gz
 *.tar
-data/
+/data/external/
+/data/local/
 
 # Android & iOS Build Binaries
 *.apk
@@ -23,6 +24,11 @@ android/local.properties
 ios/build/
 ios/DerivedData/
 ios/Payload/
+ios/HorusEyes/DepthModel.mlpackage/
+ios/model_parity.json
+ios/scripts/MiDaS/
+ios/scripts/efficientnet/
+ios/scripts/midas_v21_small_256.pt
 ios/*.xcodeproj
 
 # Large ONNX data split files

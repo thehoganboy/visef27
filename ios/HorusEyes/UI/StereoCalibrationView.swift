@@ -12,10 +12,22 @@ struct StereoCalibrationView: View {
     @State private var busy = false
     @State private var message = ""
     @State private var exportURL: URL?
+    private let ranges = [50, 100, 200, 300]
 
     private struct Shot {
         let url: URL
         let measuredCM: Double?
+        let target: Int
+        let quality: StereoCalibrationQuality
+    }
+
+    private var fitting: [Shot] { shots.filter { $0.target == 0 } }
+    private var references: Set<Int> { Set(shots.map(\.target).filter { $0 > 0 }) }
+    private var regions: Int {
+        Set(fitting.map { shot in
+            let a = shot.quality.a
+            return min(2, Int(a.centerX * 3)) + 3 * min(2, Int(a.centerY * 3))
+        }).count
     }
 
     private var setup: (Int, Int, Double)? {
@@ -32,35 +44,77 @@ struct StereoCalibrationView: View {
         NavigationStack {
             Form {
                 Section("Checkerboard") {
+                    Text("Use a flat, matte, asymmetric checkerboard with a white border. Count inner corners and measure one square. Keep the entire board inside both previews.")
                     TextField("Inner corner columns", text: $columns).keyboardType(.numberPad)
                     TextField("Inner corner rows", text: $rows).keyboardType(.numberPad)
                     TextField("Measured square size (mm)", text: $squareMM).keyboardType(.decimalPad)
                 }
                 .disabled(!shots.isEmpty)
-                Section("Acquire pairs") {
-                    if let image = model.preview {
-                        Image(decorative: image, scale: 1).resizable().scaledToFit().frame(maxHeight: 200)
+                Section("Live pair quality") {
+                    if let quality = model.calibrationQuality {
+                        HStack(alignment: .top, spacing: 12) {
+                            camera("Camera A", quality.a)
+                            camera("Camera B", quality.b)
+                        }
+                        Text("Skew \(quality.skewMS, specifier: "%.1f") ms · \(quality.focusStable ? "Steady focus" : "Hold phone steady")")
+                            .font(.caption.monospacedDigit())
+                        Text("The workstation confirms full corner detection and pose geometry.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Waiting for both physical cameras.")
                     }
-                    Text("Use a flat, asymmetric checkerboard. Start with the full board visible in both cameras. The first shot locks focus. Capture 20–25 varied poses to retain at least 15 usable fitting pairs.")
+                }
+                Section(target == 0 ? "Fitting captures" : "Independent references") {
                     Picker("Trial", selection: $target) {
-                        Text("Calibration pose").tag(0)
-                        ForEach([50, 100, 200, 300], id: \.self) { cm in Text("Reference near \(cm) cm").tag(cm) }
+                        Text("Fitting pose").tag(0)
+                        ForEach(ranges, id: \.self) { cm in
+                            Text("Reference near \(cm) cm" + (references.contains(cm) ? " ✓" : "")).tag(cm)
+                        }
                     }
-                    if target > 0 { TextField("Actual optical-axis distance (cm)", text: $measured).keyboardType(.decimalPad) }
-                    Button("Capture synchronized checkerboard") { takeShot() }
+                    .onChange(of: target) { _ in measured = "" }
+                    .disabled(busy)
+                    if target == 0 {
+                        Text("Start centered at arm’s length to lock focus. Capture 20–25 pairs. Move across the shared field, vary distance, and tilt the board in both directions.")
+                    } else {
+                        Text("Center the board with its plane close to perpendicular to camera A. Measure the distance along its optical axis from the camera plane.")
+                        TextField("Actual optical-axis distance (cm)", text: $measured).keyboardType(.decimalPad)
+                    }
+                    Button(busy ? "Checking pair…" : "Capture next steady pair") { takeShot() }
                         .disabled(busy || setup == nil || shots.count >= 64)
-                    Text("\(shots.filter { $0.measuredCM == nil }.count) fitting captures • \(shots.filter { $0.measuredCM != nil }.count) reference captures")
+                    Text("\(fitting.count) fitting pairs · \(regions) image regions · \(references.count)/4 reference ranges")
                     if !message.isEmpty { Text(message).foregroundStyle(.secondary) }
                 }
                 Section("Export") {
                     Button("Prepare calibration dataset") { export() }
-                        .disabled(busy || setup == nil || shots.filter { $0.measuredCM == nil }.count < 15)
+                        .disabled(busy || setup == nil || fitting.count < 15 || references.count < 4)
                     if let exportURL { ShareLink(item: exportURL) }
+                    Text("Run the workstation fitter, then import its JSON profile in Camera options. Recapture the dataset if the camera pair, format or focus has changed.")
                 }
             }
             .navigationTitle("Stereo calibration")
-            .toolbar { Button("Done") { dismiss() } }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { Button("Done") { dismiss() }.disabled(busy) }
+            .interactiveDismissDisabled(busy)
         }
+        .onAppear { model.setCalibrationPreview(true) }
+        .onDisappear {
+            model.setCalibrationPreview(false)
+            for shot in shots { try? FileManager.default.removeItem(at: shot.url) }
+        }
+    }
+
+    private func camera(_ name: String, _ quality: StereoCalibrationQuality.Camera) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(name).font(.subheadline.weight(.semibold))
+            if let image = DemoController.disparityImage(quality.thumbnail) {
+                Image(decorative: image, scale: 1)
+                    .resizable().scaledToFit().frame(maxHeight: 145)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+            }
+            Text(quality.framingHint).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func takeShot() {
@@ -73,16 +127,28 @@ struct StereoCalibrationView: View {
             reference = value
         }
         busy = true
-        message = "Checking synchronized images"
-        model.captureCalibrationPair { url in
+        message = "Hold the phone and checkerboard still."
+        let trial = target
+        model.captureCalibrationPair { url, quality in
             busy = false
-            guard let url else {
-                message = "No qualifying pair. Check capture readiness, lighting, blur, focus and visibility in both views."
+            guard let url, let quality else {
+                message = "No pair passed the live screen. Check both views, lighting, focus and pair skew."
                 return
             }
-            shots.append(Shot(url: url, measuredCM: reference))
+            let repeated = trial == 0 && fitting.suffix(4).contains { shot in
+                func near(_ a: StereoCalibrationQuality.Camera, _ b: StereoCalibrationQuality.Camera) -> Bool {
+                    hypot(a.centerX - b.centerX, a.centerY - b.centerY) < 0.018 && abs(a.spread - b.spread) < 0.012
+                }
+                return near(shot.quality.a, quality.a) && near(shot.quality.b, quality.b)
+            }
+            if repeated {
+                try? FileManager.default.removeItem(at: url)
+                message = "Framing resembles a recent fitting pair. Move or tilt the board and try again."
+                return
+            }
+            shots.append(Shot(url: url, measuredCM: reference, target: trial, quality: quality))
             exportURL = nil
-            message = "Pair saved. Change the board position or angle before the next fitting shot."
+            message = trial == 0 ? "Fitting pair saved. Change the board position or angle." : "Independent reference saved."
         }
     }
 

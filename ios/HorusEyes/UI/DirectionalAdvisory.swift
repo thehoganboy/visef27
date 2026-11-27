@@ -1,5 +1,30 @@
 import Foundation
 
+enum DirectionStatus: String {
+    case available = "AVAILABLE"
+    case stop = "STOP"
+    case unavailable = "UNAVAILABLE"
+    case unknown = "UNKNOWN"
+}
+
+enum PerceptionLifecycle {
+    case paused, initializing, running, sensorFault
+}
+
+enum PerceptionRisk: Equatable {
+    case safe, warning, critical, unresolved, unknown
+
+    init(_ level: String) {
+        switch level {
+        case "SAFE": self = .safe
+        case "WARNING": self = .warning
+        case "CRITICAL": self = .critical
+        case "UNRESOLVED_HAZARD": self = .unresolved
+        default: self = .unknown
+        }
+    }
+}
+
 struct DirectionalAdvisory {
     var state: String = "UNKNOWN"
     var angleDeg: Double? = nil
@@ -7,6 +32,7 @@ struct DirectionalAdvisory {
     var observedAngularRange: ClosedRange<Double>? = nil
     var sourceTimestamp: Double = 0
     var reasonCode: String = "UNSPECIFIED"
+    var status: DirectionStatus { DirectionStatus(rawValue: state) ?? .unknown }
 
     init(
         state: String = "UNKNOWN",
@@ -30,6 +56,42 @@ struct DirectionalAdvisory {
               let range = observedAngularRange, range.lowerBound >= -90, range.upperBound <= 90,
               range.contains(angle), (0.0...0.75).contains(now - sourceTimestamp) else { return nil }
         return angle
+    }
+
+    func isFreshStop(now: Double) -> Bool {
+        status == .stop && sourceTimestamp > 0 && (-0.05...0.75).contains(now - sourceTimestamp)
+    }
+}
+
+struct AdvisoryCoordinator {
+    private var previousStereoObservation: ObstacleDetectionResult?
+
+    mutating func decide(source: DepthMode, observation: ObstacleDetectionResult,
+                         risk: KinematicsResult, now: Double, yawRate: Float,
+                         previousAngle: Double?) -> DirectionalAdvisory {
+        let prior = previousStereoObservation
+        previousStereoObservation = source == .stereo && abs(yawRate) <= 0.15 && observation.isValid ? observation : nil
+        let raw = estimateDirectionalAdvisory(observation: observation, threat: risk.threatLevel,
+                                              now: now, prevAngle: previousAngle)
+        if raw.status == .unknown {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp, reasonCode: raw.reasonCode)
+        }
+        guard raw.status == .available else { return raw }
+        if risk.hazardState == "COASTING_HAZARD" || risk.hazardState == "LOST_UNRESOLVED" {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp,
+                                       reasonCode: "HAZARD_UNRESOLVED")
+        }
+        guard source == .stereo, let angle = raw.angleDeg else { return raw }
+        guard stereoCorridorObserved(observation, angle: angle) else {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp,
+                                       reasonCode: "INSUFFICIENT_DEPTH_COVERAGE")
+        }
+        guard abs(yawRate) <= 0.15, let prior, (0.0...0.50).contains(observation.timestamp - prior.timestamp),
+              stereoCorridorObserved(prior, angle: angle) else {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp,
+                                       reasonCode: "STEREO_TEMPORAL_CONFIRMATION")
+        }
+        return raw
     }
 }
 
@@ -226,6 +288,24 @@ func estimateDirectionalAdvisory(
 
     let bins = obs.spatialBins
 
+    func supportedDistance(at angle: Double) -> Double? {
+        if bins.isEmpty {
+            let legacy = angle < -10 ? zLeft : angle > 10 ? zRight : zCenter
+            return legacy.isFinite && legacy > 0 ? legacy : nil
+        }
+        var corridor = 0.0, core = 0.0
+        var near = Double.infinity
+        for bin in bins where bin.isValid && bin.distCM.isFinite && bin.distCM > 0 {
+            let lower = Double(bin.angleMin), upper = Double(bin.angleMax)
+            let overlap = max(0, min(upper, angle + 5) - max(lower, angle - 5))
+            guard overlap > 0 else { continue }
+            corridor += overlap
+            core += max(0, min(upper, angle + 2.5) - max(lower, angle - 2.5))
+            near = min(near, Double(bin.distCM))
+        }
+        return corridor >= 7.5 && core >= 4.5 && near.isFinite ? near : nil
+    }
+
     // Clear observation with no detected obstacles (P0-02 & P0-B)
     if profiles.isEmpty {
         var centerSupported = false
@@ -252,8 +332,8 @@ func estimateDirectionalAdvisory(
 
         if centerSupported && candDist.isFinite && candDist > 0 && candDist >= 75.0 {
             var angleOut = 0.0
-            if let pa = prevAngle, pa.isFinite {
-                angleOut = 0.3 * angleOut + 0.7 * pa
+            if let pa = prevAngle, pa.isFinite, (supportedDistance(at: 0.7 * pa) ?? 0) >= 75 {
+                angleOut = 0.7 * pa
             }
             return DirectionalAdvisory(
                 state: "AVAILABLE",
@@ -310,64 +390,7 @@ func estimateDirectionalAdvisory(
     var eligibleCandidates: [Candidate] = []
     var obstructedCount = 0
     for cand in allCandidateAngles {
-        var candSupported = false
-        var candDist = Double.nan
-
-        if !bins.isEmpty {
-            let cMin = cand - 5.0
-            let cMax = cand + 5.0
-            let kMin = cand - 2.5
-            let kMax = cand + 2.5
-            let wCorr = cMax - cMin  // 10.0 deg
-            let wCore = kMax - kMin  // 5.0 deg
-
-            var validCorrCov: Double = 0.0
-            var validCoreCov: Double = 0.0
-            var validDists: [Double] = []
-
-            for b in bins {
-                let bMin = Double(b.angleMin)
-                let bMax = Double(b.angleMax)
-                if bMax <= bMin { continue }
-
-                let ovCorr = max(0.0, min(bMax, cMax) - max(bMin, cMin))
-                let ovCore = max(0.0, min(bMax, kMax) - max(bMin, kMin))
-
-                if b.isValid {
-                    validCorrCov += ovCorr
-                    validCoreCov += ovCore
-                    let d = Double(b.distCM)
-                    if ovCorr > 0.0 && d.isFinite && d > 0 {
-                        validDists.append(d)
-                    }
-                }
-            }
-
-            let corrRatio = validCorrCov / wCorr
-            let coreRatio = validCoreCov / wCore
-
-            // Candidate corridor requires >= 75% valid coverage and load-bearing central core >= 90%
-            if corrRatio >= 0.75 && coreRatio >= 0.90 && !validDists.isEmpty {
-                candSupported = true
-                candDist = validDists.min() ?? Double.nan
-            }
-        } else {
-            // 3-sector fallback for legacy mocks or tests without spatialBins
-            let (secValid, zSec): (Bool, Double)
-            if cand < -10.0 {
-                secValid = validL; zSec = zLeft
-            } else if cand > 10.0 {
-                secValid = validR; zSec = zRight
-            } else {
-                secValid = validC; zSec = zCenter
-            }
-            if secValid {
-                candSupported = true
-                candDist = zSec
-            }
-        }
-
-        if !candSupported { continue }
+        guard let candDist = supportedDistance(at: cand) else { continue }
 
         var isBlocked = false
         if candDist < 40.0 || isAngleBlocked(cand) { isBlocked = true }
@@ -424,26 +447,8 @@ func estimateDirectionalAdvisory(
         }
     }
 
-    let isHeadingEligible = { (ang: Double) -> Bool in
-        if abs(ang) > halfFov { return false }
-        if isAngleBlocked(ang) { return false }
-        if !bins.isEmpty {
-            let cMin = ang - 2.5
-            let cMax = ang + 2.5
-            var vDists: [Double] = []
-            for b in bins {
-                let bMin = Double(b.angleMin)
-                let bMax = Double(b.angleMax)
-                if bMax <= bMin { continue }
-                let ov = max(0.0, min(bMax, cMax) - max(bMin, cMin))
-                if ov > 0.0 && b.isValid {
-                    let d = Double(b.distCM)
-                    if d.isFinite && d > 0 { vDists.append(d) }
-                }
-            }
-            if let minD = vDists.min(), minD < 40.0 { return false }
-        }
-        return true
+    let isHeadingEligible = { (angle: Double) -> Bool in
+        obsRange.contains(angle) && !isAngleBlocked(angle) && (supportedDistance(at: angle) ?? 0) >= 40
     }
 
     // ── Step 6: Hierarchical Movement Policy (P0-02 Corridor Evidence) ──
@@ -493,7 +498,7 @@ func estimateDirectionalAdvisory(
             var scAngle = bestSc.ang
             if let prev = prevAngle, prev.isFinite {
                 let sm = 0.45 * scAngle + 0.55 * prev
-                if isHeadingEligible(sm) { scAngle = sm }
+                if (bestSc.ang * sm) > 0, isHeadingEligible(sm) { scAngle = sm }
             }
             scAngle = max(-halfFov, min(halfFov, scAngle))
             let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
@@ -505,7 +510,7 @@ func estimateDirectionalAdvisory(
             var scAngle = bestSc.ang
             if let prev = prevAngle, prev.isFinite {
                 let sm = 0.45 * scAngle + 0.55 * prev
-                if isHeadingEligible(sm) { scAngle = sm }
+                if (bestSc.ang * sm) > 0, isHeadingEligible(sm) { scAngle = sm }
             }
             scAngle = max(-halfFov, min(halfFov, scAngle))
             let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
@@ -517,7 +522,7 @@ func estimateDirectionalAdvisory(
             var scAngle = bestSc.ang
             if let prev = prevAngle, prev.isFinite {
                 let sm = 0.45 * scAngle + 0.55 * prev
-                if isHeadingEligible(sm) { scAngle = sm }
+                if (bestSc.ang * sm) > 0, isHeadingEligible(sm) { scAngle = sm }
             }
             scAngle = max(-halfFov, min(halfFov, scAngle))
             let conf = max(0.35, min(0.55, 1.0 - (bestSc.risk / 35.0)))
