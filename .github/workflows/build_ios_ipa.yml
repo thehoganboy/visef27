@@ -79,7 +79,7 @@ jobs:
         run: |
           set -euo pipefail
           echo "=== Compiling native Swift behavior regressions ==="
-          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/MetricSpatialObservation.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift testing/ios/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
+          swiftc ios/HorusEyes/Config.swift ios/HorusEyes/Math/PchipInterpolator.swift ios/HorusEyes/Vision/DepthEngine.swift ios/HorusEyes/Vision/DepthFrame.swift ios/HorusEyes/Vision/MetricSpatialObservation.swift ios/HorusEyes/Vision/MetricObstacleTracker.swift ios/HorusEyes/Kinematics/KinematicsEngine.swift ios/HorusEyes/Budget/AuditoryBudgetManager.swift ios/HorusEyes/UI/DirectionalAdvisory.swift testing/ios/BehaviorTests.swift -o /tmp/horus-behavior 2>&1 | tee swiftc.log || {
             echo "FATAL: swiftc compilation failed"
             cat swiftc.log
             exit 1

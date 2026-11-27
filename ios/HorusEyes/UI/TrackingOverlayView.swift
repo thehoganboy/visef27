@@ -2,7 +2,8 @@ import SwiftUI
 
 struct TrackingOverlayView: View {
     let result: ObstacleDetectionResult?
-    let threatLevel: String
+    let tracks: [MetricObstacleTracker.Track]
+    let risk: PerceptionRisk
     let mode: DepthMode
     var isStop: Bool = false
 
@@ -16,34 +17,46 @@ struct TrackingOverlayView: View {
             let oy = (size.height - CGFloat(result.camHeight) * scale) / 2
             guard ox.isFinite, oy.isFinite else { return }
 
-            let isEffectiveStop = isStop
-            let primaryColor: Color = isEffectiveStop ? Color(red: 1.0, green: 0.23, blue: 0.19) :
-                                      threatLevel == "WARNING" ? Color(red: 1.0, green: 0.58, blue: 0.0) :
-                                      Color(red: 0.95, green: 0.95, blue: 0.97)
+            let visible = mode == .midas ? result.allObstacles.map {
+                MetricObstacleTracker.Track(id: $0.id,
+                    box: CGRect(x: $0.bbox.x, y: $0.bbox.y, width: $0.bbox.w, height: $0.bbox.h),
+                    distanceCM: $0.distCM, confidence: 1 - $0.uncertaintyScore,
+                    isWall: $0.isWall, isCritical: $0.distCM <= Config.distCriticalCM)
+            } : tracks
 
             var labels: [CGRect] = []
             let bounds = CGRect(origin: .zero, size: size).insetBy(dx: 6, dy: 6)
-            for obstacle in result.allObstacles.prefix(12) {
-                let box = obstacle.bbox
-                let l = ox + CGFloat(box.x) * scale
-                let t = oy + CGFloat(box.y) * scale
-                let r = l + CGFloat(box.w) * scale
-                let b = t + CGFloat(box.h) * scale
+            for obstacle in visible.sorted(by: {
+                if $0.isCritical != $1.isCritical { return $0.isCritical }
+                if $0.isWall != $1.isWall { return !$0.isWall }
+                return ($0.distanceCM.isFinite ? $0.distanceCM : .infinity) < ($1.distanceCM.isFinite ? $1.distanceCM : .infinity)
+            }).prefix(4) {
+                let box = obstacle.box
+                let l = ox + box.minX * scale
+                let t = oy + box.minY * scale
+                let r = ox + box.maxX * scale
+                let b = oy + box.maxY * scale
                 guard l.isFinite, t.isFinite, r.isFinite, b.isFinite, r > l, b > t else { continue }
+                let color: Color = obstacle.isCritical ? .red
+                    : (isStop || risk == .warning ? .orange : .white)
                 let leg = min(26, min(r - l, b - t) / 2.8)
                 var path = Path()
-                for (x, y, dx, dy) in [(l, t, CGFloat(1), CGFloat(1)), (r, t, -1, 1), (l, b, 1, -1), (r, b, -1, -1)] {
-                    path.move(to: CGPoint(x: x + dx * leg, y: y))
-                    path.addLine(to: CGPoint(x: x, y: y))
-                    path.addLine(to: CGPoint(x: x, y: y + dy * leg))
+                if obstacle.isWall {
+                    path.move(to: CGPoint(x: l, y: t))
+                    path.addLine(to: CGPoint(x: r, y: t))
+                } else {
+                    for (x, y, dx, dy) in [(l, t, CGFloat(1), CGFloat(1)), (r, t, -1, 1), (l, b, 1, -1), (r, b, -1, -1)] {
+                        path.move(to: CGPoint(x: x + dx * leg, y: y))
+                        path.addLine(to: CGPoint(x: x, y: y))
+                        path.addLine(to: CGPoint(x: x, y: y + dy * leg))
+                    }
                 }
 
-                // Pass 1: Outer dark outline for maximum contrast against bright scenes
-                context.stroke(path, with: .color(Color.black.opacity(0.85)), style: StrokeStyle(lineWidth: 7.0, lineCap: .round, lineJoin: .round))
-
-                // Pass 2: Vivid inner colored stroke
-                context.stroke(path, with: .color(primaryColor), style: StrokeStyle(lineWidth: 4.5, lineCap: .round, lineJoin: .round))
-                let text = context.resolve(Text(mode.distanceLabel(obstacle.distCM))
+                context.stroke(path, with: .color(.black.opacity(0.85)), style: StrokeStyle(lineWidth: 4, lineCap: .round))
+                context.stroke(path, with: .color(color.opacity(obstacle.isCritical ? 1 : 0.75 + Double(obstacle.confidence) * 0.25)),
+                    style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                let label = (obstacle.isWall ? "Wall · " : "") + mode.distanceLabel(obstacle.distanceCM)
+                let text = context.resolve(Text(label)
                     .font(.caption.weight(.semibold).monospacedDigit()).foregroundColor(.white))
                 let measured = text.measure(in: size)
                 let w = measured.width + 12, h = measured.height + 6

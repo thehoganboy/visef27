@@ -35,6 +35,7 @@ final class KinematicsEngine {
 
     // Track State
     private var lastFrameId: UInt64 = 0
+    private var lastPrimaryTrackID: Int?
     private var smoothedVz: Float = 0.0
     private var lastSafeDirection: String = "NONE"
     private var cachedResult: KinematicsResult?
@@ -117,13 +118,15 @@ final class KinematicsEngine {
             cachedResult = res
             return res
         }
-        // Do not fit approach across rotation, exposure changes, gaps or a primary
-        // region jump. This is still a single-region tracker, not identity proof.
+        // Reset range-rate fitting when the raw primary measurement changes track.
         if abs(imuYawRateRadS) > 0.15 || aeSettleRemaining > 0 ||
+           ((lastPrimaryTrackID != nil || obstacleResult.primaryTrackID != nil)
+            && lastPrimaryTrackID != obstacleResult.primaryTrackID) ||
            (historyT.last.map { timestamp - $0 > 1 || timestamp <= $0 } ?? false) ||
            (historyPan.last.map { abs(obstacleResult.pan - $0) > 0.15 } ?? false) {
             historyT.removeAll(); historyD.removeAll(); historyPan.removeAll(); smoothedVz = 0
         }
+        lastPrimaryTrackID = obstacleResult.primaryTrackID
         // Guard against duplicate frames or flash AE settling window
         if frameId <= lastFrameId {
             if let cached = cachedResult {
@@ -209,9 +212,9 @@ final class KinematicsEngine {
         }
 
         // 3-Sector Threat Analysis
-        let distL = obstacleResult.sectorDists["LEFT"] ?? 250.0
-        let distC = obstacleResult.sectorDists["CENTER"] ?? 250.0
-        let distR = obstacleResult.sectorDists["RIGHT"] ?? 250.0
+        let distL = obstacleResult.sectorDists["LEFT"] ?? .nan
+        let distC = obstacleResult.sectorDists["CENTER"] ?? .nan
+        let distR = obstacleResult.sectorDists["RIGHT"] ?? .nan
 
         let vzL = (pan < -0.20) ? smoothedVz : 0.0
         let vzC = (abs(pan) <= 0.20) ? effectiveVz : 0.0

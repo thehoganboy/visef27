@@ -179,11 +179,15 @@ final class StereoCapture: NSObject {
     private var negotiationDeadline = Double.infinity
     private let strategy: StereoDeliveryStrategy
     private let captureOnly: Bool
+    private let motionRate: () -> Float
+    private var depthRequested: Bool
     let onReset: () -> Void
     private var devices: [AVCaptureDevice] = []
     private var extrinsics: simd_float4x3?
     private var observers: [NSObjectProtocol] = []
     private var calibration: StereoCalibration?
+    private var profiles: [StereoCalibration] = []
+    private var profileLoadFailure: String?
     private var profileFailure: String?
     private var acquisitionFocusLocked = false
     private var snapshot: (id: UUID, calibration: Bool, completion: (URL?) -> Void)?
@@ -210,13 +214,20 @@ final class StereoCapture: NSObject {
 
     init(onFrame: @escaping (DepthFrame, CVPixelBuffer?) -> Void,
          onError: @escaping (String) -> Void, strategy: StereoDeliveryStrategy, captureOnly: Bool,
+         depthRequested: Bool, motionRate: @escaping () -> Float,
          onReset: @escaping () -> Void, onEvent: @escaping (Event) -> Void) {
         self.onFrame = onFrame
         self.onError = onError
         self.onEvent = onEvent
         self.strategy = strategy
         self.captureOnly = captureOnly
+        self.depthRequested = depthRequested
+        self.motionRate = motionRate
         self.onReset = onReset
+    }
+
+    func setDepthRequested(_ value: Bool) {
+        queue.async { self.depthRequested = value }
     }
 
     private var isCancelled: Bool {
@@ -233,28 +244,22 @@ final class StereoCapture: NSObject {
                 self.onError(reason)
                 return
             }
-            if FileManager.default.fileExists(atPath: StereoCalibration.file.path) {
-                do {
-                    let profile = try JSONDecoder().decode(StereoCalibration.self, from: Data(contentsOf: StereoCalibration.file))
-                    let issues = profile.validationIssues()
-                    if issues.isEmpty { self.calibration = profile }
-                    else { self.profileFailure = issues.first }
-                } catch {
-                    self.profileFailure = "Unreadable profile"
-                }
-            }
+            let saved = StereoCalibration.savedProfiles()
+            self.profiles = saved.profiles
+            self.profileLoadFailure = saved.error
             let pairs = Self.pairs
             self.onEvent(Event(stage: "capability", pair: pairs.map {
                 Self.cameraName($0.0) + "/" + Self.cameraName($0.1)
             }.joined(separator: ", ")))
-            let requested = self.calibration?.pair
+            let requested = saved.profiles.first?.pair
             let preferred = pairs.filter { [$0.0.uniqueID, $0.1.uniqueID] == requested }
             let ranked = preferred + pairs.filter { [$0.0.uniqueID, $0.1.uniqueID] != requested }
             var alternatives: [[Plan]] = []
             for (a, b) in ranked {
                 let af = a.formats, bf = b.formats
                 let pair = Self.cameraName(a) + "/" + Self.cameraName(b)
-                let signatures = [a.uniqueID, b.uniqueID] == requested ? self.calibration?.captureSignature?.compactMap { $0.split(separator: "|").first.map(String.init) } : nil
+                let profile = saved.profiles.first { $0.pair == [a.uniqueID, b.uniqueID] }
+                let signatures = profile?.captureSignature?.compactMap { $0.split(separator: "|").first.map(String.init) }
                 let candidates = StereoNegotiation.candidates(af.enumerated().map { Self.describe($0.element, id: $0.offset) },
                     bf.enumerated().map { Self.describe($0.element, id: $0.offset) }, preferred: signatures)
                 if candidates.isEmpty {
@@ -351,8 +356,11 @@ final class StereoCapture: NSObject {
             try connect(plan.a, format: plan.formatA, duration: duration, output: leftOutput, side: "A"),
             try connect(plan.b, format: plan.formatB, duration: duration, output: rightOutput, side: "B")
         ]
-        // Apply profile focus only to the recorded camera/format geometry.
-        if calibration?.pair == devices.map(\.uniqueID), calibration?.matchesCapture(captureSignature) == true {
+        let ids = devices.map(\.uniqueID)
+        calibration = profiles.first { $0.pair == ids && $0.matchesCapture(captureSignature) }
+        profileFailure = calibration == nil && profiles.contains { $0.pair == ids }
+            ? "Saved profile uses a different capture format" : profileLoadFailure
+        if calibration != nil {
             lockCalibrationFocus()
         }
         extrinsics = Self.matrix(AVCaptureDevice.extrinsicMatrix(from: plan.a, to: plan.b), as: simd_float4x3.self)
@@ -370,7 +378,7 @@ final class StereoCapture: NSObject {
                   let plan = self.current, let ingress = self.ingress else { return }
             let now = CACurrentMediaTime()
             let takePair = self.phase != .lateDropProbe && !self.processingBusy
-                && (self.snapshot != nil || (self.downstreamEnabled && !self.captureOnly))
+                && (self.snapshot != nil || self.downstreamEnabled)
             let (status, pair) = ingress.read(takePair: takePair, now: now)
             self.status = status
             if self.overPressure {
@@ -632,12 +640,15 @@ final class StereoCapture: NSObject {
         let profileFailure = self.profileFailure
         let pending = snapshot
         let captureOnly = self.captureOnly
+        let solveDepth = (depthRequested || pending?.calibration == false) && !captureOnly
+        let yawRate = motionRate()
         let phase = self.phase.rawValue
         processingQueue.async { [weak self] in
             let (frame, url) = Self.process(a, b, timestamp: timestamp, aK: aK, bK: bK, ext: ext,
                 ids: ids, positions: positions, focused: focused, calibration: calibration,
                 captureSignature: captureSignature, width: width, export: pending != nil,
-                captureOnly: captureOnly, pair: pair, strategy: phase, profileFailure: profileFailure,
+                captureOnly: captureOnly, solveDepth: solveDepth, yawRate: yawRate, pair: pair,
+                strategy: phase, profileFailure: profileFailure,
                 calibrationShot: pending?.calibration == true)
             guard let self else {
                 if let url { try? FileManager.default.removeItem(at: url) }
@@ -661,7 +672,7 @@ final class StereoCapture: NSObject {
                 } else if let url {
                     try? FileManager.default.removeItem(at: url)
                 }
-                if !captureOnly && pending?.calibration != true { self.onFrame(frame, a) }
+                self.onFrame(frame, a)
             }
         }
     }
@@ -670,13 +681,15 @@ final class StereoCapture: NSObject {
                                 aK: simd_float3x3?, bK: simd_float3x3?, ext: simd_float4x3?,
                                 ids: [String], positions: [Float], focused: Bool, calibration: StereoCalibration?,
                                 captureSignature: [String], width: Int, export: Bool, captureOnly: Bool,
-                                pair: StereoIngress.Pair, strategy: String, profileFailure: String?,
+                                solveDepth: Bool, yawRate: Float, pair: StereoIngress.Pair,
+                                strategy: String, profileFailure: String?,
                                 calibrationShot: Bool) -> (DepthFrame, URL?) {
         let began = CACurrentMediaTime()
         var exportURL: URL?
         var preview: StereoDisparityPreview?
         var metricPreview: StereoDisparityPreview?
-        let mapWidth = 96, mapHeight = 120
+        // 24 corridor bins, three columns per bin, and the camera's 3:4 portrait ratio.
+        let mapWidth = 72, mapHeight = 96
         var cm = [Float](repeating: .nan, count: mapWidth * mapHeight)
         var uncertainty = cm
         var confidence = [UInt8](repeating: 0, count: cm.count)
@@ -684,7 +697,11 @@ final class StereoCapture: NSObject {
         var error: String? = captureOnly ? "STEREO_CAPTURE_ONLY" : "STEREO_GEOMETRY_UNAVAILABLE"
         var exportedDisparity: (pixels: [Float?], width: Int, height: Int, focal: Float)?
         var projectionA = aK
-        if !captureOnly, !calibrationShot, let ext, let aK, let bK,
+        var metrics = StereoFrameMetrics()
+        metrics.skewMS = abs(pair.b.host - pair.a.host) * 1000
+        var profileStatus: DepthCalibration = profileFailure == nil ? .required : .invalid
+        var provisionalROICM: Float?
+        if let ext, let aK, let bK,
            let factory = StereoCalibration.rectification(ext) {
             let mismatch: String?
             if let calibration {
@@ -701,6 +718,11 @@ final class StereoCapture: NSObject {
                 } else { mismatch = nil }
             } else { mismatch = profileFailure }
             let verified = mismatch == nil ? calibration : nil
+            profileStatus = mismatch != nil ? .invalid : (verified == nil ? .required : .profileValidated)
+            error = mismatch.map { "CALIBRATION_INVALID: " + $0 } ?? (verified == nil ? "CALIBRATION_REQUIRED" : "STEREO_PREVIEW")
+            detail = mismatch.map { "CALIBRATION INVALID: " + $0 } ?? (verified == nil ? "CALIBRATION REQUIRED" : "Calibration matched")
+            if captureOnly { error = "STEREO_CAPTURE_ONLY" }
+            metrics.stage = solveDepth ? "rectification" : "preview"
             let rect = verified?.fittedExtrinsics.flatMap(StereoCalibration.rectification) ?? factory
             let ka = verified?.left.projection ?? aK, kb = verified?.right.projection ?? bK
             projectionA = ka
@@ -710,36 +732,82 @@ final class StereoCapture: NSObject {
             let ratioA = ka.columns.0.x / Float(CVPixelBufferGetWidth(a))
             let ratioB = kb.columns.0.x / Float(CVPixelBufferGetWidth(b))
             let focal = max(ratioA, ratioB) * Float(w)
-            if let first = Self.warp(a, rotation: rect.basis, k: ka, lens: verified?.left, focal: focal, w: w, h: h),
+            metrics.width = w
+            metrics.height = h
+            metrics.focalPx = focal
+            metrics.baselineMM = rect.baseline
+            // First-order displacement due to observed yaw and exposure timestamp skew.
+            // Translation and other axes are unmeasured; retain the empirical scale/pose term.
+            metrics.motionPx = focal * abs(yawRate) * Float(metrics.skewMS / 1000)
+            let rectifyStart = CACurrentMediaTime()
+            if solveDepth, !calibrationShot,
+               let first = Self.warp(a, rotation: rect.basis, k: ka, lens: verified?.left, focal: focal, w: w, h: h),
                let second = Self.warp(b, rotation: rect.rotation * rect.basis, k: kb, lens: verified?.right, focal: focal, w: w, h: h) {
+                metrics.rectificationMS = (CACurrentMediaTime() - rectifyStart) * 1000
                 let search = min(72, max(8, Int(min(72, ceil(focal * rect.baseline / 140)))))
                 let luma = stride(from: 0, to: first.count, by: 31).map { first[$0] }.filter { $0 >= 0 }
-                let bright = !luma.isEmpty && luma.reduce(0, +) >= 15 * luma.count
+                let secondLuma = stride(from: 0, to: second.count, by: 31).map { second[$0] }.filter { $0 >= 0 }
+                let bright = [luma, secondLuma].allSatisfy { !$0.isEmpty && $0.reduce(0, +) >= 15 * $0.count }
+                let matchStart = CACurrentMediaTime()
                 let matches = DenseStereo.match(first, second, width: w, height: h, maxShift: search)
+                metrics.matchingMS = (CACurrentMediaTime() - matchStart) * 1000
+                metrics.overlapPixels = matches.overlap
                 var disparityImage = [UInt8](repeating: 0, count: w * h)
-                let scaleUncertainty = verified?.scaleUncertainty ?? 1
+                let scaleUncertainty = verified?.scaleUncertainty ?? 0
+                let poseResidualPx = (verified?.epipolarRMSPx ?? 0) * Float(w) / Float(CVPixelBufferGetWidth(a))
+                let motionPx = hypot(metrics.motionPx, poseResidualPx)
                 var count = 0
+                var provisionalROI: [Float] = []
                 let portraitW = CVPixelBufferGetHeight(a), portraitH = CVPixelBufferGetWidth(a)
                 for (i, d) in matches.disparity.enumerated() where d.isFinite {
                     count += 1
                     disparityImage[i] = UInt8(min(255, max(24, Int(d / Float(search) * 255))))
-                    guard bright, let verified, let metric = DenseStereo.metric(focal: focal,
+                    guard bright else { continue }
+                    guard let metric = DenseStereo.estimate(focal: focal,
                         baselineMM: rect.baseline, disparity: d, sigma: matches.sigma[i],
-                        scaleFraction: scaleUncertainty) else { continue }
+                        scaleFraction: scaleUncertainty, motionPx: motionPx) else {
+                        metrics.rangeRejected += 1
+                        continue
+                    }
                     let ray = rect.basis * Self.rectRay(x: i % w, y: i / w, w: w, h: h, focal: focal)
-                    guard let pixel = verified.left.project(ray, k: ka), pixel.x.isFinite, pixel.y.isFinite else { continue }
+                    let value = metric.depth * ray.z, sigma = metric.sigma * ray.z
+                    // Factory rectification uses pinhole intrinsics. These values are diagnostics only.
+                    guard let verified else {
+                        if abs(i % w - w / 2) < w / 20, abs(i / w - h / 2) < h / 20,
+                           focused, DenseStereo.supportsClearance(depth: value, sigma: sigma) {
+                            provisionalROI.append(value)
+                        }
+                        continue
+                    }
+                    guard ray.z > 0, sigma <= min(45, value * 0.20) else {
+                        metrics.uncertaintyRejected += 1
+                        continue
+                    }
+                    guard let pixel = verified.left.project(ray, k: ka), pixel.x.isFinite, pixel.y.isFinite else {
+                        metrics.projectionRejected += 1
+                        continue
+                    }
                     let px = Float(portraitW - 1) - pixel.y, py = pixel.x
-                    guard px >= 0, py >= 0, px < Float(portraitW), py < Float(portraitH) else { continue }
+                    guard px >= 0, py >= 0, px < Float(portraitW), py < Float(portraitH) else {
+                        metrics.projectionRejected += 1
+                        continue
+                    }
                     let gx = Int(px * Float(mapWidth) / Float(portraitW))
                     let gy = Int(py * Float(mapHeight) / Float(portraitH))
                     guard gx < mapWidth, gy < mapHeight else { continue }
                     let index = gy * mapWidth + gx
-                    let value = metric.depth * ray.z, sigma = metric.sigma * ray.z
-                    if !cm[index].isFinite || value - 2 * sigma < cm[index] - 2 * uncertainty[index] {
+                    // Every occupied cell has a measured source pixel. Preserve the nearest
+                    // visible surface; break ties with the lower uncertainty.
+                    if !cm[index].isFinite || value < cm[index] || (value == cm[index] && sigma < uncertainty[index]) {
                         cm[index] = value
                         uncertainty[index] = sigma
                         confidence[index] = sigma <= min(12, value * 0.09) ? 2 : 1
                     }
+                }
+                metrics.disparityPixels = count
+                if provisionalROI.count >= 20 {
+                    provisionalROI.sort()
+                    provisionalROICM = provisionalROI[provisionalROI.count / 2]
                 }
                 let calibrationStatus = mismatch.map { "CALIBRATION INVALID: " + $0 }
                     ?? (verified == nil ? "CALIBRATION REQUIRED" : "Calibrated")
@@ -760,15 +828,23 @@ final class StereoCapture: NSObject {
                     let valid = cm.filter(\.isFinite).count
                     if valid > 0 {
                         error = nil
+                        metrics.stage = "metric"
                         detail = "METRIC SAMPLES READY (\(valid)/\(cm.count) cells) • " + detail
                         let uz = uncertainty.filter(\.isFinite).sorted()
                         detail += String(format: " • median σ %.1f cm", uz[uz.count / 2])
                         let pixels = cm.map { $0.isFinite ? UInt8(255 - Int(min(230, $0 * 0.38))) : 0 }
                         metricPreview = StereoDisparityPreview(width: mapWidth, height: mapHeight, pixels: Data(pixels))
                     } else {
-                        error = bright ? "INSUFFICIENT_DEPTH_COVERAGE" : "STEREO_LOW_LIGHT"
+                        if !bright { error = "STEREO_LOW_LIGHT"; metrics.stage = "exposure" }
+                        else if matches.overlap == 0 { error = "STEREO_NO_OVERLAP"; metrics.stage = "overlap" }
+                        else if count == 0 { error = "STEREO_NO_DISPARITY"; metrics.stage = "disparity" }
+                        else { error = "STEREO_METRIC_REJECTED"; metrics.stage = "metric_rejection" }
                     }
+                } else {
+                    metrics.stage = "calibration"
                 }
+            } else if solveDepth && !calibrationShot && verified != nil {
+                error = "STEREO_RECTIFICATION_FAILED"
             }
         }
         if export, !calibrationShot || (focused && aK != nil && bK != nil && ext != nil &&
@@ -783,7 +859,8 @@ final class StereoCapture: NSObject {
             width: mapWidth, height: mapHeight, centimeters: cm, confidence: confidence,
             detail: "Capture ready • " + detail, error: error,
             captureProcessingMS: (CACurrentMediaTime() - began) * 1000, stereoDisparity: preview,
-            stereoUncertaintyCM: uncertainty, stereoDepthPreview: metricPreview)
+            stereoUncertaintyCM: uncertainty, stereoDepthPreview: metricPreview,
+            stereoCalibration: profileStatus, stereoMetrics: metrics, provisionalROICM: provisionalROICM)
         return (frame, exportURL)
     }
 

@@ -1,5 +1,30 @@
 import Foundation
 
+enum DirectionStatus: String {
+    case available = "AVAILABLE"
+    case stop = "STOP"
+    case unavailable = "UNAVAILABLE"
+    case unknown = "UNKNOWN"
+}
+
+enum PerceptionLifecycle {
+    case paused, initializing, running, sensorFault
+}
+
+enum PerceptionRisk: Equatable {
+    case safe, warning, critical, unresolved, unknown
+
+    init(_ level: String) {
+        switch level {
+        case "SAFE": self = .safe
+        case "WARNING": self = .warning
+        case "CRITICAL": self = .critical
+        case "UNRESOLVED_HAZARD": self = .unresolved
+        default: self = .unknown
+        }
+    }
+}
+
 struct DirectionalAdvisory {
     var state: String = "UNKNOWN"
     var angleDeg: Double? = nil
@@ -7,6 +32,7 @@ struct DirectionalAdvisory {
     var observedAngularRange: ClosedRange<Double>? = nil
     var sourceTimestamp: Double = 0
     var reasonCode: String = "UNSPECIFIED"
+    var status: DirectionStatus { DirectionStatus(rawValue: state) ?? .unknown }
 
     init(
         state: String = "UNKNOWN",
@@ -30,6 +56,42 @@ struct DirectionalAdvisory {
               let range = observedAngularRange, range.lowerBound >= -90, range.upperBound <= 90,
               range.contains(angle), (0.0...0.75).contains(now - sourceTimestamp) else { return nil }
         return angle
+    }
+
+    func isFreshStop(now: Double) -> Bool {
+        status == .stop && (-0.05...0.75).contains(now - sourceTimestamp)
+    }
+}
+
+struct AdvisoryCoordinator {
+    private var previousStereoObservation: ObstacleDetectionResult?
+
+    mutating func decide(source: DepthMode, observation: ObstacleDetectionResult,
+                         risk: KinematicsResult, now: Double, yawRate: Float,
+                         previousAngle: Double?) -> DirectionalAdvisory {
+        let prior = previousStereoObservation
+        previousStereoObservation = source == .stereo && abs(yawRate) <= 0.15 && observation.isValid ? observation : nil
+        let raw = estimateDirectionalAdvisory(observation: observation, threat: risk.threatLevel,
+                                              now: now, prevAngle: previousAngle)
+        if raw.status == .unknown {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp, reasonCode: raw.reasonCode)
+        }
+        guard raw.status == .available else { return raw }
+        if risk.hazardState == "COASTING_HAZARD" || risk.hazardState == "LOST_UNRESOLVED" {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp,
+                                       reasonCode: "HAZARD_UNRESOLVED")
+        }
+        guard source == .stereo, let angle = raw.angleDeg else { return raw }
+        guard stereoCorridorObserved(observation, angle: angle) else {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp,
+                                       reasonCode: "INSUFFICIENT_DEPTH_COVERAGE")
+        }
+        guard abs(yawRate) <= 0.15, let prior, (0.0...0.50).contains(observation.timestamp - prior.timestamp),
+              stereoCorridorObserved(prior, angle: angle) else {
+            return DirectionalAdvisory(state: "UNAVAILABLE", sourceTimestamp: observation.timestamp,
+                                       reasonCode: "STEREO_TEMPORAL_CONFIRMATION")
+        }
+        return raw
     }
 }
 

@@ -26,9 +26,14 @@ final class DepthDiagnostics {
             : String(format: "%.0f ms", latencyMS)
         let status = frame.error ?? frame.source.distanceLabel(observation?.sectorDists["CENTER"] ?? .nan)
         let confidence = frame.strongCoverage.map { String(format: " • %.0f%% high", $0 * 100) } ?? ""
-        let stereo = frame.source == .stereo ? " • " + frame.detail : ""
+        let stereo = frame.source == .stereo ? "\n" + frame.detail : ""
+        let stages = frame.stereoMetrics.map {
+            String(format: "\n%@ • rectify %.1f ms • match %.1f ms • B %.1f mm • f %.1f px • skew %.2f ms\nRejected range %d • uncertainty %d • projection %d",
+                   $0.stage, $0.rectificationMS, $0.matchingMS, $0.baselineMM, $0.focalPx, $0.skewMS,
+                   $0.rangeRejected, $0.uncertaintyRejected, $0.projectionRejected)
+        } ?? ""
         return "\(frame.source.rawValue) • \(status) • " + String(format: "%.0f%% valid • %.1f FPS", frame.coverage * 100, fps)
-            + confidence + " • " + timing + stereo
+            + confidence + " • " + timing + stereo + stages
     }
 
     func switchRequested(_ source: DepthMode) {
@@ -46,7 +51,7 @@ final class DepthDiagnostics {
     }
 
     func record(frame: DepthFrame, observation: ObstacleDetectionResult?, state: String, reason: String = "",
-                inferenceMS: Double, endToEndMS: Double) {
+                inferenceMS: Double, endToEndMS: Double, tracks: [MetricObstacleTracker.Track] = []) {
         // Central image ROI for comparison with an independently measured target.
         var roi: [Float] = []
         var roiSigma: [Float] = []
@@ -57,7 +62,7 @@ final class DepthDiagnostics {
                     let i = y * frame.width + x
                     let cm = frame.centimeters[i]
                     roiTotal += 1
-                    if cm.isFinite && cm > 0 {
+                    if frame.isValidSample(i) {
                         roi.append(cm)
                         if i < frame.stereoUncertaintyCM.count { roiSigma.append(frame.stereoUncertaintyCM[i]) }
                     }
@@ -75,7 +80,21 @@ final class DepthDiagnostics {
                       frame.error ?? "", frame.strongCoverage.map(number) ?? ""]
         let extras = [reason, roiTotal > 0 ? number(Double(roi.count) / Double(roiTotal)) : "",
                       roiSigma.isEmpty ? "" : number(Double(roiSigma[roiSigma.count / 2])), centralCoverage]
-        append(fields + Array(repeating: "", count: 16) + extras)
+        var stages = [frame.calibration.rawValue, frame.readiness.rawValue]
+        if let m = frame.stereoMetrics {
+            stages += [m.stage, String(m.width), String(m.height), String(m.overlapPixels), String(m.disparityPixels),
+                       String(m.rangeRejected), String(m.uncertaintyRejected), String(m.projectionRejected),
+                       number(m.skewMS), number(Double(m.focalPx)), number(Double(m.baselineMM)),
+                       number(Double(m.motionPx)), number(m.rectificationMS), number(m.matchingMS),
+                       frame.provisionalROICM.map { number(Double($0)) } ?? ""]
+        } else {
+            stages += Array(repeating: "", count: 15)
+        }
+        let trackFields = tracks.map { track in
+            let box = [track.box.minX, track.box.minY, track.box.width, track.box.height].map { number(Double($0)) }
+            return ([String(track.id)] + box + [number(Double(track.distanceCM)), number(Double(track.confidence))]).joined(separator: ":")
+        }
+        append(fields + Array(repeating: "", count: 16) + extras + stages + [trackFields.joined(separator: "|")])
     }
 
     private lazy var deviceModel: String = {
@@ -98,7 +117,7 @@ final class DepthDiagnostics {
     func export() throws -> URL {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(
             "vampior-\(UUID().uuidString).csv")
-        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction,device_model,ios_version,camera_pair,format_a,format_b,requested_fps,configured,hardware_cost,pressure_cost,pressure_level,capture_stage,accepted_pairs,rejected_pairs,pair_fps,capture_strategy,delivery_telemetry_json,decision_reason,target_roi_valid_fraction,target_roi_sigma_cm,central_body_valid_fraction"
+        let header = "utc,event,source,capture_s,valid_fraction,processing_ms,end_to_end_ms,state,target_roi_cm,center_corridor_cm,detail,switch_ms,error,high_confidence_fraction,device_model,ios_version,camera_pair,format_a,format_b,requested_fps,configured,hardware_cost,pressure_cost,pressure_level,capture_stage,accepted_pairs,rejected_pairs,pair_fps,capture_strategy,delivery_telemetry_json,decision_reason,target_roi_valid_fraction,target_roi_sigma_cm,central_body_valid_fraction,calibration,readiness,stereo_processing_stage,rectified_width,rectified_height,overlap_px,disparity_px,range_rejected_px,uncertainty_rejected_px,projection_rejected_px,skew_ms,focal_px,baseline_mm,yaw_skew_px,rectification_ms,matching_ms,provisional_roi_cm,tracks_id_xywh_cm_confidence"
         try ([header] + rows).joined(separator: "\n").write(to: url, atomically: true, encoding: .utf8)
         return url
     }
@@ -110,7 +129,7 @@ final class DepthDiagnostics {
     private let dateFormatter = ISO8601DateFormatter()
 
     private func append(_ fields: [String]) {
-        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 33 - fields.count))
+        let values = [dateFormatter.string(from: Date())] + fields + Array(repeating: "", count: max(0, 51 - fields.count))
         rows.append(values.map { "\"\($0.replacingOccurrences(of: "\"", with: "\"\""))\"" }.joined(separator: ","))
         if rows.count > 6000 { rows.removeFirst(500) }
     }

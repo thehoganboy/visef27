@@ -14,7 +14,7 @@ import QuartzCore
 
 // ── Data Structures ────────────────────────────────────────────────────────────
 struct SingleObstacle: Identifiable {
-    let id: Int
+    var id: Int
     let x: Int
     let y: Int
     let bbox: (x: Int, y: Int, w: Int, h: Int)
@@ -53,7 +53,7 @@ struct ObstacleDetectionResult {
     let uncertaintyScore: Float
     let isWall: Bool
     let sectorDists: [String: Float]  // "LEFT", "CENTER", "RIGHT"
-    let allObstacles: [SingleObstacle]
+    var allObstacles: [SingleObstacle]
     let isZeroLuxBlind: Bool
     let isOverheadHazard: Bool
     let isDropOffHazard: Bool
@@ -63,6 +63,7 @@ struct ObstacleDetectionResult {
     var spatialBins: [SpatialBin] = []
     var timestamp: Double = 0.0
     var geometry: DepthGeometry? = nil
+    var primaryTrackID: Int? = nil
 
     init(
         x: Int,

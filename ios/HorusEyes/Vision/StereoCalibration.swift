@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 import simd
 
 struct StereoCalibration: Codable {
@@ -124,6 +125,40 @@ struct StereoCalibration: Codable {
     static var file: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("StereoCalibration.json")
+    }
+
+    private static var directory: URL {
+        file.deletingLastPathComponent().appendingPathComponent("StereoProfiles", isDirectory: true)
+    }
+
+    func save(_ data: Data) throws {
+        let identity = try JSONEncoder().encode(pair + (captureSignature ?? []))
+        let key = SHA256.hash(data: identity).map { String(format: "%02x", Int($0)) }.joined()
+        try FileManager.default.createDirectory(at: Self.directory, withIntermediateDirectories: true)
+        try data.write(to: Self.directory.appendingPathComponent(key + ".json"), options: .atomic)
+    }
+
+    static func savedProfiles() -> (profiles: [Self], error: String?) {
+        let keys: Set<URLResourceKey> = [.contentModificationDateKey, .fileSizeKey]
+        let urls = (try? FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: Array(keys))) ?? []
+        let sorted = urls.filter { $0.pathExtension == "json" }.sorted { a, b in
+            let newest = (try? a.resourceValues(forKeys: keys).contentModificationDate) ?? .distantPast
+            let oldest = (try? b.resourceValues(forKeys: keys).contentModificationDate) ?? .distantPast
+            return newest == oldest ? a.path < b.path : newest > oldest
+        }
+        var profiles: [Self] = []
+        var failure: String?
+        for url in sorted + (FileManager.default.fileExists(atPath: file.path) ? [file] : []) {
+            guard let size = try? url.resourceValues(forKeys: keys).fileSize, (1...262_144).contains(size),
+                  let data = try? Data(contentsOf: url),
+                  let profile = try? JSONDecoder().decode(Self.self, from: data) else {
+                failure = failure ?? "Unreadable profile"
+                continue
+            }
+            if let issue = profile.validationIssues().first { failure = failure ?? issue }
+            else { profiles.append(profile) }
+        }
+        return (profiles, failure)
     }
 
     static func rectification(_ e: simd_float4x3) -> (basis: simd_float3x3, rotation: simd_float3x3, baseline: Float)? {
