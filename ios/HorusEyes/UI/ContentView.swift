@@ -55,6 +55,9 @@ final class DemoController: ObservableObject {
     private var unavailableSince: Double?
     private var statusCueUntil = 0.0
     private var lastStatusCueAt = -Double.infinity
+    private var currentAudioCue = "MUTED"
+    private var lastCaptureTimestamp = 0.0
+    private var captureInterval = 0.0
     private var budget = AuditoryBudgetManager()
     private var timer: Timer?
     private var started: Double = 0
@@ -228,7 +231,17 @@ final class DemoController: ObservableObject {
     private func submit(captureToken: Int, timestamp capturedAt: Double, settle: Int, previewWhilePaused: Bool = false,
                         work: @escaping (Bool) -> (ObstacleDetectionResult?, DepthFrame?, CGImage?)) {
         lock.lock()
-        guard captureEpoch == captureToken, (enabled || previewWhilePaused), !busy else {
+        guard captureEpoch == captureToken, (enabled || previewWhilePaused) else {
+            lock.unlock()
+            return
+        }
+        if capturedAt.isFinite, capturedAt > lastCaptureTimestamp {
+            let dt = capturedAt - lastCaptureTimestamp
+            captureInterval = (0.002...0.5).contains(dt)
+                ? (captureInterval == 0 ? dt : captureInterval * 0.9 + dt * 0.1) : 0
+            lastCaptureTimestamp = capturedAt
+        }
+        guard !busy else {
             lock.unlock()
             return
         }
@@ -238,6 +251,7 @@ final class DemoController: ObservableObject {
         sequence += 1
         let frameId = sequence
         let evaluate = enabled
+        let captureFPS: Double? = captureInterval > 0 ? 1 / captureInterval : nil
         lock.unlock()
 
         inferenceQueue.async {
@@ -291,7 +305,8 @@ final class DemoController: ObservableObject {
                 }
                 guard evaluate else { return }
                 self.publishDecision(observation: acceptedObservation, tracks: acceptedTracks, frame: frame,
-                    risk: acceptedRisk, yawRate: rate, timestamp: capturedAt, now: now, inferenceMS: inferenceMS)
+                    risk: acceptedRisk, yawRate: rate, timestamp: capturedAt, now: now, inferenceMS: inferenceMS,
+                    captureFPS: captureFPS)
             }
         }
     }
@@ -305,7 +320,7 @@ final class DemoController: ObservableObject {
             if calibrationPreview { calibrationQuality = frame.calibrationQuality }
             if !stereoDiagnosticReady {
                 stereoDiagnosticReady = true
-                journal.switchOutcome(frame.source, outcome: "capture_ready")
+                journal.switchOutcome(frame.source, outcome: "capture_ready", completing: false)
             }
         }
         readiness = frame.readiness
@@ -318,7 +333,7 @@ final class DemoController: ObservableObject {
 
     private func publishDecision(observation: ObstacleDetectionResult?, tracks: [MetricObstacleTracker.Track],
                                  frame: DepthFrame?, risk kinematics: KinematicsResult?, yawRate: Float,
-                                 timestamp: Double, now: Double, inferenceMS: Double) {
+                                 timestamp: Double, now: Double, inferenceMS: Double, captureFPS: Double?) {
         if let observation, observation.isValid, let kinematics {
             lifecycle = .running
             risk = PerceptionRisk(kinematics.threatLevel)
@@ -330,12 +345,12 @@ final class DemoController: ObservableObject {
             let decision = budget.coordinate(obstacleResult: observation, kinematicsResult: kinematics, advisory: advisory)
             if decision.isActive {
                 clearStatusCue()
-                audio.update(decision: decision)
+                outputAudio(decision)
             } else if advisory.status == .unavailable {
                 indicateUnavailable(now: now)
             } else {
                 clearStatusCue()
-                audio.update(decision: decision)
+                outputAudio(decision)
             }
         } else {
             if frame?.readiness == .depthReady { readiness = .insufficientEvidence }
@@ -345,7 +360,8 @@ final class DemoController: ObservableObject {
         if let frame {
             journal.record(frame: frame, observation: observation, state: advisory.state,
                 reason: advisory.reasonCode, inferenceMS: inferenceMS, endToEndMS: (now - timestamp) * 1000,
-                tracks: tracks)
+                tracks: tracks, angle: advisory.angleDeg, risk: kinematics?.threatLevel ?? "UNKNOWN",
+                audioCue: currentAudioCue, captureFPS: frame.source == .stereo ? nil : captureFPS)
         }
     }
 
@@ -387,12 +403,17 @@ final class DemoController: ObservableObject {
             statusCueUntil = now + 0.35
         }
         if now < statusCueUntil {
-            audio.update(decision: BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
+            outputAudio(BudgetDecision(isActive: true, pan: 0, proximity: 0.4, distCM: .nan,
                 ttc: .infinity, priorityScore: 0, volumeFactor: 0.35, safeDirection: "NONE",
                 cueMode: "SYSTEM_FAULT_TONE", threatLevel: "SENSOR_FAULT", suppressedCount: 0))
         } else {
-            audio.update(decision: silentDecision())
+            outputAudio(silentDecision())
         }
+    }
+
+    private func outputAudio(_ decision: BudgetDecision) {
+        currentAudioCue = decision.isActive ? decision.cueMode : "MUTED"
+        audio.update(decision: decision)
     }
 
     private func clearStatusCue() {
@@ -523,6 +544,8 @@ final class DemoController: ObservableObject {
         lock.lock()
         epoch.invalidate()
         enabled = value
+        lastCaptureTimestamp = 0
+        captureInterval = 0
         lock.unlock()
         active = value
         lifecycle = value ? .initializing : .paused
@@ -542,7 +565,8 @@ final class DemoController: ObservableObject {
         started = CACurrentMediaTime()
         clearStatusCue()
         lastStatusCueAt = -.infinity
-        audio.update(decision: silentDecision())
+        outputAudio(silentDecision())
+        journal.recordLifecycle(mode, state: value ? "INITIALIZING" : "PAUSED", timestamp: started)
     }
 
     func disappear() {

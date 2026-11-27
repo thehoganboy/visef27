@@ -36,7 +36,8 @@ struct MetricObstacleTracker {
         lastTimestamp = timestamp
         tracks.removeAll { timestamp - $0.timestamp > 0.45 }
         let diagonal = hypot(imageSize.width, imageSize.height)
-        let detections = input.filter { $0.distCM.isFinite && $0.distCM > 0 && $0.bbox.w > 0 && $0.bbox.h > 0 }
+        let trackable = input.filter { $0.distCM.isFinite && $0.distCM > 0 && $0.bbox.w > 0 && $0.bbox.h > 0 }
+        let detections = Array(trackable.prefix(48))
         let boxes = detections.map { CGRect(x: $0.bbox.x, y: $0.bbox.y, width: $0.bbox.w, height: $0.bbox.h) }
 
         var candidates: [(detection: Int, track: Int, cost: CGFloat)] = []
@@ -76,6 +77,7 @@ struct MetricObstacleTracker {
             let id = prior?.track.id ?? nextID
             if prior == nil { nextID += 1 }
             measurement.id = id
+            measurement.componentID = raw.id
             observations.append(measurement)
 
             let critical = raw.distCM <= Config.distCriticalCM
@@ -97,7 +99,7 @@ struct MetricObstacleTracker {
                     displayDistance = prior.track.distanceCM + (raw.distCM - prior.track.distanceCM) * Float(weight)
                 }
             }
-            let confidence = min(1, (0.45 + 0.11 * Float(hits)) * (1 - raw.uncertaintyScore * 0.5))
+            let confidence = max(0, min(1, (0.45 + 0.11 * Float(hits)) * (1 - raw.uncertaintyScore * 0.5)))
             let track = Track(id: id, box: displayBox, distanceCM: displayDistance,
                               confidence: confidence, isWall: raw.isWall, isCritical: critical)
             active.append(State(track: track, lastBox: box, lastDistanceCM: raw.distCM,
@@ -115,6 +117,14 @@ struct MetricObstacleTracker {
                     abs($0.distanceCM - track.distanceCM) < max(8, track.distanceCM * 0.10)
             }) { continue }
             visible.append(track)
+        }
+        // The association budget caps display work. Remaining raw obstacles
+        // retain their distances and can still contribute to risk and guidance.
+        for raw in trackable.dropFirst(detections.count) {
+            var measurement = raw
+            measurement.componentID = raw.id
+            measurement.id = -raw.id - 1
+            observations.append(measurement)
         }
         return Update(observations: observations, display: visible)
     }

@@ -24,6 +24,7 @@ struct SingleObstacle: Identifiable {
     let modeText: String
     let uncertaintyScore: Float
     let isWall: Bool
+    var componentID: Int? = nil
 }
 
 struct SpatialBin {
