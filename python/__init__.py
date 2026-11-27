@@ -1,0 +1,1 @@
+"""VAMPIOR desktop runtime."""
