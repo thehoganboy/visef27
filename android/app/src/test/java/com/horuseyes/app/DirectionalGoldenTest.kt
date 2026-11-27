@@ -8,20 +8,12 @@ import com.horuseyes.app.vision.SpatialBin
 import org.json.JSONObject
 import org.junit.Assert.*
 import org.junit.Test
-import java.io.File
-import java.io.InputStreamReader
 
 class DirectionalGoldenTest {
 
     private fun loadJson(): JSONObject {
-        val stream = javaClass.classLoader?.getResourceAsStream("golden_directional_scenarios.json")
-        val content = if (stream != null) {
-            InputStreamReader(stream, Charsets.UTF_8).use { it.readText() }
-        } else {
-            val file = File("../../tests/golden_directional_scenarios.json")
-            if (file.exists()) file.readText(Charsets.UTF_8)
-            else File("tests/golden_directional_scenarios.json").readText(Charsets.UTF_8)
-        }
+        val stream = requireNotNull(javaClass.classLoader?.getResourceAsStream("golden_directional_scenarios.json"))
+        val content = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
         return JSONObject(content)
     }
 
